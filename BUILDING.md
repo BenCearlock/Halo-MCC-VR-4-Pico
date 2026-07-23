@@ -26,7 +26,8 @@ ctest --preset release
 
 The preset always builds Release x64 with ODST enabled and Reach disabled.
 `camscan` is excluded: it is an opt-in diagnostic with process-memory write
-modes, not a product target.
+modes, not a product target. The standalone Reach runtime observer is also
+excluded and must be selected by name; it is never linked into `halo3xr.dll`.
 
 During private Reach bring-up, validate both isolated build trees:
 
@@ -53,9 +54,80 @@ powershell -NoProfile -ExecutionPolicy Bypass -File `
   .\tools\reach-preflight.ps1
 ```
 
-It only reads the pinned retail `haloreach.dll`, HREK build identity, and local
-PE section table. It does not attach to MCC, inject, write memory, change page
-protection, install a detour, or copy kit/game assets into the repository.
+It read-opens the configured installed retail `haloreach.dll`, HREK build tag,
+and pinned `reach_tag_test.exe` evidence binary to verify their exact hashes/PE
+identities and the retail module's local PE section table. It does not launch
+or attach to an MCC process, inject, write memory, change page protection,
+install a detour, or copy kit/game assets into the repository.
+
+## Build and package the standalone Reach observer
+
+The Reach observer is a diagnostics-only executable. When explicitly run, it
+read-opens an already running anti-cheat-disabled MCC process with only
+`PROCESS_QUERY_INFORMATION | PROCESS_VM_READ`; it does not inject, install a
+hook, or write game memory. Building or packaging it does not run it.
+
+At runtime the observer records the SHA-256 of its own running executable in
+the first log line. It refuses to run from inside the MCC installation, refuses
+a log path there, and resolves the process image, observer, install root, and
+output parent through file handles to normalized volume-GUID paths. It then
+holds the output-parent handle without delete sharing and creates the log
+as a single name relative to that exact handle with `NtCreateFile`,
+`FILE_CREATE`, read sharing only, and `FILE_OPEN_REPARSE_POINT`. That closes
+path-alias/junction, ancestor-rename, and raced-leaf routing, gives the log one
+writer, and prevents an existing log from being overwritten. Its self-hash is
+also read from the already-open running executable handle, which denies
+write/delete sharing and remains retained through the first log line.
+
+To build the observer without packaging or starting MCC:
+
+```powershell
+cmake --preset release
+cmake --build --preset release --target `
+  reach_runtime_observer halomccvr_core_tests
+ctest --preset release
+```
+
+Commit the intended diagnostic source first, then create a uniquely identified
+package:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File `
+  .\tools\package-reach-observer.ps1
+```
+
+The packaging command refuses a dirty worktree or a commit that does not
+descend from the accepted 0.2.2 runtime source. It also requires the evidence
+manifest to retain `runtime_observer.status=IMPLEMENTED_UNRUN`, an empty
+`observed_runtime_results` array, false observer proof/hook fields, and false
+player-view-transaction proof/hook fields. It configures the normal Release
+preset, builds only the observer and core tests, runs the tests and offline
+Reach evidence preflight, and rejects observer source that requests anything
+other than query/read process access or names a write, injection, debugger, or
+process-launch API. It also checks that the executable self-hash remains bound
+to the already-open running image, the MCC path refusals use canonical handles,
+and the single-writer log remains coupled to handle-relative `FILE_CREATE`.
+
+It stages a new directory such as:
+
+```text
+out/diagnostics/1a2b3c4-reach-runtime-observer-20260723-120000000Z/
+```
+
+That directory contains `reach-runtime-observer.exe`, the observer runbook,
+the license, and `DIAGNOSTIC-MANIFEST.json`. The manifest records the exact
+source commit, expected retail Reach module identity, read-only process rights,
+file sizes and SHA-256 hashes, observer runtime guards, and `UNRUN` status. The
+command never launches or attaches to an MCC process, never runs the observer,
+and never writes to the MCC installation. Its offline preflight read-opens the
+configured installed `haloreach.dll` and HREK evidence. Build and dependency
+outputs may be created elsewhere under ignored `out/`; package staging is
+confined to `out/diagnostics`.
+
+Do not copy the observer into MCC. When a runtime capture is explicitly
+requested, keep it in its diagnostic package and follow
+`REACH-RUNTIME-OBSERVER.md`; packaging alone does not advance Reach proof or
+authorize hooks.
 
 ## Create a test candidate
 

@@ -15,6 +15,12 @@
   "editing_kit": {
     "name": "HREK",
     "build": "2023.07.17.176677.1-QFE1",
+    "camera_evidence_binary": {
+      "name": "reach_tag_test.exe",
+      "sha256": "CBDD8448A87A433B0DFFC0DE47D06DB7A18B4BF868B96B057135DAA86790ABA8",
+      "pe_timestamp": "0x64B47B50",
+      "size_of_image": "0x06247000"
+    },
     "required_roots": [
       "tags",
       "data"
@@ -29,11 +35,258 @@
     "hrek_semantics",
     "consumed_layout_fields"
   ],
+  "player_view_transaction": {
+    "status": "STATIC_BOUNDARY_PROVEN_RUNTIME_INCOMPLETE",
+    "retail": {
+      "main_render_game": {
+        "function_rva": "0x000C33F8",
+        "function_end_rva_exclusive": "0x000C3B1E"
+      },
+      "player_view_array": {
+        "rva": "0x029F2B90",
+        "slot_count": 4,
+        "stride": "0x00000A40",
+        "initializer_rva": "0x00006210",
+        "initializer_end_rva_exclusive": "0x00006246",
+        "constructor_rva": "0x0025B0A8",
+        "runtime_index_multiply_rva": "0x000C366A",
+        "runtime_pointer_increment_rva": "0x000C3879"
+      },
+      "setup": {
+        "function_rva": "0x0026C204",
+        "function_end_rva_exclusive": "0x0026C6DC",
+        "normal_call_site_rva": "0x000C36D6",
+        "rasterizer_workspace_rva": "0x00C9FAE0"
+      },
+      "main_render_view": {
+        "function_rva": "0x000C31F4",
+        "function_end_rva_exclusive": "0x000C33F7",
+        "function_size": 515,
+        "instruction_count": 115,
+        "body_sha256": "95DF3EFFF9AC6EE29887D1272CCA8D7BF3E58F87041BAD8032107825B733FE89",
+        "entry_aob": "40 53 56 57 48 81 EC 80 00 00 00 0F 29 74 24 70 48 8B 05 05 6E A3 00 48 33 C4 48 89 44 24 68 41",
+        "static_executable_match_count": 1,
+        "normal_call_site_rva": "0x000C3730",
+        "alternate_call_site_rva": "0x001D3864",
+        "abi": {
+          "rcx": "rasterizer_camera_workspace",
+          "rdx": "player_view_pointer",
+          "r8d": "player_window_index"
+        }
+      },
+      "player_view_render": {
+        "function_rva": "0x0026C6DC",
+        "function_end_rva_exclusive": "0x0026CFE6",
+        "call_site_rva": "0x000C33C4",
+        "post_call_continuation_rva": "0x000C33C9"
+      },
+      "active_view_scope": {
+        "global_rva": "0x04E389A8",
+        "set_rva": "0x000C323C",
+        "clear_rva": "0x000C33D3"
+      },
+      "late_chud_call_sites": [
+        "0x0026CE28",
+        "0x0026CEC9"
+      ],
+      "stock_present": {
+        "outer_main_render_call_rva": "0x000C2FAA",
+        "outer_present_call_rva": "0x000C3000",
+        "present_wrapper_rva": "0x0025113C",
+        "present_vcall_rva": "0x002511AA"
+      }
+    },
+    "hrek_homolog": {
+      "binary": "reach_tag_test.exe",
+      "main_render_game_rva": "0x001CB8D0",
+      "main_render_game_end_rva_exclusive": "0x001CC001",
+      "main_render_view_inline_start_rva": "0x001CBE36",
+      "main_render_view_inline_end_rva_exclusive": "0x001CBF51",
+      "main_render_view_inline_sha256": "BE74AAB4964CF29044406B8E0774AC916D747714E70B62AD76A4B028C16A8DF5",
+      "player_view_array_rva": "0x04D8AED0",
+      "player_view_stride": "0x00000A40",
+      "setup_function_rva": "0x00837F80",
+      "setup_call_site_rva": "0x001CBD3A",
+      "player_view_render_rva": "0x00834490",
+      "player_view_render_call_site_rva": "0x001CBF22",
+      "active_view_set_call_rva": "0x001CBE89",
+      "active_view_clear_call_rva": "0x001CBF33",
+      "active_view_setter_rva": "0x00837B70",
+      "active_view_global_rva": "0x04D86C00",
+      "source": "render/views/render_player_view.cpp",
+      "active_view_assertion_lines": [
+        2504,
+        2505,
+        2507,
+        2508
+      ]
+    },
+    "ordering": {
+      "strict_world_then_weapon": false,
+      "world_and_first_person_subpasses_interleave": true,
+      "executed_final_first_person_precedes_late_native_chud": true,
+      "post_render_continuation_precedes_active_view_clear": true,
+      "post_main_render_view_capture_precedes_stock_present": true,
+      "first_person_and_chud_phases_are_conditional": true
+    },
+    "remaining_runtime_proof": [
+      "live_mcc_loaded_image_preflight",
+      "normal_caller_scope_and_alternate_caller_semantics",
+      "continuous_camera_freshness_and_one_second_safety_interval",
+      "capture_target_lifetime_and_copy_success",
+      "pause_cinematic_split_screen_and_transition_observation",
+      "device_loss_title_unload_and_callback_quiescence",
+      "runtime_finite_range_index_and_count_guards",
+      "exact_dll_headset_validation_and_halo3_regression"
+    ],
+    "proof_complete": false,
+    "hook_eligible": false
+  },
+  "runtime_observer": {
+    "status": "IMPLEMENTED_UNRUN",
+    "executable": "reach-runtime-observer.exe",
+    "implementation": [
+      "tools/reach_runtime_observer.cpp",
+      "src/common/reach_observer_logic.h"
+    ],
+    "runbook": "docs/REACH-RUNTIME-OBSERVER.md",
+    "execution_model": "STANDALONE_EXTERNAL_READ_ONLY",
+    "required_launch": "STOCK_MCC_ANTI_CHEAT_DISABLED",
+    "requested_process_access": [
+      "PROCESS_QUERY_INFORMATION",
+      "PROCESS_VM_READ"
+    ],
+    "prohibited_operations": [
+      "process_memory_write",
+      "process_memory_protection_change",
+      "thread_or_dll_injection",
+      "debug_attach",
+      "thread_suspend",
+      "hook_or_detour_installation",
+      "mcc_file_write"
+    ],
+    "refuses_loaded_module": "halo3xr.dll",
+    "file_policy": {
+      "only_file_write": "exclusive_new_self_log",
+      "overwrites_existing_log": false,
+      "canonical_path_api": "GetFinalPathNameByHandleW",
+      "canonical_path_form": "FILE_NAME_NORMALIZED|VOLUME_NAME_GUID",
+      "resolves_output_parent_reparse_points": true,
+      "creates_log_relative_to_held_parent_handle": true,
+      "holds_output_parent_without_delete_share_through_create": true,
+      "handle_relative_create_api": "NtCreateFile",
+      "handle_relative_create_disposition": "FILE_CREATE",
+      "handle_relative_create_options": [
+        "FILE_NON_DIRECTORY_FILE",
+        "FILE_SYNCHRONOUS_IO_NONALERT",
+        "FILE_OPEN_REPARSE_POINT"
+      ],
+      "rejects_alternate_data_stream_leaf": true,
+      "refuses_executable_inside_derived_pinned_steam_mcc_install": true,
+      "refuses_output_inside_derived_pinned_steam_mcc_install": true,
+      "first_log_line_includes_observer_sha256": true,
+      "self_hash_uses_already_open_running_executable_handle": true,
+      "running_executable_handle_denies_write_share": true
+    },
+    "loaded_image_preflight": {
+      "backing_file_sha256": true,
+      "machine_timestamp_and_size_of_image": true,
+      "main_render_view_executable_aob_exactly_once_at_expected_rva": true,
+      "main_render_view_body_sha256": true,
+      "frustum_executable_aob_exactly_once_at_expected_rva": true,
+      "rel32_edge_count": 6,
+      "fixed_ranges_require_committed_readable_mem_image": true,
+      "mapping_and_contamination_rechecked": true,
+      "sole_title_rechecked_in_final_snapshot": true,
+      "rerun_after_each_observed_unload_reload": true,
+      "module_poll_interval_ms": 100,
+      "complete_same_base_reload_between_polls_can_be_missed": true
+    },
+    "sampling": {
+      "active_view_global_rva": "0x04E389A8",
+      "player_view_array_rva": "0x029F2B90",
+      "player_view_slot_count": 4,
+      "player_view_stride": "0x00000A40",
+      "rasterizer_workspace_rva": "0x00C9FAE0",
+      "rasterizer_workspace_size": "0x000002A8",
+      "primary_compact_camera_offset": "0x00000000",
+      "primary_compact_camera_size": "0x00000090",
+      "secondary_compact_camera_offset": "0x00000154",
+      "primary_compact_camera_validated": true,
+      "secondary_compact_camera_validated": true,
+      "both_cameras_required_for_usable_sample": true,
+      "primary_secondary_byte_equality_required": false,
+      "pointer_workspace_pointer_torn_read_guard": true,
+      "freshness_isolated_per_player_slot": true,
+      "unique_fresh_player_slot_required": true,
+      "multiple_fresh_slots_reset_all_windows": true,
+      "freshness_max_gap_ms_exclusive": 500,
+      "stable_span_ms_exclusive_minimum": 1000,
+      "stable_span_basis": "last_minus_first_usable_transaction",
+      "stable_minimum_transaction_count": 2,
+      "short_pulse_may_be_missed": true,
+      "missed_poll_is_inconclusive": true,
+      "nonzero_slot_required_for_runtime_stride_corroboration": true,
+      "slot_zero_only_stride_result": "INCONCLUSIVE"
+    },
+    "preflight_only_exit_nonzero": true,
+    "preflight_only_result": "INCONCLUSIVE",
+    "observed_runtime_results": [],
+    "loaded_image_proof_complete": false,
+    "continuous_freshness_proof_complete": false,
+    "lifecycle_proof_complete": false,
+    "capture_target_proof_complete": false,
+    "proof_complete": false,
+    "hook_eligible": false
+  },
   "preliminary_candidates": [
     {
       "id": "viewport",
-      "description": "viewport candidate",
+      "description": "camera-derived frustum-bounds helper (original viewport hypothesis)",
       "rva": "0x00287F58",
+      "function_end_rva_exclusive": "0x002881CC",
+      "function_size": 628,
+      "instruction_count": 154,
+      "aob": "40 53 48 83 EC 30 44 0F BF 49 62 4C 8B D9 4C 8B 41 38 48 8B DA 0F BF 51 50",
+      "static_image_match_count": 1,
+      "static_image_mapping": "PAGE_READONLY | SEC_IMAGE_NO_EXECUTE",
+      "executable_section": ".text",
+      "base_relocations_in_function": 0,
+      "direct_callers": [
+        "0x001D2F4C",
+        "0x001D3594",
+        "0x001D3C4D",
+        "0x0025B47C",
+        "0x0025D41A",
+        "0x0026C2FF",
+        "0x0026FB1B",
+        "0x00286DD8",
+        "0x0028DB6D"
+      ],
+      "next_call_target_rva": "0x002884BC",
+      "hrek_homolog": {
+        "binary": "reach_tag_test.exe",
+        "function_rva": "0x00823930",
+        "function_end_rva_exclusive": "0x00823D16",
+        "source": "render/render_cameras.cpp",
+        "parameter_assertion_lines": [
+          443,
+          444
+        ],
+        "render_bounds_assertion_lines": [
+          451,
+          452
+        ]
+      },
+      "remaining_proof": [
+        "live_mcc_loaded_image_preflight",
+        "normal_caller_scope_and_alternate_caller_semantics",
+        "continuous_camera_freshness_and_lifetime",
+        "capture_target_lifetime_and_copy_success",
+        "pause_cinematic_split_screen_and_transition_observation",
+        "runtime_teardown_and_callback_quiescence",
+        "runtime_finite_and_bounds_guards"
+      ],
       "proof_complete": false
     },
     {

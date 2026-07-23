@@ -147,6 +147,18 @@ target_compile_definitions(camscan PRIVATE
     UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
 target_link_libraries(camscan PRIVATE psapi)
 
+# Opt-in, external Reach observer. It opens MCC with query/read rights only and
+# is deliberately excluded from product/default builds.
+add_executable(reach_runtime_observer EXCLUDE_FROM_ALL
+    tools/reach_runtime_observer.cpp)
+target_include_directories(reach_runtime_observer PRIVATE src/common)
+target_compile_definitions(reach_runtime_observer PRIVATE
+    UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN
+    HALOMCCVR_BUILD_COMMIT="${HALOMCCVR_BUILD_COMMIT}")
+target_link_libraries(reach_runtime_observer PRIVATE bcrypt ntdll)
+set_target_properties(reach_runtime_observer PROPERTIES
+    OUTPUT_NAME "reach-runtime-observer")
+
 if(BUILD_TESTING)
     add_executable(halomccvr_core_tests
         tests/core_tests.cpp

@@ -24,6 +24,48 @@ function Convert-HexUInt32 {
     return [Convert]::ToUInt32($Value.Substring(2), 16)
 }
 
+function Get-PeIdentity {
+    param(
+        [Parameter(Mandatory)] [string]$Path,
+        [Parameter(Mandatory)] [string]$Label
+    )
+
+    $stream = [IO.File]::OpenRead($Path)
+    try {
+        $reader = [IO.BinaryReader]::new($stream)
+        if ($reader.ReadUInt16() -ne 0x5A4D) {
+            throw "$Label is not an MZ executable."
+        }
+        $stream.Position = 0x3C
+        $peOffset = $reader.ReadInt32()
+        if ($peOffset -lt 0x40 -or $peOffset -gt $stream.Length - 256) {
+            throw "$Label has an invalid PE header offset."
+        }
+        $stream.Position = $peOffset
+        if ($reader.ReadUInt32() -ne 0x00004550) {
+            throw "$Label has no PE signature."
+        }
+        $machine = $reader.ReadUInt16()
+        $stream.Position = $peOffset + 8
+        $timestamp = $reader.ReadUInt32()
+        $optionalHeaderOffset = $peOffset + 24
+        $stream.Position = $optionalHeaderOffset
+        if ($reader.ReadUInt16() -ne 0x020B) {
+            throw "$Label is not PE32+ (x64)."
+        }
+        $stream.Position = $optionalHeaderOffset + 56
+        $sizeOfImage = $reader.ReadUInt32()
+        return [pscustomobject]@{
+            Machine = $machine
+            Timestamp = $timestamp
+            SizeOfImage = $sizeOfImage
+        }
+    }
+    finally {
+        $stream.Dispose()
+    }
+}
+
 foreach ($requiredFile in @($ModulePath, $ManifestPath)) {
     if (-not (Test-Path -LiteralPath $requiredFile -PathType Leaf)) {
         throw "Required Reach evidence file is missing: $requiredFile"
@@ -59,6 +101,40 @@ foreach ($requiredRoot in $manifest.editing_kit.required_roots) {
     if (-not (Test-Path -LiteralPath $rootPath -PathType Container)) {
         throw "Required extracted HREK root is missing: $rootPath"
     }
+}
+
+$cameraEvidence = $manifest.editing_kit.camera_evidence_binary
+if ($null -eq $cameraEvidence -or
+        [string]::IsNullOrWhiteSpace([string]$cameraEvidence.name) -or
+        [IO.Path]::GetFileName([string]$cameraEvidence.name) -cne
+            [string]$cameraEvidence.name) {
+    throw 'HREK camera evidence binary identity is missing or invalid.'
+}
+$cameraEvidencePath = Join-Path $HrekPath ([string]$cameraEvidence.name)
+if (-not (Test-Path -LiteralPath $cameraEvidencePath -PathType Leaf)) {
+    throw "HREK camera evidence binary is missing: $cameraEvidencePath"
+}
+$actualCameraEvidenceHash =
+    (Get-FileHash -LiteralPath $cameraEvidencePath -Algorithm SHA256).Hash
+if ($actualCameraEvidenceHash -ine [string]$cameraEvidence.sha256) {
+    throw "HREK camera evidence binary SHA-256 mismatch: $actualCameraEvidenceHash"
+}
+$expectedCameraEvidenceTimestamp = Convert-HexUInt32 `
+    ([string]$cameraEvidence.pe_timestamp) 'HREK camera evidence PE timestamp'
+$expectedCameraEvidenceImageSize = Convert-HexUInt32 `
+    ([string]$cameraEvidence.size_of_image) 'HREK camera evidence SizeOfImage'
+$cameraEvidenceIdentity = Get-PeIdentity `
+    -Path $cameraEvidencePath -Label 'HREK camera evidence binary'
+if ($cameraEvidenceIdentity.Machine -ne 0x8664 -or
+        $cameraEvidenceIdentity.Timestamp -ne
+            $expectedCameraEvidenceTimestamp -or
+        $cameraEvidenceIdentity.SizeOfImage -ne
+            $expectedCameraEvidenceImageSize) {
+    throw ('HREK camera evidence PE identity mismatch: machine=0x{0:X4}, ' +
+        'timestamp=0x{1:X8}, SizeOfImage=0x{2:X8}' -f
+        $cameraEvidenceIdentity.Machine,
+        $cameraEvidenceIdentity.Timestamp,
+        $cameraEvidenceIdentity.SizeOfImage)
 }
 
 $expectedTimestamp = Convert-HexUInt32 `
@@ -156,4 +232,5 @@ foreach ($candidate in $manifest.preliminary_candidates) {
 Write-Host 'Reach evidence preflight passed.'
 Write-Host "Module SHA-256: $actualHash"
 Write-Host "HREK build:       $actualHrekBuild"
+Write-Host "HREK camera SHA:  $actualCameraEvidenceHash"
 Write-Host 'Runtime hooks:    forbidden (hook_eligible=false)'

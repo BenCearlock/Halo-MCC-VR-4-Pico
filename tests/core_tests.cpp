@@ -1,9 +1,12 @@
+#include <array>
 #include <cstdlib>
 #include <cmath>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <iterator>
+#include <limits>
 #include <string>
 #include <string_view>
 #include <windows.h>
@@ -13,6 +16,7 @@
 #include "input_logic.h"
 #include "odst_bringup_logic.h"
 #include "reach_adapter.h"
+#include "reach_observer_logic.h"
 #include "scope_logic.h"
 #include "title_registry.h"
 
@@ -47,6 +51,316 @@ namespace
 
 int main()
 {
+    {
+        constexpr std::array<uint8_t, 6> repeatedPattern{
+            0xAA, 0xBB, 0xCC, 0xAA, 0xBB, 0xCC
+        };
+        constexpr std::array<uint8_t, 3> twice{ 0xAA, 0xBB, 0xCC };
+        constexpr std::array<uint8_t, 3> once{ 0xBB, 0xCC, 0xAA };
+        constexpr std::array<uint8_t, 2> absent{ 0xCC, 0xBB };
+        Check(CountReachExactPattern(
+                  repeatedPattern.data(), repeatedPattern.size(),
+                  twice.data(), twice.size()) == 2,
+            "Reach loaded-image proof rejects a multiple-match exact pattern");
+        Check(CountReachExactPattern(
+                  repeatedPattern.data(), repeatedPattern.size(),
+                  once.data(), once.size()) == 1,
+            "Reach loaded-image proof accepts one exact pattern match");
+        Check(CountReachExactPattern(
+                  repeatedPattern.data(), repeatedPattern.size(),
+                  absent.data(), absent.size()) == 0,
+            "Reach loaded-image proof rejects an absent exact pattern");
+        Check(CountReachExactPattern(
+                  nullptr, repeatedPattern.size(), twice.data(), twice.size()) == 0 &&
+                  CountReachExactPattern(
+                      repeatedPattern.data(), repeatedPattern.size(),
+                      nullptr, twice.size()) == 0 &&
+                  CountReachExactPattern(
+                      repeatedPattern.data(), repeatedPattern.size(),
+                      twice.data(), 0) == 0,
+            "Reach exact-pattern counting fails closed on invalid inputs");
+
+        std::array<uint8_t, 5> call{ 0xE8, 0, 0, 0, 0 };
+        uintptr_t callTarget = 0;
+        int32_t displacement = 0x20;
+        std::memcpy(call.data() + 1, &displacement, sizeof(displacement));
+        Check(ResolveReachRel32Call(
+                  0x1000, call.data(), call.size(), callTarget) &&
+                  callTarget == 0x1025,
+            "Reach rel32 proof resolves a forward call target exactly");
+        displacement = -0x20;
+        std::memcpy(call.data() + 1, &displacement, sizeof(displacement));
+        Check(ResolveReachRel32Call(
+                  0x1000, call.data(), call.size(), callTarget) &&
+                  callTarget == 0x0FE5,
+            "Reach rel32 proof resolves a backward call target exactly");
+        call[0] = 0xE9;
+        Check(!ResolveReachRel32Call(
+                  0x1000, call.data(), call.size(), callTarget),
+            "Reach rel32 proof rejects a non-call opcode");
+        call[0] = 0xE8;
+        Check(!ResolveReachRel32Call(
+                  0x1000, call.data(), 4, callTarget),
+            "Reach rel32 proof rejects a truncated instruction");
+        displacement = -6;
+        std::memcpy(call.data() + 1, &displacement, sizeof(displacement));
+        Check(!ResolveReachRel32Call(
+                  0, call.data(), call.size(), callTarget),
+            "Reach rel32 proof rejects target-address underflow");
+        displacement = 1;
+        std::memcpy(call.data() + 1, &displacement, sizeof(displacement));
+        Check(!ResolveReachRel32Call(
+                  std::numeric_limits<uintptr_t>::max() - 5,
+                  call.data(), call.size(), callTarget),
+            "Reach rel32 proof rejects target-address overflow");
+
+        constexpr uintptr_t playerArray = 0x100000;
+        constexpr size_t playerStride = 0xA40;
+        constexpr size_t playerCount = 4;
+        for (uint32_t slot = 0; slot < playerCount; ++slot)
+        {
+            const ReachObservedView view = ClassifyReachObservedView(
+                playerArray + slot * playerStride,
+                playerArray, playerStride, playerCount);
+            Check(view.kind == ReachObservedViewKind::NormalPlayerSlot &&
+                      view.slot == slot,
+                "Reach active-view proof recognizes each exact 0xA40 player slot");
+        }
+        Check(ClassifyReachObservedView(
+                  0, playerArray, playerStride, playerCount).kind ==
+                  ReachObservedViewKind::None,
+            "Reach active-view proof treats a null pointer as no transaction");
+        Check(ClassifyReachObservedView(
+                  playerArray + 1, playerArray, playerStride, playerCount).kind ==
+                  ReachObservedViewKind::OutsidePlayerArray,
+            "Reach active-view proof rejects an interior non-slot pointer");
+        Check(ClassifyReachObservedView(
+                  playerArray - 1, playerArray, playerStride, playerCount).kind ==
+                  ReachObservedViewKind::OutsidePlayerArray &&
+                  ClassifyReachObservedView(
+                      playerArray + playerStride * playerCount,
+                      playerArray, playerStride, playerCount).kind ==
+                      ReachObservedViewKind::OutsidePlayerArray,
+            "Reach active-view proof rejects pointers outside the four-slot array");
+        Check(ClassifyReachObservedView(
+                  playerArray, 0, playerStride, playerCount).kind ==
+                  ReachObservedViewKind::OutsidePlayerArray &&
+                  ClassifyReachObservedView(
+                      playerArray, playerArray, 0, playerCount).kind ==
+                      ReachObservedViewKind::OutsidePlayerArray,
+            "Reach active-view proof fails closed on an invalid array description");
+
+        ReachObserverTransactionGate transactionGate;
+        Check(!transactionGate.Observe(playerArray),
+            "Reach observer ignores a mid-transaction value at session start");
+        Check(!transactionGate.Observe(0) &&
+                  transactionGate.Observe(playerArray),
+            "Reach observer requires a witnessed clear before its first transaction");
+        Check(!transactionGate.Observe(playerArray),
+            "Reach observer counts a latched pointer only once");
+        Check(transactionGate.Observe(playerArray + playerStride),
+            "Reach observer recognizes a changed non-null transaction owner");
+        transactionGate.RequireClear();
+        Check(!transactionGate.Observe(playerArray + playerStride) &&
+                  !transactionGate.HasLatchedValue() &&
+                  !transactionGate.Observe(0) &&
+                  transactionGate.Observe(playerArray + playerStride),
+            "Reach continuity reset requires a new witnessed clear");
+    }
+
+    {
+        std::array<uint8_t, 0x90> compactCamera{};
+        const auto store = [&compactCamera](
+                               size_t offset, const auto& value)
+        {
+            std::memcpy(
+                compactCamera.data() + offset, &value, sizeof(value));
+        };
+        const float position[3]{ 10.0f, -2.0f, 5.0f };
+        const float forward[3]{ 1.0f, 0.0f, 0.0f };
+        const float up[3]{ 0.0f, 0.0f, 1.0f };
+        const float verticalFov = 1.0f;
+        const ReachObservedRect windowBounds{ 0, 0, 1080, 1920 };
+        const ReachObservedRect renderBounds{ 0, 0, 720, 1280 };
+        const ReachObservedRect clientBounds{ 0, 0, 720, 1280 };
+        store(0x00, position);
+        store(0x0C, forward);
+        store(0x18, up);
+        store(0x28, verticalFov);
+        store(0x38, windowBounds);
+        store(0x4C, renderBounds);
+        store(0x5C, clientBounds);
+
+        ReachCompactCameraObservation observedCamera{};
+        Check(ValidateReachCompactCamera(
+                  compactCamera.data(), compactCamera.size(), observedCamera) &&
+                  observedCamera.position[0] == position[0] &&
+                  observedCamera.position[1] == position[1] &&
+                  observedCamera.position[2] == position[2] &&
+                  observedCamera.verticalFov == verticalFov &&
+                  observedCamera.clientBounds.x1 == clientBounds.x1,
+            "Reach compact-camera proof accepts and decodes its exact validated layout");
+        Check(!ValidateReachCompactCamera(
+                  nullptr, compactCamera.size(), observedCamera) &&
+                  !ValidateReachCompactCamera(
+                      compactCamera.data(), compactCamera.size() - 1,
+                      observedCamera),
+            "Reach compact-camera proof rejects null or truncated snapshots");
+
+        const auto validateWithFloat =
+            [&compactCamera, &observedCamera](size_t offset, float value)
+        {
+            auto candidate = compactCamera;
+            std::memcpy(candidate.data() + offset, &value, sizeof(value));
+            return ValidateReachCompactCamera(
+                candidate.data(), candidate.size(), observedCamera);
+        };
+        Check(!validateWithFloat(
+                  0x00, std::numeric_limits<float>::quiet_NaN()) &&
+                  !validateWithFloat(
+                      0x0C, std::numeric_limits<float>::infinity()),
+            "Reach compact-camera proof rejects NaN and infinite vectors");
+        Check(validateWithFloat(0x0C, std::sqrt(1.0005f)) &&
+                  !validateWithFloat(0x0C, std::sqrt(1.0015f)),
+            "Reach compact-camera proof enforces the HREK axis-length tolerance");
+
+        {
+            auto candidate = compactCamera;
+            const float nearOrthogonalUp[3]{
+                0.0005f, 0.0f, std::sqrt(1.0f - 0.0005f * 0.0005f)
+            };
+            std::memcpy(
+                candidate.data() + 0x18, nearOrthogonalUp,
+                sizeof(nearOrthogonalUp));
+            Check(ValidateReachCompactCamera(
+                      candidate.data(), candidate.size(), observedCamera),
+                "Reach compact-camera proof accepts dot products inside tolerance");
+        }
+        {
+            auto candidate = compactCamera;
+            const float nonOrthogonalUp[3]{
+                0.0015f, 0.0f, std::sqrt(1.0f - 0.0015f * 0.0015f)
+            };
+            std::memcpy(
+                candidate.data() + 0x18, nonOrthogonalUp,
+                sizeof(nonOrthogonalUp));
+            Check(!ValidateReachCompactCamera(
+                      candidate.data(), candidate.size(), observedCamera),
+                "Reach compact-camera proof rejects non-orthogonal axes");
+        }
+
+        Check(!validateWithFloat(0x28, kReachCameraFovMin) &&
+                  validateWithFloat(
+                      0x28, std::nextafter(
+                                kReachCameraFovMin,
+                                std::numeric_limits<float>::infinity())) &&
+                  validateWithFloat(
+                      0x28, std::nextafter(kReachCameraFovMax, 0.0f)) &&
+                  !validateWithFloat(0x28, kReachCameraFovMax),
+            "Reach compact-camera proof enforces strict finite FOV bounds");
+        {
+            auto candidate = compactCamera;
+            const ReachObservedRect unorderedWindow{ 1, 0, 1, 1920 };
+            std::memcpy(
+                candidate.data() + 0x38, &unorderedWindow,
+                sizeof(unorderedWindow));
+            Check(!ValidateReachCompactCamera(
+                      candidate.data(), candidate.size(), observedCamera),
+                "Reach compact-camera proof rejects unordered viewport bounds");
+        }
+        {
+            auto candidate = compactCamera;
+            const ReachObservedRect nonzeroClientOrigin{ 1, 0, 720, 1280 };
+            std::memcpy(
+                candidate.data() + 0x5C, &nonzeroClientOrigin,
+                sizeof(nonzeroClientOrigin));
+            Check(!ValidateReachCompactCamera(
+                      candidate.data(), candidate.size(), observedCamera),
+                "Reach compact-camera proof requires the proven zero client origin");
+        }
+        {
+            auto candidate = compactCamera;
+            const ReachObservedRect undersizedClient{ 0, 0, 7, 1280 };
+            std::memcpy(
+                candidate.data() + 0x5C, &undersizedClient,
+                sizeof(undersizedClient));
+            Check(!ValidateReachCompactCamera(
+                      candidate.data(), candidate.size(), observedCamera),
+                "Reach compact-camera proof enforces the producer's minimum extent");
+        }
+
+        ReachObserverFreshnessWindow freshness;
+        Check(!freshness.ObserveTransaction(10),
+            "One Reach transaction cannot satisfy freshness stability");
+        Check(!freshness.ObserveTransaction(400),
+            "A sub-500 ms Reach transaction preserves but cannot yet arm freshness");
+        Check(!freshness.ObserveTransaction(800),
+            "Repeated fresh Reach transactions stay below the safety interval");
+        Check(!freshness.ObserveTransaction(1010),
+            "Reach freshness remains unarmed through exactly one continuous second");
+        Check(freshness.IsFresh(1010) &&
+                  freshness.TransactionCount() == 4 &&
+                  freshness.CurrentSpanMs() == 1000,
+            "Reach freshness counts only sub-500 ms transaction intervals");
+        Check(freshness.ObserveTransaction(1011) &&
+                  freshness.IsStable(1011),
+            "Reach freshness becomes observationally stable only after one second");
+        Check(freshness.Tick(1510),
+            "A 499 ms gap keeps the Reach transaction window fresh");
+        Check(!freshness.Tick(1511) && freshness.TransactionCount() == 0,
+            "A 500 ms gap resets the Reach freshness window");
+        Check(!freshness.ObserveTransaction(2000),
+            "A new Reach transaction starts a fresh observational window");
+        Check(!freshness.ObserveTransaction(2500) &&
+                  freshness.TransactionCount() == 1 &&
+                  freshness.CurrentSpanMs() == 0,
+            "A missed Reach pulse is inconclusive and begins a new window");
+        Check(!freshness.ObserveTransaction(2400) &&
+                  freshness.TransactionCount() == 1,
+            "A non-monotonic Reach observation also fails closed");
+        freshness.Reset();
+        Check(!freshness.IsFresh(3000) &&
+                  !freshness.IsStable(3000) &&
+                  freshness.LastTransactionMs() == 0,
+            "Reach freshness reset clears all observational state");
+
+        Check(!freshness.ObserveTransaction(4000) &&
+                  !freshness.ObserveTransaction(4400) &&
+                  !freshness.ObserveTransaction(4800) &&
+                  !freshness.Tick(5001) &&
+                  freshness.CurrentSpanMs() == 800,
+            "Elapsed wall time cannot satisfy a Reach gate without a new transaction");
+        Check(freshness.ObserveTransaction(5101) &&
+                  freshness.CurrentSpanMs() == 1101,
+            "A new Reach transaction may satisfy the strict one-second span");
+        Check(!freshness.Tick(5601) &&
+                  freshness.TransactionCount() == 0,
+            "A post-gate 500 ms pause expires the Reach freshness window");
+        Check(!freshness.ObserveTransaction(6000) &&
+                  !freshness.ObserveTransaction(6400) &&
+                  !freshness.ObserveTransaction(6800) &&
+                  freshness.ObserveTransaction(7001),
+            "Reach freshness can establish a new stable window after pause recovery");
+
+        std::array<ReachObserverFreshnessWindow, 4> slotFreshness{};
+        Check(ReachObserverUniqueFreshOwner(
+                  slotFreshness.data(), slotFreshness.size(), 10) ==
+                  kReachNoFreshOwner,
+            "Reach observer reports no owner before a slot heartbeat");
+        slotFreshness[0].ObserveTransaction(10);
+        Check(ReachObserverUniqueFreshOwner(
+                  slotFreshness.data(), slotFreshness.size(), 10) == 0,
+            "Reach observer identifies one fresh player-view owner");
+        slotFreshness[1].ObserveTransaction(20);
+        Check(ReachObserverUniqueFreshOwner(
+                  slotFreshness.data(), slotFreshness.size(), 20) ==
+                  kReachMultipleFreshOwners,
+            "Reach observer fails closed when two player slots are fresh");
+        Check(ReachObserverUniqueFreshOwner(
+                  slotFreshness.data(), slotFreshness.size(), 510) == 1,
+            "Reach observer expires a stale slot independently");
+    }
+
     {
         Check(!OdstCameraOnlyScopeRequired(false, true, false),
             "a public build never claims the private ODST camera core");
