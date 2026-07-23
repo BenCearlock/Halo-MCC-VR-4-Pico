@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "status": "PRELIMINARY_EVIDENCE_ONLY",
+  "hook_eligible": false,
+  "accepted_baseline": {
+    "release": "MCC_VR_ALPHA_0.2.2",
+    "runtime_source_commit": "3a2a11bfc66b36e70f60282e91c9d5436f2e18d1"
+  },
+  "retail_module": {
+    "name": "haloreach.dll",
+    "sha256": "738DD2D24EA3AEA12E1EE9AA4A61094BF116027D42004C35A19E5048608B0894",
+    "pe_timestamp": "0x68A0EFE1",
+    "size_of_image": "0x04EDA000"
+  },
+  "editing_kit": {
+    "name": "HREK",
+    "build": "2023.07.17.176677.1-QFE1",
+    "required_roots": [
+      "tags",
+      "data"
+    ]
+  },
+  "required_runtime_proof": [
+    "loaded_image_uniqueness",
+    "executable_range",
+    "abi",
+    "callers",
+    "data_flow",
+    "hrek_semantics",
+    "consumed_layout_fields"
+  ],
+  "preliminary_candidates": [
+    {
+      "id": "viewport",
+      "description": "viewport candidate",
+      "rva": "0x00287F58",
+      "proof_complete": false
+    },
+    {
+      "id": "first_person_camera_upload",
+      "description": "first-person camera upload candidate",
+      "rva": "0x00282D60",
+      "proof_complete": false
+    },
+    {
+      "id": "visible_palette",
+      "description": "visible palette candidate",
+      "rva": "0x002B4EB0",
+      "proof_complete": false
+    },
+    {
+      "id": "special_bone_composer",
+      "description": "special-bone composer candidate",
+      "rva": "0x00213224",
+      "proof_complete": false
+    }
+  ]
+}

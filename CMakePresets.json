@@ -9,14 +9,32 @@
     {
       "name": "release",
       "displayName": "Halo MCC VR cumulative Release",
-      "description": "x64 Halo 3 + ODST build with tests enabled",
+      "description": "x64 accepted Halo 3 + ODST build with Reach kept stock",
       "generator": "Visual Studio 17 2022",
       "architecture": "x64",
       "binaryDir": "${sourceDir}/out/build/release",
       "cacheVariables": {
         "BUILD_TESTING": "ON",
         "FETCHCONTENT_BASE_DIR": "${sourceDir}/out/deps",
-        "HALOMCCVR_EXPERIMENTAL_ODST_BRINGUP": "ON"
+        "HALOMCCVR_EXPERIMENTAL_ODST_BRINGUP": "ON",
+        "HALOMCCVR_EXPERIMENTAL_REACH_BRINGUP": "OFF"
+      }
+    },
+    {
+      "name": "release-reach-private",
+      "displayName": "Halo MCC VR private Reach evidence Release",
+      "description": "x64 Halo 3 + ODST build plus inert Reach evidence adapter",
+      "generator": "Visual Studio 17 2022",
+      "architecture": "x64",
+      "binaryDir": "${sourceDir}/out/build/release-reach-private",
+      "cacheVariables": {
+        "BUILD_TESTING": "ON",
+        "FETCHCONTENT_BASE_DIR": "${sourceDir}/out/deps/reach-private",
+        "FETCHCONTENT_SOURCE_DIR_OPENXR": "${sourceDir}/out/deps/openxr-src",
+        "FETCHCONTENT_SOURCE_DIR_MINHOOK": "${sourceDir}/out/deps/minhook-src",
+        "FETCHCONTENT_SOURCE_DIR_IMGUI": "${sourceDir}/out/deps/imgui-src",
+        "HALOMCCVR_EXPERIMENTAL_ODST_BRINGUP": "ON",
+        "HALOMCCVR_EXPERIMENTAL_REACH_BRINGUP": "ON"
       }
     }
   ],
@@ -25,12 +43,25 @@
       "name": "release",
       "configurePreset": "release",
       "configuration": "Release"
+    },
+    {
+      "name": "release-reach-private",
+      "configurePreset": "release-reach-private",
+      "configuration": "Release"
     }
   ],
   "testPresets": [
     {
       "name": "release",
       "configurePreset": "release",
+      "configuration": "Release",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "release-reach-private",
+      "configurePreset": "release-reach-private",
       "configuration": "Release",
       "output": {
         "outputOnFailure": true

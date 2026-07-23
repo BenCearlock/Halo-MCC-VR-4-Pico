@@ -115,6 +115,8 @@ test. Use the released ZIP when you need the exact accepted binaries.
 - [ODST signatures](docs/ODST-SIGNATURE-EVIDENCE.md)
 - [ODST camera layout](docs/ODST-CAMERA-LAYOUT.md)
 - [ODST weapon/IK evidence](docs/ODST-WEAPON-IK-EVIDENCE.md)
+- [Reach evidence manifest](docs/REACH-EVIDENCE-MANIFEST.json)
+- [Reach signature evidence](docs/REACH-SIGNATURE-EVIDENCE.md)
 - [Per-title evidence policy](docs/EDITING-KIT-EVIDENCE.md)
 
 The code was written by Claude and Codex under the direction of a human modder

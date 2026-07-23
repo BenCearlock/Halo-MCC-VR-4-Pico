@@ -37,7 +37,7 @@ if(Git_FOUND)
     endif()
 endif()
 
-# The accepted 0.2.1 product is one cumulative Halo 3 + ODST build. OFF remains
+# The accepted 0.2.2 product is one cumulative Halo 3 + ODST build. OFF remains
 # available only for a deliberate Halo 3 isolation build.
 option(HALOMCCVR_EXPERIMENTAL_ODST_BRINGUP
     "Enable the cumulative Halo 3 + ODST runtime" ON)
@@ -48,10 +48,25 @@ if(HALOMCCVR_EXPERIMENTAL_ODST_BRINGUP)
 else()
     set(HALOMCCVR_BUILD_ODST "OFF")
     message(WARNING
-        "Halo MCC VR: ODST is disabled; this does not match release 0.2.1")
+        "Halo MCC VR: ODST is disabled; this does not match release 0.2.2")
+endif()
+
+# Reach remains stock in the normal cumulative Release preset. The private
+# option compiles only an evidence/identity adapter shell; candidate one has no
+# Reach hook installation, controller admission, or rendering behavior.
+option(HALOMCCVR_EXPERIMENTAL_REACH_BRINGUP
+    "Compile the inert private Halo: Reach evidence adapter" OFF)
+
+if(HALOMCCVR_EXPERIMENTAL_REACH_BRINGUP)
+    set(HALOMCCVR_BUILD_REACH "ON")
+    message(STATUS
+        "Halo MCC VR: private Reach evidence adapter enabled; runtime hooks remain disabled")
+else()
+    set(HALOMCCVR_BUILD_REACH "OFF")
+    message(STATUS "Halo MCC VR: Reach remains stock")
 endif()
 message(STATUS
-    "Halo MCC VR build identity: ${HALOMCCVR_BUILD_COMMIT}, ODST=${HALOMCCVR_BUILD_ODST}")
+    "Halo MCC VR build identity: ${HALOMCCVR_BUILD_COMMIT}, ODST=${HALOMCCVR_BUILD_ODST}, Reach=${HALOMCCVR_BUILD_REACH}")
 
 # Exact dependency commits used by the accepted release source. Shallow clones
 # avoid pulling entire third-party histories into the ignored build tree.
@@ -107,13 +122,16 @@ add_library(halo3xr SHARED
     src/dll/game.cpp
     src/dll/ik.cpp
     src/dll/input.cpp
-    src/dll/title_adapter.cpp)
+    src/dll/title_adapter.cpp
+    src/dll/reach_adapter.cpp)
 target_compile_definitions(halo3xr PRIVATE
     UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN
     XR_USE_GRAPHICS_API_D3D11 XR_USE_PLATFORM_WIN32
     HALOMCCVR_EXPERIMENTAL_ODST_BRINGUP=$<BOOL:${HALOMCCVR_EXPERIMENTAL_ODST_BRINGUP}>
+    HALOMCCVR_EXPERIMENTAL_REACH_BRINGUP=$<BOOL:${HALOMCCVR_EXPERIMENTAL_REACH_BRINGUP}>
     HALOMCCVR_BUILD_COMMIT="${HALOMCCVR_BUILD_COMMIT}"
-    HALOMCCVR_BUILD_ODST="${HALOMCCVR_BUILD_ODST}")
+    HALOMCCVR_BUILD_ODST="${HALOMCCVR_BUILD_ODST}"
+    HALOMCCVR_BUILD_REACH="${HALOMCCVR_BUILD_REACH}")
 target_link_libraries(halo3xr PRIVATE
     openxr_loader minhook imgui_lib
     d3d11 dxgi d3dcompiler)
@@ -136,11 +154,13 @@ if(BUILD_TESTING)
         src/common/scope_logic.cpp
         src/common/title_registry.cpp
         src/common/config.cpp
-        src/common/log.cpp)
-    target_include_directories(halomccvr_core_tests PRIVATE src/common)
+        src/common/log.cpp
+        src/dll/reach_adapter.cpp)
+    target_include_directories(halomccvr_core_tests PRIVATE src/common src/dll)
     target_compile_definitions(halomccvr_core_tests PRIVATE
         UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN
-        HALOMCCVR_EXPERIMENTAL_ODST_BRINGUP=$<BOOL:${HALOMCCVR_EXPERIMENTAL_ODST_BRINGUP}>)
+        HALOMCCVR_EXPERIMENTAL_ODST_BRINGUP=$<BOOL:${HALOMCCVR_EXPERIMENTAL_ODST_BRINGUP}>
+        HALOMCCVR_EXPERIMENTAL_REACH_BRINGUP=$<BOOL:${HALOMCCVR_EXPERIMENTAL_REACH_BRINGUP}>)
     add_test(NAME halomccvr_core_tests COMMAND halomccvr_core_tests)
 endif()
 

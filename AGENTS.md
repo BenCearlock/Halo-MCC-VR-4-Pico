@@ -8,8 +8,8 @@ reverse-engineering facts live in the evidence documents under `docs/`.
 
 - This is one cumulative multi-title mod. Halo 3 and ODST are not separate
   development lines.
-- The public `MCC_VR_ALPHA_0.2.1` release is the current known-good baseline.
-  Its runtime source is commit `034c4a68e362b334d7994aa9e694243abf2aade5`.
+- The public `MCC_VR_ALPHA_0.2.2` release is the current known-good baseline.
+  Its runtime source is commit `3a2a11bfc66b36e70f60282e91c9d5436f2e18d1`.
 - Begin each candidate from the newest headset-accepted source recorded in
   `docs/CURRENT-STATE.md`. Do not select an old branch, build directory, backup,
   DLL, or ZIP merely because it exists.

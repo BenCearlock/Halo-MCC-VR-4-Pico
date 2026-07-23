@@ -12,6 +12,7 @@
 #include "hud_layout_logic.h"
 #include "input_logic.h"
 #include "odst_bringup_logic.h"
+#include "reach_adapter.h"
 #include "scope_logic.h"
 #include "title_registry.h"
 
@@ -416,8 +417,57 @@ int main()
 
     const TitleDescriptor* reach = TitleRegistry_FromModuleName(L"haloreach.dll");
     Check(reach && reach->title == GameTitle::HaloReach, "Reach module is recognized");
+    Check(reach && !reach->runtimeSupported,
+        "The evidence-only Reach adapter does not claim runtime support");
+    Check(reach && reach->capabilities == TitleCapability_None,
+        "The evidence-only Reach adapter advertises no player capabilities");
+    Check(TitleRegistry_HookPlan(GameTitle::HaloReach) == TitleHookPlan::None,
+        "Reach receives no runtime hook plan in either build preset");
+#if HALOMCCVR_EXPERIMENTAL_REACH_BRINGUP
+    Check(ReachAdapter_GetStage() == ReachAdapterStage::EvidenceOnly,
+        "The private preset compiles only the Reach evidence shell");
+#else
+    Check(ReachAdapter_GetStage() == ReachAdapterStage::Disabled,
+        "The normal Release preset keeps the Reach adapter disabled");
+#endif
+    Check(!ReachAdapter_RuntimeHooksPermitted(),
+        "Candidate one cannot install Reach runtime hooks");
+    const ReachEvidenceIdentity& reachIdentity =
+        ReachAdapter_GetEvidenceIdentity();
+    Check(std::wstring_view(reachIdentity.moduleName) == L"haloreach.dll" &&
+          std::string_view(reachIdentity.moduleSha256) ==
+              "738DD2D24EA3AEA12E1EE9AA4A61094BF116027D42004C35A19E5048608B0894" &&
+          reachIdentity.peTimestamp == 0x68A0EFE1u &&
+          reachIdentity.sizeOfImage == 0x04EDA000u &&
+          std::string_view(reachIdentity.hrekBuild) ==
+              "2023.07.17.176677.1-QFE1",
+        "The Reach adapter pins the independently verified retail and HREK identities");
+
+    ReachHookProof proof{ true, 1, true, true, true, true, true, true };
+    Check(ReachAdapter_HookProofComplete(proof),
+        "A synthetic proof is complete only when every evidence gate is present");
+    proof.loadedImageMatchCount = 0;
+    Check(!ReachAdapter_HookProofComplete(proof),
+        "A zero-match loaded-image signature fails the Reach proof closed");
+    proof.loadedImageMatchCount = 2;
+    Check(!ReachAdapter_HookProofComplete(proof),
+        "A multiple-match loaded-image signature fails the Reach proof closed");
+    proof.loadedImageMatchCount = 1;
+    proof.executableRange = false;
+    Check(!ReachAdapter_HookProofComplete(proof),
+        "A non-executable candidate range fails the Reach proof closed");
+    proof.executableRange = true;
+    proof.abi = false;
+    Check(!ReachAdapter_HookProofComplete(proof),
+        "An unproven ABI fails the Reach proof closed");
+    Check(!TitleRegistry_AllowsSharedGameplayFeatures(
+              GameTitle::HaloReach, true, false),
+        "Stale Halo 3 ownership cannot admit Reach gameplay features");
+    Check(!TitleRegistry_AllowsSharedControllerInput(
+              GameTitle::HaloReach, true, false, true, true),
+        "Reach controller admission remains stock in candidate one");
     const GameTitle unsupportedTitles[] = {
-        GameTitle::HaloReach, GameTitle::Halo4, GameTitle::HaloCE,
+        GameTitle::Halo4, GameTitle::HaloCE,
         GameTitle::Halo2, GameTitle::Unknown, GameTitle::None,
     };
     for (GameTitle title : unsupportedTitles)
@@ -463,6 +513,10 @@ int main()
     Check(organizedConfig.find("This ONE file is shared by every supported MCC game") !=
               std::string::npos,
         "The generated config explains that preferences are shared across titles");
+    Check(organizedConfig.find("\nreach_") == std::string::npos &&
+          organizedConfig.find("\nhalo3_") == std::string::npos &&
+          organizedConfig.find("\nodst_") == std::string::npos,
+        "The universal config contains no title-prefixed assignments");
     constexpr const char* universalKeys[] = {
         "config_version", "haptic_intensity", "headset_smoothing",
         "aim_stabilization", "screen_width_m", "screen_distance_m",

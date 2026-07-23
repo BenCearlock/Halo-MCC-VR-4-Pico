@@ -6,6 +6,7 @@
 #include <windows.h>
 
 #include "../common/log.h"
+#include "reach_adapter.h"
 
 namespace
 {
@@ -98,7 +99,15 @@ const TitleDescriptor* TitleAdapter_PollLoaded()
     }
     else if (!detected->runtimeSupported)
     {
-        if (TitleRegistry_HookPlan(detected->title) ==
+        if (detected->title == GameTitle::HaloReach &&
+            ReachAdapter_GetStage() == ReachAdapterStage::EvidenceOnly)
+        {
+            LOG("Title adapter: detected %s (%ls); private evidence adapter "
+                "is build-enabled but runtime hooks are forbidden, leaving "
+                "stock Reach untouched",
+                detected->displayName, detected->moduleName);
+        }
+        else if (TitleRegistry_HookPlan(detected->title) ==
             TitleHookPlan::OdstExperimentalCameraCore)
         {
             LOG("Title adapter: detected %s (%ls); public adapter remains "

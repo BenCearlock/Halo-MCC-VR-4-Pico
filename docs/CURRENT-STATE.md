@@ -189,5 +189,10 @@ ODST on the accepted build:
 - `docs/ODST-SIGNATURE-EVIDENCE.md`: ODST signatures and HUD evidence.
 - `docs/ODST-CAMERA-LAYOUT.md`: ODST camera/view layouts.
 - `docs/ODST-WEAPON-IK-EVIDENCE.md`: ODST weapon and skeleton evidence.
+- `docs/REACH-EVIDENCE-MANIFEST.json`: pinned Reach retail/HREK identities and
+  preliminary evidence-only RVAs; not an accepted runtime pointer.
+- `docs/REACH-SIGNATURE-EVIDENCE.md`: Reach proof ledger; all runtime hooks are
+  currently unauthorized and disabled.
 - `docs/HISTORY.md`: how to retrieve the full pre-cleanup ledger.
-- `releases/0.2.1/manifest.json`: machine-readable release identity.
+- `releases/0.2.2/manifest.json`: current machine-readable release identity.
+- `releases/0.2.1/manifest.json`: protected rollback release identity.

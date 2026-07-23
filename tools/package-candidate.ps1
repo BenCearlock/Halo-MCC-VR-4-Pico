@@ -1,5 +1,7 @@
 [CmdletBinding()]
-param()
+param(
+    [switch]$ReachPrivate
+)
 
 $ErrorActionPreference = 'Stop'
 $repoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
@@ -7,6 +9,18 @@ $candidateRoot = [IO.Path]::GetFullPath(
     (Join-Path $repoRoot 'out\candidates'))
 $expectedCandidateRoot = [IO.Path]::GetFullPath(
     (Join-Path $repoRoot 'out')) + [IO.Path]::DirectorySeparatorChar
+$packagePreset = if ($ReachPrivate) { 'release-reach-private' } else { 'release' }
+$packageBuildDir = if ($ReachPrivate) {
+    'out\build\release-reach-private'
+} else {
+    'out\build\release'
+}
+$validationPresets = if ($ReachPrivate) {
+    @('release', 'release-reach-private')
+} else {
+    @('release')
+}
+$reachEnabled = [bool]$ReachPrivate
 
 if (-not $candidateRoot.StartsWith(
         $expectedCandidateRoot,
@@ -30,31 +44,49 @@ try {
         throw 'Could not resolve the candidate source commit.'
     }
 
-    $acceptedSource = '034c4a68e362b334d7994aa9e694243abf2aade5'
+    $acceptedSource = '3a2a11bfc66b36e70f60282e91c9d5436f2e18d1'
     & git -C $repoRoot merge-base --is-ancestor $acceptedSource $commit
     if ($LASTEXITCODE -ne 0) {
         throw "Refusing to package: HEAD does not descend from accepted source $acceptedSource."
     }
 
-    & cmake --preset release
-    if ($LASTEXITCODE -ne 0) {
-        throw 'CMake configure failed.'
-    }
+    foreach ($preset in $validationPresets) {
+        & cmake --preset $preset
+        if ($LASTEXITCODE -ne 0) {
+            throw "CMake configure failed for preset $preset."
+        }
 
-    $cachePath = Join-Path $repoRoot 'out\build\release\CMakeCache.txt'
-    $cache = [IO.File]::ReadAllText($cachePath)
-    if ($cache -notmatch '(?m)^HALOMCCVR_EXPERIMENTAL_ODST_BRINGUP:BOOL=ON\r?$') {
-        throw 'Refusing to package: cumulative ODST support is not ON.'
-    }
+        $presetBuildDir = if ($preset -eq 'release-reach-private') {
+            'out\build\release-reach-private'
+        } else {
+            'out\build\release'
+        }
+        $cachePath = Join-Path $repoRoot "$presetBuildDir\CMakeCache.txt"
+        $cache = [IO.File]::ReadAllText($cachePath)
+        if ($cache -notmatch
+                '(?m)^HALOMCCVR_EXPERIMENTAL_ODST_BRINGUP:BOOL=ON\r?$') {
+            throw "Refusing to package: ODST is not ON in preset $preset."
+        }
+        $expectedReach = if ($preset -eq 'release-reach-private') {
+            'ON'
+        } else {
+            'OFF'
+        }
+        $reachPattern =
+            "(?m)^HALOMCCVR_EXPERIMENTAL_REACH_BRINGUP:BOOL=$expectedReach\r?$"
+        if ($cache -notmatch $reachPattern) {
+            throw "Refusing to package: Reach is not $expectedReach in preset $preset."
+        }
 
-    & cmake --build --preset release --clean-first
-    if ($LASTEXITCODE -ne 0) {
-        throw 'Release build failed.'
-    }
+        & cmake --build --preset $preset --clean-first
+        if ($LASTEXITCODE -ne 0) {
+            throw "Release build failed for preset $preset."
+        }
 
-    & ctest --preset release
-    if ($LASTEXITCODE -ne 0) {
-        throw 'Core tests failed.'
+        & ctest --preset $preset
+        if ($LASTEXITCODE -ne 0) {
+            throw "Core tests failed for preset $preset."
+        }
     }
 
     $finalCommit = (& git -C $repoRoot rev-parse HEAD).Trim()
@@ -66,14 +98,15 @@ try {
     }
 
     $createdUtc = [DateTime]::UtcNow
-    $packageId = '{0}-{1}' -f $commit.Substring(0, 7),
+    $packageKind = if ($ReachPrivate) { 'reach-private' } else { 'release' }
+    $packageId = '{0}-{1}-{2}' -f $commit.Substring(0, 7), $packageKind,
         $createdUtc.ToString("yyyyMMdd-HHmmssfff'Z'")
     $packageDir = Join-Path $candidateRoot $packageId
     if (Test-Path -LiteralPath $packageDir) {
         throw "Refusing to reuse candidate directory: $packageDir"
     }
 
-    & cmake --install 'out/build/release' --config Release `
+    & cmake --install $packageBuildDir --config Release `
         --prefix $packageDir --component dist
     if ($LASTEXITCODE -ne 0) {
         throw 'Candidate staging failed.'
@@ -98,17 +131,20 @@ try {
         (Get-FileHash -LiteralPath $launcherPath -Algorithm SHA256).Hash
 
     $manifest = [ordered]@{
-        schema_version = 1
+        schema_version = 2
         status = 'UNTESTED_LOCAL_CANDIDATE'
         accepted = $false
         package_id = $packageId
         created_utc = $createdUtc.ToString('o')
         source_commit = $commit
+        package_preset = $packagePreset
         embedded_build_identity = [ordered]@{
             source_commit = $commit
             HALOMCCVR_EXPERIMENTAL_ODST_BRINGUP = $true
+            HALOMCCVR_EXPERIMENTAL_REACH_BRINGUP = $reachEnabled
         }
-        base_release = 'MCC_VR_ALPHA_0.2.1'
+        reach_runtime_hooks_enabled = $false
+        base_release = 'MCC_VR_ALPHA_0.2.2'
         files = [ordered]@{
             'halo3xr.dll' = [ordered]@{
                 bytes = $dll.Length
