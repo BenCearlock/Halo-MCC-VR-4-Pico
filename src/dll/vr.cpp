@@ -2027,9 +2027,13 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
         const uintptr_t bufferIdentity = snapshot.buffer0Identity;
         const DXGI_SWAP_CHAIN_DESC& swapchainDesc = snapshot.swapchainDesc;
         const D3D11_TEXTURE2D_DESC& sourceDesc = snapshot.buffer0Desc;
+        // The injected retail run from d0a5434 is authoritative over the
+        // earlier static constructor reading: MCC's live Reach Present owner
+        // is a two-buffer flip-discard chain. Keep this exact rather than
+        // broadening admission to arbitrary flip-model swapchains.
         const bool swapchainContract =
-            swapchainDesc.BufferCount == 1 &&
-            swapchainDesc.SwapEffect == DXGI_SWAP_EFFECT_DISCARD &&
+            swapchainDesc.BufferCount == 2 &&
+            swapchainDesc.SwapEffect == DXGI_SWAP_EFFECT_FLIP_DISCARD &&
             swapchainDesc.BufferDesc.Format ==
                 DXGI_FORMAT_R8G8B8A8_UNORM &&
             swapchainDesc.SampleDesc.Count == 1 &&

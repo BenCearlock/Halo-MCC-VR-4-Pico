@@ -466,8 +466,12 @@ group 1/display through `0x274524` before the final CHUD draw. The accepted
 external observer saw only player slot zero but did not sample `+0x3A4`, so
 normal specialization index zero remains a required runtime check.
 
-Swapchain creation `0x250C4C` proves one buffer, DISCARD swap effect, UNORM
-format, sample count one, and shader-input plus render-target-output usage.
+Static swapchain creation `0x250C4C` appeared to select one buffer and DISCARD,
+but exact injected runtime candidate `d0a5434` observed the engine-global
+Present owner as two buffers with `DXGI_SWAP_EFFECT_FLIP_DISCARD`, UNORM format,
+and sample count one. Headset observation outranks the earlier static reading;
+the production live contract is therefore the exact two-buffer flip-discard
+shape. The shader-input plus render-target-output usage remains required.
 Stock wrapper `0x25113C` reads that same swapchain at `0x251195` and calls
 Present at `0x2511AA`.
 
@@ -594,7 +598,7 @@ closed before publication or any worker D3D call. It does no file/hash/signature
 scan, allocation, lock, or logging. After loaded-image publication, the 50 ms
 worker consumes only that retained snapshot. It checks group 1's count/array/
 record-0 identities, specialization index zero, and selected RTV cache, verifies
-the proven one-buffer DISCARD/UNORM contract and exact single-sample copy shape,
+the live two-buffer flip-discard/UNORM contract and exact single-sample copy shape,
 verifies one D3D11 device and
 its immediate context, and transactionally creates two distinct matching Reach-
 private eye caches without touching Halo 3/ODST resources. Each refresh first
