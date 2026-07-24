@@ -244,6 +244,24 @@ int main()
               kReachPlayerViewRenderBodySize == 2314,
             "Reach render candidate pins both exact body identities");
 
+        constexpr uintptr_t motionBlurTestBase = 0x10000000u;
+        Check(ReachMotionBlurSlotsMatchPinnedImage(
+                  motionBlurTestBase, kReachRetailImageSize,
+                  motionBlurTestBase + kReachMotionBlurScaleValueRva,
+                  motionBlurTestBase + kReachMotionBlurMaxValueRva) &&
+              !ReachMotionBlurSlotsMatchPinnedImage(
+                  motionBlurTestBase, kReachRetailImageSize,
+                  motionBlurTestBase + kReachMotionBlurMaxValueRva,
+                  motionBlurTestBase + kReachMotionBlurScaleValueRva) &&
+              !ReachMotionBlurSlotsMatchPinnedImage(
+                  motionBlurTestBase, kReachRetailImageSize - 1,
+                  motionBlurTestBase + kReachMotionBlurScaleValueRva,
+                  motionBlurTestBase + kReachMotionBlurMaxValueRva) &&
+              ReachMotionBlurValuesFinite(0.35f, 0.08f) &&
+              !ReachMotionBlurValuesFinite(
+                  std::numeric_limits<float>::quiet_NaN(), 0.08f),
+            "Reach motion-blur parity accepts only the pinned distinct slots and finite authored values");
+
         std::array<uint8_t, kReachMainRenderViewAob.size()> exactMask{};
         exactMask.fill(0xFF);
         std::array<uint8_t, kReachMainRenderViewAob.size() * 2 + 1>

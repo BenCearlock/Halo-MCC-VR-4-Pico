@@ -174,6 +174,40 @@
           "last_window_flag_excluded": true
         }
       },
+      "native_motion_blur_parity": {
+        "headset_evidence_source": "86864bd088867a8e67950eb7d013d1c29d9f2d45",
+        "headset_result": "CAMERA_CULLING_STEREO_PASS_TEMPORAL_FOG_HAZE_FAIL",
+        "retail_distortion_matrix_upload_rva_range": "0x0026C956..0x0026C967",
+        "retail_current_matrix_block": "player_view+0x490",
+        "retail_previous_matrix_block": "player_view+0x760",
+        "hrek_apply_distortions_call_rva": "0x008351E6",
+        "hrek_distortion_motion_blur_call_rva": "0x00835201",
+        "controls": {
+          "motion_blur_max": {
+            "retail_entry_rva": "0x00B3A1C8",
+            "retail_value_rva": "0x00B44600",
+            "hrek_entry_rva": "0x0201BA70",
+            "hrek_value_rva": "0x02059054",
+            "authored_value": 0.08,
+            "debug_type": 6
+          },
+          "motion_blur_scale": {
+            "retail_entry_rva": "0x00B3A1E0",
+            "retail_value_rva": "0x00B44604",
+            "hrek_entry_rva": "0x0201BA88",
+            "hrek_value_rva": "0x02059058",
+            "authored_value": 0.35,
+            "debug_type": 6
+          }
+        },
+        "shared_config": "motion_blur",
+        "vr_default": "OFF",
+        "production_resolution": "EXACT_NAME_AFTER_PINNED_IMAGE_PREFLIGHT_THEN_REQUIRE_EXACT_RETAIL_VALUE_RVAS_DISTINCT_FINITE",
+        "render_policy": "REASSERT_ZERO_AT_EXACT_NORMAL_ADMITTED_REACH_STEREO_BOUNDARY_WITHOUT_LOGGING_ALLOCATION_LOCKING_OR_SCANNING",
+        "config_enabled_policy": "RESTORE_LATEST_AUTHORED_VALUES",
+        "teardown": "DISABLE_BOTH_REACH_HOOKS_PROVE_CALLBACK_AND_RELAY_WRAPPER_RIP_QUIESCENCE_THEN_RESTORE_OR_RETAIN_AND_RETRY",
+        "camera_culling_eye_order_projection_capture_changed": false
+      },
       "pre_inner_visibility": {
         "ordering": "AFTER_NORMAL_SETUP_BEFORE_PLAYER_VIEW_RENDER",
         "cluster_lookup_call_rva": "0x000C3320",
@@ -341,6 +375,7 @@
         "exact_prepared_serial_lock_free_head_pad_and_two_eye_snapshot",
         "pre_visibility_head_center_binocular_angular_union_camera_commit",
         "coherent_head_center_player_view_fallback",
+        "reach_native_motion_blur_scale_max_exact_slot_resolution_reassert_and_quiescent_restore",
         "two_eye_engine_camera_rebuild_copyresource_and_projection_fov_publication",
         "callback_wrapper_and_minhook_relay_rip_quiescent_teardown"
       ],
@@ -348,12 +383,12 @@
         "reach_controller_projectile_reticle_and_weapon_body_aim",
         "reach_native_hud_and_arm_ik",
         "exact_finite_distance_cull_coverage_for_translated_eye_origins",
-        "current_forward_head_owned_visibility_headset_result",
+        "current_forward_native_motion_blur_off_temporal_fog_headset_result",
         "halo3_and_odst_regression_for_this_exact_shared_binary"
       ],
       "loaded_image_preflight_compiled": true,
       "display_copy_readiness_compiled": true,
-      "runtime_result": "f953bbe exact headset test passed 3D/projection but failed pre-inner culling ownership; 065f62a then failed black because it incorrectly rejected the proven -1 empty pre-push depth; the forward -1-to-0 admission correction is untested",
+      "runtime_result": "86864bd exact headset test passed stereo, projection, 6DOF, stick/head coherence, and head-owned culling at approximately 94-120 FPS with zero frame-order failures; fog/haze appeared eye-swapped and head-following because Reach native temporal motion blur remained active unlike accepted H3/ODST; exact scale/max suppression is untested",
       "title_hook_plan": "REACH_CAMERA_CORE",
       "runtime_capabilities": [
         "STEREO",
@@ -370,9 +405,8 @@
       "accepted_pointer_advanced": false
     },
     "remaining_runtime_proof": [
-      "current_forward_visibility_follows_90_180_head_yaw_high_low_pitch_and_doorway_lean",
       "close_peripheral_geometry_result_under_head_center_visibility_policy",
-      "stick_turn_and_off_axis_head_motion_remain_one_coherent_camera",
+      "exact_forward_motion_blur_off_fog_haze_has_no_eye_swap_or_head_locked_trail",
       "pause_cinematic_split_screen_device_loss_and_title_transition_observation",
       "exact_dll_headset_validation_then_halo3_and_odst_regression"
     ],

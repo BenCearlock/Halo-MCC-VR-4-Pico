@@ -112,6 +112,39 @@ could run. The forward correction changes only that proven admission bound to
 `-1..2`, retains exact current-depth `pre+1` within `0..3`, and preserves the
 head-owned visibility work. It remains headset-pending.
 
+### Unaccepted Reach camera/culling pass, temporal-fog fail - 2026-07-24
+
+This result is evidence only and does not advance the accepted pointer above.
+
+| Identity | Value |
+| --- | --- |
+| Tested runtime source | `86864bd088867a8e67950eb7d013d1c29d9f2d45` |
+| Candidate package | `out/candidates/86864bd-reach-camera-20260724-115400094Z` |
+| `halo3xr.dll` SHA-256 | `E66598671EBB602BF5D5B46CAA45F3E0678073603E8150C3A2641723B5DFD209` |
+| `halo3xr_launcher.exe` SHA-256 | `4FAA18942886540FD4D212608D2485F17A7D68E575327CA6BF31D0252562ADAC` |
+| Preserved headset evidence | `out/test-runs/86864bd-reach-camera-pass-fog-eye-fail-20260724-120101Z` |
+| Headset result | Stereo, projection, 6DOF, head-owned visibility, and stick/head coherence looked great; fog/haze appeared eye-swapped and followed head motion |
+
+The installed hashes matched the package. Reach submitted a projection layer at
+approximately 94-120 FPS with zero frame-order failures, and the user confirmed
+that the earlier gun-owned culling defect was gone. The full log SHA-256 is
+`DFB8588BC7808C1902B97C219281AD3CE6B88C6479206EBD3A04973F61E9488F`.
+The user also noted somewhat high VRAM use; the exact run allocated a bounded
+approximately 395.5 MiB of logical mod/OpenXR texture payload at the runtime's
+recommended `3400x3468` eye size, with no per-frame allocation or leak evidence.
+
+Unlike accepted Halo 3 and ODST, Reach still ran its native temporal motion blur.
+Pinned retail and HREK evidence identifies unique type-6 float controls
+`motion_blur_scale` and `motion_blur_max`, authored as `0.35` and `0.08`.
+Reach's duplicated renderer consumes current and previous camera matrices in the
+distortion/motion-blur phase, so sequential eyes can create false other-eye
+velocity that is most visible in fog. The next forward candidate changes only
+this title-native comfort behavior: resolve the two exact pinned slots by name,
+reassert zero at admitted Reach stereo boundaries while the shared
+`motion_blur=0` default is active, honor `motion_blur=1`, and restore authored
+values only after both Reach hooks reach verified quiescence. Camera, culling,
+eye order, projection, and capture remain unchanged.
+
 ### Reach stock runtime observation - 2026-07-23
 
 The external read-only Reach observer from source

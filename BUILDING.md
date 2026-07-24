@@ -73,6 +73,15 @@ translation is applied only to the two rasters. The angular union is conservativ
 for orientation/FOV but is not claimed to exactly enclose translated near-plane
 corners; close doorway/peripheral geometry remains an explicit headset test.
 
+Reach also consumes the universal `motion_blur` comfort setting exactly as the
+accepted Halo 3/ODST paths do. After the pinned loaded-image proof, the worker
+resolves Reach's unique native type-6 `motion_blur_scale` and
+`motion_blur_max` float controls by name and requires their exact proven retail
+value slots. The exact normal stereo boundary reasserts zero when the VR default
+`motion_blur=0` is active so sequential eyes cannot create false other-eye
+velocity in haze/distortion. `motion_blur=1` restores the authored values, and
+title teardown restores them only after both Reach hooks are quiescent.
+
 While the tracked camera is armed, XInput suppresses stock RX/RY so the game
 cannot create a competing look transform under the HMD view. The original
 pre-head camera direction is not reused as culling or claimed as projectile aim.

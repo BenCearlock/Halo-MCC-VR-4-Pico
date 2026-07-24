@@ -64,6 +64,14 @@ inline constexpr uintptr_t kReachDisplaySurfaceRtvOffset = 0x08;
 inline constexpr uintptr_t kReachDisplaySurfaceSrvOffset = 0x18;
 inline constexpr uint32_t kReachDisplaySurfaceCount = 4;
 inline constexpr uint32_t kReachDisplayFormatR8G8B8A8Unorm = 28;
+// Reach-native type-6 float debug variables. The pinned retail table contains
+// one exact entry for each name; HREK independently corroborates the same two
+// controls and authored values (docs/REACH-SIGNATURE-EVIDENCE.md). Production
+// still resolves by name, then requires these exact value slots before writing.
+inline constexpr uintptr_t kReachMotionBlurMaxEntryRva = 0x00B3A1C8;
+inline constexpr uintptr_t kReachMotionBlurScaleEntryRva = 0x00B3A1E0;
+inline constexpr uintptr_t kReachMotionBlurMaxValueRva = 0x00B44600;
+inline constexpr uintptr_t kReachMotionBlurScaleValueRva = 0x00B44604;
 inline constexpr uintptr_t kReachPlayerViewCameraStateOffset = 0x03B0;
 inline constexpr uintptr_t kReachPlayerViewCurrentMatricesOffset = 0x0490;
 inline constexpr uintptr_t kReachPlayerViewPreviousMatricesOffset = 0x0760;
@@ -1168,6 +1176,28 @@ inline bool ReachAddressFromRva(
     }
     address = moduleBase + rva;
     return true;
+}
+
+inline bool ReachMotionBlurSlotsMatchPinnedImage(
+    uintptr_t moduleBase, size_t moduleSize,
+    uintptr_t scaleSlot, uintptr_t maxSlot) noexcept
+{
+    if (moduleSize != kReachRetailImageSize || scaleSlot == maxSlot)
+        return false;
+    uintptr_t expectedScale = 0;
+    uintptr_t expectedMax = 0;
+    return ReachAddressFromRva(
+               moduleBase, moduleSize,
+               kReachMotionBlurScaleValueRva, expectedScale) &&
+        ReachAddressFromRva(
+               moduleBase, moduleSize,
+               kReachMotionBlurMaxValueRva, expectedMax) &&
+        scaleSlot == expectedScale && maxSlot == expectedMax;
+}
+
+inline bool ReachMotionBlurValuesFinite(float scale, float maximum) noexcept
+{
+    return std::isfinite(scale) && std::isfinite(maximum);
 }
 
 inline ReachOuterRenderCaller ClassifyReachOuterRenderCaller(

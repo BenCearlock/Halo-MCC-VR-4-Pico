@@ -37,7 +37,17 @@ to depth/slot zero. The failure is preserved under
 correction accepts only pre-push depths `-1..2` and still requires the exact
 post-push relation and bounds described below.
 
-The remaining defect is now pinned to an exact pre-inner stage. Retail
+Source `86864bd0` admitted the proven `-1 -> 0` top-level stack transition. Its
+exact DLL
+`E66598671EBB602BF5D5B46CAA45F3E0678073603E8150C3A2641723B5DFD209`
+submitted true stereo at approximately 94-120 FPS with zero frame-order
+failures. The user reported that stereo, projection, 6DOF, stick/head coherence,
+and head-owned visibility now looked great. The remaining headset defect was a
+fog/haze contribution that appeared eye-swapped and followed head motion. The
+run is preserved under
+`out/test-runs/86864bd-reach-camera-pass-fog-eye-fail-20260724-120101Z`.
+
+The preceding culling defect was pinned to an exact pre-inner stage. Retail
 `main_render_view` performs its visibility work before calling
 `player_view_render`; its cluster lookup at `0x0C3320 -> 0x273458` explicitly
 queries `workspace+0x154`, and the visibility build at `0x0C335C -> 0x27F408`
@@ -81,6 +91,38 @@ ownership model for later motion-control evidence without guessing a Reach
 simulation offset. Per-eye rendering still uses the proven frustum helper
 `0x287F58`, projection builder `0x2884BC`, camera-state updater `0x286F9C`, and
 projection/matrix builder `0x28AF8C` before each inner render.
+
+### Reach-native temporal motion-blur parity
+
+The accepted Halo 3 and ODST paths disable title-native camera motion blur by
+default because sequential stereo eyes otherwise make the previous camera the
+other eye. Reach had not yet consumed that shared comfort policy in `86864bd`.
+Pinned HREK `player_view_render` reaches `apply_distortions` and
+`distortion_apply_and/or_motion_blur` at RVAs `0x8351E6` and `0x835201`.
+Pinned retail uploads the current `player_view+0x490` and previous
+`player_view+0x760` matrix blocks at `0x26C956..0x26C967` before the equivalent
+distortion work. That makes false eye-to-eye velocity an evidence-backed cause
+for a head-motion haze artifact; it does not claim the authored fog shader
+itself is swapped.
+
+Both exact binaries independently expose unique type-6 float debug-table
+entries:
+
+| Control | Retail entry -> value RVA | HREK entry -> value RVA | Authored value |
+| --- | --- | --- | ---: |
+| `motion_blur_max` | `0x00B3A1C8 -> 0x00B44600` | `0x0201BA70 -> 0x02059054` | `0.08` |
+| `motion_blur_scale` | `0x00B3A1E0 -> 0x00B44604` | `0x0201BA88 -> 0x02059058` | `0.35` |
+
+Production resolves both exact names only after the pinned loaded-image
+preflight, requires their resolved pointers to equal the proven retail value
+RVAs, and rejects aliases, out-of-image values, or non-finite authored values.
+At each exact normal admitted Reach stereo boundary it reasserts zero while the
+shared `motion_blur=0` VR default is active, without logging, allocation,
+scanning, or locking in the render hook. `motion_blur=1` restores the latest
+authored values. Title teardown first disables both Reach hooks and proves
+callback plus relay/wrapper RIP quiescence, then restores authored values; a
+failed restore retains the module/state and retries. No camera, culling, eye
+order, FOV, render, or capture policy changes in this candidate.
 
 This document records Reach-specific facts for the cumulative Halo 3 + ODST +
 Reach line. Halo 3 and ODST offsets, layouts, bones, markers, and tag meanings

@@ -9475,6 +9475,9 @@ namespace
         void* innerTarget = nullptr;
         void* outerTarget = nullptr;
         uint64_t installedAtMs = 0;
+        MotionBlurVar motionBlurVars[2]{};
+        bool motionBlurResolved = false;
+        bool motionBlurZeroed = false;
     } g_reachCamera;
     static_assert(std::atomic<int>::is_always_lock_free);
 
@@ -9487,6 +9490,55 @@ namespace
 
     ReachPlayerViewRenderFn g_reachOrigPlayerViewRender = nullptr;
     ReachMainRenderViewFn g_reachOrigMainRenderView = nullptr;
+
+    // Reach's sequential eye renders otherwise feed the native distortion pass
+    // current-eye matrices plus shared/stale camera history. Match accepted
+    // Halo 3/ODST motion-blur comfort behavior: reassert the two proven native
+    // float controls at each exact normal Reach stereo boundary, retain any
+    // authored values reloaded by tags, and restore only after both detours are
+    // quiescent. These render-hook helpers do no logging, allocation, locking,
+    // or scanning.
+    bool ReachRestoreMotionBlurValues()
+    {
+        if (!g_reachCamera.motionBlurResolved ||
+            !g_reachCamera.motionBlurZeroed)
+        {
+            return true;
+        }
+        for (MotionBlurVar& var : g_reachCamera.motionBlurVars)
+        {
+            if (!SafeWriteFloat(var.slot, var.original))
+                return false;
+        }
+        g_reachCamera.motionBlurZeroed = false;
+        return true;
+    }
+
+    void ReachApplyMotionBlurSetting()
+    {
+        if (!g_reachCamera.motionBlurResolved)
+            return;
+        if (g_config.motion_blur)
+        {
+            ReachRestoreMotionBlurValues();
+            return;
+        }
+
+        // Mark restoration pending before the first possible write. If either
+        // protected read/write fails after a partial mutation, config re-enable
+        // or quiescent teardown must still restore both authored values.
+        g_reachCamera.motionBlurZeroed = true;
+        for (MotionBlurVar& var : g_reachCamera.motionBlurVars)
+        {
+            float current = 0.0f;
+            if (!SafeReadFloat(var.slot, &current) || !isfinite(current))
+                return;
+            if (current != 0.0f)
+                var.original = current;
+            if (!SafeWriteFloat(var.slot, 0.0f))
+                return;
+        }
+    }
 
     // kReachSecondaryCompactOffset and the derived/render-bounds sub-block
     // offsets now live in reach_render_logic.h alongside the rest of the proven
@@ -10165,6 +10217,8 @@ namespace
                 workspace, playerView, windowIndex);
         }
 
+        ReachApplyMotionBlurSetting();
+
         ReachVrRenderSnapshot tracking{};
         if (!VR_ReachGetRenderSnapshot(prepared, tracking) ||
             tracking.preparedSerial != prepared.Serial())
@@ -10739,6 +10793,16 @@ namespace
         if (!DisableAndRemoveReachHooks())
             return false;
 
+        const bool restoreReachBlur = g_reachCamera.motionBlurZeroed;
+        if (!ReachRestoreMotionBlurValues())
+        {
+            LOG("Reach camera cleanup: could not restore title-native "
+                "motion-blur values; retained state will retry");
+            return false;
+        }
+        if (restoreReachBlur)
+            LOG("Reach comfort: stock motion-blur values restored during teardown");
+
         // A callback admitted before armed was cleared could have published
         // its final copied eye while teardown waited. Quiescence makes this
         // second invalidation definitive for the retired title generation.
@@ -10760,6 +10824,10 @@ namespace
         g_reachCamera.size = 0;
         g_reachCamera.generation = 0;
         g_reachCamera.installedAtMs = 0;
+        g_reachCamera.motionBlurVars[0] = {};
+        g_reachCamera.motionBlurVars[1] = {};
+        g_reachCamera.motionBlurResolved = false;
+        g_reachCamera.motionBlurZeroed = false;
         g_reachOrigPlayerViewRender = nullptr;
         g_reachOrigMainRenderView = nullptr;
         g_reachHelpers = {};
@@ -10804,6 +10872,28 @@ namespace
         {
             LOG("Reach camera install: camera-rebuild helper verification failed; "
                 "stock Reach remains active");
+            return false;
+        }
+
+        float* const reachMotionBlurScale =
+            FindDebugVarFloat(base, size, "motion_blur_scale");
+        float* const reachMotionBlurMax =
+            FindDebugVarFloat(base, size, "motion_blur_max");
+        float reachMotionBlurScaleOriginal = 0.0f;
+        float reachMotionBlurMaxOriginal = 0.0f;
+        if (!reachMotionBlurScale || !reachMotionBlurMax ||
+            !ReachMotionBlurSlotsMatchPinnedImage(
+                base, size,
+                reinterpret_cast<uintptr_t>(reachMotionBlurScale),
+                reinterpret_cast<uintptr_t>(reachMotionBlurMax)) ||
+            !SafeReadFloat(
+                reachMotionBlurScale, &reachMotionBlurScaleOriginal) ||
+            !SafeReadFloat(reachMotionBlurMax, &reachMotionBlurMaxOriginal) ||
+            !ReachMotionBlurValuesFinite(
+                reachMotionBlurScaleOriginal, reachMotionBlurMaxOriginal))
+        {
+            LOG("Reach camera install: exact title-native motion-blur "
+                "scale/max proof failed; stock Reach remains active");
             return false;
         }
 
@@ -10855,6 +10945,12 @@ namespace
         g_reachCamera.innerTarget = inner;
         g_reachCamera.outerTarget = outer;
         g_reachCamera.installedAtMs = GetTickCount64();
+        g_reachCamera.motionBlurVars[0] = {
+            reachMotionBlurScale, reachMotionBlurScaleOriginal};
+        g_reachCamera.motionBlurVars[1] = {
+            reachMotionBlurMax, reachMotionBlurMaxOriginal};
+        g_reachCamera.motionBlurResolved = true;
+        g_reachCamera.motionBlurZeroed = false;
         for (int eye = 0; eye < 2; ++eye)
         {
             g_reachRenderFovSerial[eye].store(0, std::memory_order_release);
@@ -10883,6 +10979,13 @@ namespace
         LOG("Reach camera core installed: inner player_view_render + outer "
             "main_render_view hooked; waiting one-second fresh-camera interval "
             "before arming per-eye stereo");
+        LOG("Reach comfort evidence: blurScale=%llX blurMax=%llX "
+            "(authored %.4f/%.4f); VR default is OFF",
+            static_cast<unsigned long long>(
+                reinterpret_cast<uintptr_t>(reachMotionBlurScale) - base),
+            static_cast<unsigned long long>(
+                reinterpret_cast<uintptr_t>(reachMotionBlurMax) - base),
+            reachMotionBlurScaleOriginal, reachMotionBlurMaxOriginal);
         return true;
     }
 
