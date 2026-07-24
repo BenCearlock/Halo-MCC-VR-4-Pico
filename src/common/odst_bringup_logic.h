@@ -7,6 +7,14 @@ constexpr uint64_t kOdstCameraFreshMs = 500;
 constexpr uint64_t kOdstCameraSoftTimeoutMs = 750;
 constexpr uint64_t kOdstCameraHardTimeoutMs = 5000;
 constexpr uint64_t kOdstCameraStableMs = 1000;
+// Native-pause REINSTALL debounce (stage 1). A pause returns to the exact camera
+// the hooks were just removed from -- not a fresh level -- so the reinstall gate
+// does not need the full fresh-level stability interval. The real arm-safety guard
+// is unchanged: after reinstall the render thread still holds the accepted
+// one-second kOdstCameraStableMs fresh-ordinary-camera interval (stage 2) before
+// stereo arms. Shortening only stage 1 cuts the post-pause VR drop-out without
+// letting the mod arm into a still-transitional pause-exit camera.
+constexpr uint64_t kOdstPauseRearmStableMs = 250;
 constexpr float kOdstFirstPersonBlendMin = 0.95f;
 
 struct OdstFpSkeletonLayout
@@ -363,7 +371,7 @@ public:
             m_readyObserved = true;
             return;
         }
-        if (now >= m_readySince && now - m_readySince > kOdstCameraStableMs)
+        if (now >= m_readySince && now - m_readySince > kOdstPauseRearmStableMs)
         {
             m_blocked = false;
             m_readySince = 0;

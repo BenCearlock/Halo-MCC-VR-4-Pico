@@ -2338,24 +2338,25 @@ int main()
             "title exit clears the unsupported-camera session latch");
 
         OdstPauseRearmGate pauseGate;
+        const uint64_t pauseStable = kOdstPauseRearmStableMs;
         pauseGate.Block();
         pauseGate.Observe(100, true, true, true);
         Check(!pauseGate.CanAttemptInstall(),
             "native ODST pause blocks camera-hook reinstallation");
         pauseGate.Observe(200, true, false, true);
-        pauseGate.Observe(1200, true, false, true);
+        pauseGate.Observe(200 + pauseStable, true, false, true);
         Check(!pauseGate.CanAttemptInstall(),
-            "pause exit requires more than the full stable-camera interval");
-        pauseGate.Observe(1201, true, false, true);
+            "pause exit requires more than the pause-rearm stable interval");
+        pauseGate.Observe(201 + pauseStable, true, false, true);
         Check(pauseGate.CanAttemptInstall(),
             "stable gameplay after pause exit permits camera-hook reinstall");
         pauseGate.Block();
         pauseGate.Observe(5000, true, false, true);
-        pauseGate.Observe(5500, true, false, false);
-        pauseGate.Observe(7000, true, false, true);
+        pauseGate.Observe(5100, true, false, false);
+        pauseGate.Observe(5100 + pauseStable, true, false, true);
         Check(!pauseGate.CanAttemptInstall(),
             "camera loss resets the pause-exit stability interval");
-        pauseGate.Observe(8001, true, false, true);
+        pauseGate.Observe(5101 + 2 * pauseStable, true, false, true);
         Check(pauseGate.CanAttemptInstall(),
             "a new continuous camera interval clears the pause gate");
         pauseGate.Block();
