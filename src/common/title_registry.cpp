@@ -15,7 +15,11 @@ namespace
         TitleCapability_Stereo |
         TitleCapability_ControllerAim |
         TitleCapability_Hud |
-        TitleCapability_ArmIk;
+        TitleCapability_ArmIk |
+        TitleCapability_RuntimeModes |
+        TitleCapability_RoomScale |
+        TitleCapability_ControllerInput |
+        TitleCapability_Haptics;
 
     constexpr TitleDescriptor kTitles[] = {
         { GameTitle::Halo3, L"halo3.dll", "Halo 3", true, kHalo3Capabilities },

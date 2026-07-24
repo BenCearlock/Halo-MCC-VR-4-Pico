@@ -2122,9 +2122,23 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
         const RuntimeMode mode = TitleAdapter_GetRuntimeMode();
         const bool modeAllows = mode == RuntimeMode::Gameplay ||
             mode == RuntimeMode::Vehicle || mode == RuntimeMode::Turret;
-        float amplitude = std::clamp(g_requestedHaptics.load(std::memory_order_acquire), 0.0f, 1.0f);
+        const bool capabilityAllows =
+            Game_HasTitleCapability(TitleCapability_Haptics);
+        if (!capabilityAllows)
+        {
+            // Stop is not enough: the requested amplitude is persistent. Drop
+            // it while ownership/arming is absent so it cannot be replayed
+            // after a title transition without a fresh XInput request.
+            g_requestedHaptics.store(0.0f, std::memory_order_release);
+        }
+        float amplitude = capabilityAllows
+            ? std::clamp(
+                g_requestedHaptics.load(std::memory_order_acquire),
+                0.0f, 1.0f)
+            : 0.0f;
         amplitude *= std::clamp(g_config.haptic_intensity, 0.0f, 1.0f);
         const bool mustStop = amplitude <= 0.0f || !trackingValid || !modeAllows ||
+            !capabilityAllows ||
             Menu_IsOpen() || g_sessionState != XR_SESSION_STATE_FOCUSED;
         if (mustStop)
         {
@@ -2660,13 +2674,14 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
             // (symmetric, widened by RenderViewHook to cover the headset's
             // per-eye angles). Fixed headset angles warp during head turns
             // whenever Halo's internal projection produces different scales.
-            float haloHalfX = atanf(1.091595f);
-            float haloHalfY = atanf(1.114286f);
+            float haloHalfX[2] = {atanf(1.091595f), atanf(1.091595f)};
+            float haloHalfY[2] = {atanf(1.114286f), atanf(1.114286f)};
+            Game_GetRenderHalfFovs(haloHalfX, haloHalfY);
             for (uint32_t i = 0; i < locatedViewCount; ++i)
             {
-                Game_GetRenderHalfFov(static_cast<int>(i), haloHalfX, haloHalfY);
                 projectionViews[i].pose = g_views[i].pose;
-                projectionViews[i].fov = {-haloHalfX, haloHalfX, haloHalfY, -haloHalfY};
+                projectionViews[i].fov = {
+                    -haloHalfX[i], haloHalfX[i], haloHalfY[i], -haloHalfY[i]};
                 projectionViews[i].subImage.swapchain = g_stereoChain;
                 projectionViews[i].subImage.imageRect = {
                     {0, 0}, {(int32_t)g_stereoW, (int32_t)g_stereoH}};
@@ -2736,8 +2751,8 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
                         // deliberately trade visual reticle response for calm.
                         float aimQ[4], aimP[3];
                         const bool haveAim = VR_GetAimPose(aimQ, aimP);
-                        if ((Game_AllowsSharedGameplayFeatures() ||
-                             Game_AllowsOdstMotionAim()) &&
+                        if (Game_HasTitleCapability(
+                                TitleCapability_ControllerAim) &&
                             g_config.crosshair &&
                             haveAim && EnsureReticleChain())
                         {

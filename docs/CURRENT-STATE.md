@@ -193,6 +193,8 @@ ODST on the accepted build:
   preliminary evidence-only RVAs; not an accepted runtime pointer.
 - `docs/REACH-SIGNATURE-EVIDENCE.md`: Reach proof ledger; all runtime hooks are
   currently unauthorized and disabled.
+- `docs/TITLE-RUNTIME-OWNERSHIP.md`: unaccepted shared H3/ODST
+  heartbeat/generation candidate contract and required headset regression.
 - `docs/HISTORY.md`: how to retrieve the full pre-cleanup ledger.
 - `releases/0.2.2/manifest.json`: current machine-readable release identity.
 - `releases/0.2.1/manifest.json`: protected rollback release identity.

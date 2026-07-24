@@ -19,6 +19,7 @@
 #include "reach_observer_logic.h"
 #include "scope_logic.h"
 #include "title_registry.h"
+#include "title_runtime_state.h"
 
 namespace
 {
@@ -359,6 +360,586 @@ int main()
         Check(ReachObserverUniqueFreshOwner(
                   slotFreshness.data(), slotFreshness.size(), 510) == 1,
             "Reach observer expires a stale slot independently");
+    }
+
+    {
+        Check(kTitleRuntimeSlotCount == 6 &&
+                  TitleRuntimeSlotIndex(GameTitle::Halo3) == 0 &&
+                  TitleRuntimeSlotIndex(GameTitle::Halo3ODST) == 1 &&
+                  TitleRuntimeSlotIndex(GameTitle::HaloReach) == 2 &&
+                  TitleRuntimeSlotIndex(GameTitle::Halo4) == 3 &&
+                  TitleRuntimeSlotIndex(GameTitle::HaloCE) == 4 &&
+                  TitleRuntimeSlotIndex(GameTitle::Halo2) == 5 &&
+                  TitleRuntimeSlotIndex(GameTitle::None) ==
+                      kInvalidTitleRuntimeSlot &&
+                  TitleRuntimeSlotIndex(GameTitle::Unknown) ==
+                      kInvalidTitleRuntimeSlot,
+            "title-runtime slots cover only concrete MCC game modules");
+        Check(TitleRuntimeSlotTitle(0) == GameTitle::Halo3 &&
+                  TitleRuntimeSlotTitle(1) == GameTitle::Halo3ODST &&
+                  TitleRuntimeSlotTitle(2) == GameTitle::HaloReach &&
+                  TitleRuntimeSlotTitle(3) == GameTitle::Halo4 &&
+                  TitleRuntimeSlotTitle(4) == GameTitle::HaloCE &&
+                  TitleRuntimeSlotTitle(5) == GameTitle::Halo2 &&
+                  TitleRuntimeSlotTitle(6) == GameTitle::None,
+            "title-runtime slot mapping is reversible and bounds checked");
+        Check(TitleRuntimeAvailabilityBit(GameTitle::Halo3) == 0x01u &&
+                  TitleRuntimeAvailabilityBit(GameTitle::Halo3ODST) == 0x02u &&
+                  TitleRuntimeAvailabilityBit(GameTitle::HaloReach) == 0x04u &&
+                  TitleRuntimeAvailabilityBit(GameTitle::Halo4) == 0x08u &&
+                  TitleRuntimeAvailabilityBit(GameTitle::HaloCE) == 0x10u &&
+                  TitleRuntimeAvailabilityBit(GameTitle::Halo2) == 0x20u &&
+                  TitleRuntimeAvailabilityBit(GameTitle::Unknown) == 0 &&
+                  kTitleRuntimeAvailabilityMask == 0x3Fu,
+            "title-runtime availability bits are stable and non-overlapping");
+        Check(static_cast<uint32_t>(TitleCapability_ControllerInput) == 0x40u &&
+                  static_cast<uint32_t>(TitleCapability_Haptics) == 0x80u &&
+                  kTitleRuntimeKnownCapabilities == 0xFFu,
+            "controller input and haptics extend the known capability mask exactly");
+    }
+
+    {
+        constexpr uint64_t kEpoch = 1000;
+        constexpr uint64_t kFreshFor = 500;
+        constexpr uint32_t kUnknownCapability = 0x80000000u;
+        constexpr uint32_t kPublishedCapabilities =
+            TitleCapability_Stereo |
+            TitleCapability_ControllerAim |
+            TitleCapability_RuntimeModes |
+            TitleCapability_ControllerInput |
+            TitleCapability_Haptics;
+        constexpr uint32_t kArmRequiredCapabilities =
+            TitleCapability_Stereo |
+            TitleCapability_ControllerAim |
+            TitleCapability_Hud |
+            TitleCapability_ArmIk |
+            TitleCapability_RoomScale |
+            TitleCapability_Haptics;
+        constexpr uint32_t kUnarmedCapabilities =
+            TitleCapability_RuntimeModes |
+            TitleCapability_ControllerInput;
+
+        const auto isCanonicalFailure = [](
+            const TitleRuntimeSnapshot& snapshot, uint32_t ownerCount)
+        {
+            return snapshot.owner == GameTitle::None &&
+                snapshot.generation == 0 &&
+                !snapshot.installed && !snapshot.armed &&
+                !snapshot.teardownRequested &&
+                snapshot.mode == RuntimeMode::Shell &&
+                snapshot.heartbeatMs == 0 &&
+                snapshot.enabledCapabilities == TitleCapability_None &&
+                snapshot.qualifyingOwnerCount == ownerCount;
+        };
+
+        TitleRuntimeResolveInput single{};
+        single.availabilityMask =
+            TitleRuntimeAvailabilityBit(GameTitle::Halo3);
+        single.availabilitySetEpochMs = kEpoch;
+        single.nowMs = kEpoch + 1;
+        single.titles[TitleRuntimeSlotIndex(GameTitle::Halo3)] = {
+            GameTitle::Halo3,
+            11,
+            900,
+            true,
+            false,
+            false,
+            RuntimeMode::Vehicle,
+            kEpoch + 1,
+            kFreshFor,
+            kPublishedCapabilities | kUnknownCapability,
+        };
+
+        const TitleRuntimeSnapshot owner = ResolveTitleRuntime(single);
+        Check(owner.owner == GameTitle::Halo3 &&
+                  owner.generation == 11 && owner.installed &&
+                  !owner.armed && !owner.teardownRequested &&
+                  owner.mode == RuntimeMode::Vehicle &&
+                  owner.heartbeatMs == kEpoch + 1 &&
+                  owner.enabledCapabilities == kPublishedCapabilities &&
+                  owner.qualifyingOwnerCount == 1,
+            "one fresh installed title owns an exact generation-tagged snapshot");
+        Check(TitleRuntimeMaskUnarmedCapabilities(
+                  owner, kArmRequiredCapabilities) == kUnarmedCapabilities,
+            "an unarmed owner retains only caller-designated non-render capabilities");
+        TitleRuntimeSnapshot armedOwner = owner;
+        armedOwner.armed = true;
+        armedOwner.enabledCapabilities |= kUnknownCapability;
+        Check(TitleRuntimeMaskUnarmedCapabilities(
+                  armedOwner, kArmRequiredCapabilities) ==
+                  kPublishedCapabilities,
+            "an armed owner keeps all known capabilities and strips unknown bits");
+
+        TitleRuntimeResolveInput zero{};
+        zero.availabilityMask =
+            TitleRuntimeAvailabilityBit(GameTitle::Halo3);
+        zero.availabilitySetEpochMs = kEpoch;
+        zero.nowMs = kEpoch + 1;
+        Check(isCanonicalFailure(ResolveTitleRuntime(zero), 0),
+            "zero fresh owners produces the canonical fail-open snapshot");
+
+        auto epochBoundary = single;
+        epochBoundary.nowMs = kEpoch;
+        epochBoundary.titles[0].heartbeatMs = kEpoch;
+        auto generationBoundary = single;
+        generationBoundary.availabilitySetEpochMs = 800;
+        generationBoundary.titles[0].generationStartMs = kEpoch + 1;
+        generationBoundary.titles[0].heartbeatMs = kEpoch + 1;
+        auto future = single;
+        future.nowMs = kEpoch;
+        auto zeroWindow = single;
+        zeroWindow.titles[0].heartbeatFreshForMs = 0;
+        Check(isCanonicalFailure(ResolveTitleRuntime(epochBoundary), 0) &&
+                  isCanonicalFailure(
+                      ResolveTitleRuntime(generationBoundary), 0) &&
+                  isCanonicalFailure(ResolveTitleRuntime(future), 0) &&
+                  isCanonicalFailure(ResolveTitleRuntime(zeroWindow), 0),
+            "epoch-equal, generation-equal, future, and zero-window heartbeats fail closed");
+
+        auto lastFresh = single;
+        lastFresh.nowMs = kEpoch + 1 + kFreshFor - 1;
+        auto expired = lastFresh;
+        expired.nowMs += 1;
+        Check(ResolveTitleRuntime(lastFresh).owner == GameTitle::Halo3 &&
+                  isCanonicalFailure(ResolveTitleRuntime(expired), 0),
+            "heartbeat freshness accepts age window-minus-one and rejects exact expiry");
+
+        auto uninstalled = single;
+        uninstalled.titles[0].installed = false;
+        auto teardown = single;
+        teardown.titles[0].teardownRequested = true;
+        auto zeroGeneration = single;
+        zeroGeneration.titles[0].generation = 0;
+        auto unavailable = single;
+        unavailable.availabilityMask = 0;
+        auto foreign = single;
+        foreign.titles[0].title = GameTitle::Halo3ODST;
+        Check(isCanonicalFailure(ResolveTitleRuntime(uninstalled), 0) &&
+                  isCanonicalFailure(ResolveTitleRuntime(teardown), 0) &&
+                  isCanonicalFailure(ResolveTitleRuntime(zeroGeneration), 0) &&
+                  isCanonicalFailure(ResolveTitleRuntime(unavailable), 0) &&
+                  isCanonicalFailure(ResolveTitleRuntime(foreign), 0),
+            "uninstalled, teardown, zero-generation, unavailable, and foreign claims fail closed");
+
+        auto multiple = single;
+        multiple.availabilityMask |=
+            TitleRuntimeAvailabilityBit(GameTitle::Halo3ODST);
+        multiple.nowMs = kEpoch + 2;
+        multiple.titles[TitleRuntimeSlotIndex(GameTitle::Halo3ODST)] = {
+            GameTitle::Halo3ODST,
+            22,
+            900,
+            true,
+            true,
+            false,
+            RuntimeMode::Paused,
+            kEpoch + 2,
+            kFreshFor,
+            TitleCapability_Stereo,
+        };
+        Check(isCanonicalFailure(ResolveTitleRuntime(multiple), 2),
+            "two fresh title owners discard both complete snapshots");
+        multiple.nowMs = kEpoch + 1 + kFreshFor;
+        const TitleRuntimeSnapshot soleRemainder = ResolveTitleRuntime(multiple);
+        Check(soleRemainder.owner == GameTitle::Halo3ODST &&
+                  soleRemainder.generation == 22 &&
+                  soleRemainder.mode == RuntimeMode::Paused &&
+                  soleRemainder.qualifyingOwnerCount == 1,
+            "one title wins only after the other expires at the exact freshness boundary");
+
+        TitleRuntimeResolveInput pending{};
+        pending.availabilityMask =
+            TitleRuntimeAvailabilityBit(GameTitle::Halo3) |
+            TitleRuntimeAvailabilityBit(GameTitle::Halo3ODST);
+        pending.availabilitySetEpochMs = kEpoch;
+        pending.nowMs = kEpoch;
+        pending.titles[TitleRuntimeSlotIndex(GameTitle::Halo3)] = {
+            GameTitle::Halo3,
+            11,
+            900,
+            true,
+            true,
+            false,
+            RuntimeMode::Gameplay,
+            kEpoch,
+            kFreshFor,
+            kPublishedCapabilities,
+        };
+        Check(TitleRuntimeOwnershipMayBePending(
+                  pending, GameTitle::Halo3, 100),
+            "a safe retained owner gets a short zero-owner post-transition grace");
+        pending.nowMs = kEpoch + 99;
+        Check(TitleRuntimeOwnershipMayBePending(
+                  pending, GameTitle::Halo3, 100),
+            "pending ownership remains valid through grace-minus-one");
+        pending.nowMs = kEpoch + 100;
+        Check(!TitleRuntimeOwnershipMayBePending(
+                  pending, GameTitle::Halo3, 100),
+            "pending ownership expires at the exact grace boundary");
+        pending.nowMs = kEpoch - 1;
+        Check(!TitleRuntimeOwnershipMayBePending(
+                  pending, GameTitle::Halo3, 100),
+            "a future availability-set epoch cannot grant pending ownership");
+
+        auto soleModulePending = pending;
+        soleModulePending.nowMs = kEpoch;
+        soleModulePending.availabilityMask =
+            TitleRuntimeAvailabilityBit(GameTitle::Halo3);
+        auto teardownPending = pending;
+        teardownPending.nowMs = kEpoch;
+        teardownPending.titles[0].teardownRequested = true;
+        auto uninstalledPending = pending;
+        uninstalledPending.nowMs = kEpoch;
+        uninstalledPending.titles[0].installed = false;
+        auto duplicatePending = pending;
+        duplicatePending.nowMs = kEpoch;
+        duplicatePending.titles[TitleRuntimeSlotIndex(GameTitle::HaloReach)] =
+            duplicatePending.titles[0];
+        auto multiplePending = multiple;
+        multiplePending.nowMs = kEpoch + 2;
+        Check(!TitleRuntimeOwnershipMayBePending(
+                  soleModulePending, GameTitle::Halo3, 100) &&
+                  !TitleRuntimeOwnershipMayBePending(
+                      teardownPending, GameTitle::Halo3, 100) &&
+                  !TitleRuntimeOwnershipMayBePending(
+                      uninstalledPending, GameTitle::Halo3, 100) &&
+                  !TitleRuntimeOwnershipMayBePending(
+                      duplicatePending, GameTitle::Halo3, 100),
+            "sole-title, teardown, uninstalled, and duplicate retained claims get no grace");
+        Check(!TitleRuntimeOwnershipMayBePending(
+                  multiplePending, GameTitle::Halo3, 100),
+            "multiple fresh owners fail closed immediately without pending grace");
+    }
+
+    {
+        constexpr size_t kHalo3Slot =
+            TitleRuntimeSlotIndex(GameTitle::Halo3);
+        constexpr size_t kOdstSlot =
+            TitleRuntimeSlotIndex(GameTitle::Halo3ODST);
+        constexpr size_t kReachSlot =
+            TitleRuntimeSlotIndex(GameTitle::HaloReach);
+        constexpr uintptr_t kHalo3Base = 0x100000;
+        constexpr uintptr_t kHalo3ReboundBase = 0x110000;
+        constexpr uintptr_t kOdstBase = 0x200000;
+
+        TitleRuntimeState state;
+        const TitleRuntimeAvailabilitySnapshot initial =
+            state.LoadAvailability();
+        Check(initial.stable && initial.availabilityMask == 0 &&
+                  initial.availabilitySetEpochMs == 0 &&
+                  state.Generation(GameTitle::Halo3) == 0 &&
+                  state.Generation(GameTitle::None) == 0,
+            "title-runtime atomic state starts stable, unavailable, and generation zero");
+
+        TitleRuntimeModuleSet modules{};
+        modules.availabilityMask =
+            TitleRuntimeAvailabilityBit(GameTitle::Halo3);
+        modules.moduleBases[kHalo3Slot] = kHalo3Base;
+        Check(state.PublishModuleSet(modules, 100) &&
+                  state.Generation(GameTitle::Halo3) == 1,
+            "the first Halo 3 module load creates generation one");
+        TitleRuntimeAvailabilitySnapshot availability =
+            state.LoadAvailability();
+        Check(availability.stable &&
+                  availability.availabilityMask == modules.availabilityMask &&
+                  availability.availabilitySetEpochMs == 100 &&
+                  availability.moduleBases[kHalo3Slot] == kHalo3Base,
+            "the first available set publishes its exact base and epoch");
+
+        Check(state.PublishModuleSet(modules, 150) &&
+                  state.Generation(GameTitle::Halo3) == 1 &&
+                  state.LoadAvailability().availabilitySetEpochMs == 100,
+            "an unchanged module poll preserves generation and set epoch");
+
+        modules.availabilityMask |=
+            TitleRuntimeAvailabilityBit(GameTitle::Halo3ODST);
+        modules.moduleBases[kOdstSlot] = kOdstBase;
+        Check(state.PublishModuleSet(modules, 200) &&
+                  state.Generation(GameTitle::Halo3) == 1 &&
+                  state.Generation(GameTitle::Halo3ODST) == 1 &&
+                  state.LoadAvailability().availabilitySetEpochMs == 200,
+            "adding ODST advances the set epoch without changing resident Halo 3 generation");
+
+        const TitleRuntimeLifecycle odstLifecycle{
+            true, false, false, TitleCapability_ControllerInput
+        };
+        const uint32_t odstGeneration =
+            state.Generation(GameTitle::Halo3ODST);
+        Check(state.PublishLifecycle(
+                  GameTitle::Halo3ODST, odstGeneration, odstLifecycle) &&
+                  state.PublishHeartbeat(
+                      GameTitle::Halo3ODST, odstGeneration, 201),
+            "resident ODST establishes a pre-rebind heartbeat");
+
+        modules.moduleBases[kHalo3Slot] = kHalo3ReboundBase;
+        Check(state.PublishModuleSet(modules, 250) &&
+                  state.Generation(GameTitle::Halo3) == 2 &&
+                  state.Generation(GameTitle::Halo3ODST) == 1 &&
+                  state.LoadAvailability().availabilitySetEpochMs == 250,
+            "a Halo 3 base change advances its generation and the complete-set epoch");
+        TitleRuntimeHeartbeatPolicy baseChangePolicy{};
+        baseChangePolicy.freshForMs[kOdstSlot] = 500;
+        Check(state.Resolve(250, baseChangePolicy).owner == GameTitle::None,
+            "a pre-rebind heartbeat from another resident title cannot survive the complete-set epoch");
+
+        modules.availabilityMask &=
+            ~TitleRuntimeAvailabilityBit(GameTitle::Halo3ODST);
+        modules.moduleBases[kOdstSlot] = 0;
+        Check(state.PublishModuleSet(modules, 300) &&
+                  state.Generation(GameTitle::Halo3ODST) == 2 &&
+                  state.LoadAvailability().availabilitySetEpochMs == 300,
+            "ODST removal invalidates its load generation and advances the set epoch");
+        modules.availabilityMask |=
+            TitleRuntimeAvailabilityBit(GameTitle::Halo3ODST);
+        modules.moduleBases[kOdstSlot] = kOdstBase;
+        Check(state.PublishModuleSet(modules, 400) &&
+                  state.Generation(GameTitle::Halo3ODST) == 3 &&
+                  state.LoadAvailability().availabilitySetEpochMs == 400,
+            "ODST reload receives generation three rather than reusing stale state");
+
+        const uint32_t h3GenerationBeforeInvalid =
+            state.Generation(GameTitle::Halo3);
+        const uint32_t odstGenerationBeforeInvalid =
+            state.Generation(GameTitle::Halo3ODST);
+        auto unknownBitSet = modules;
+        unknownBitSet.availabilityMask |= 0x80000000u;
+        auto inconsistentSet = modules;
+        inconsistentSet.moduleBases[kReachSlot] = 0x300000;
+        Check(!state.PublishModuleSet(unknownBitSet, 450) &&
+                  !state.PublishModuleSet(inconsistentSet, 450) &&
+                  state.Generation(GameTitle::Halo3) ==
+                      h3GenerationBeforeInvalid &&
+                  state.Generation(GameTitle::Halo3ODST) ==
+                      odstGenerationBeforeInvalid,
+            "unknown availability bits and mask/base disagreement are rejected atomically");
+
+        modules.availabilityMask &=
+            ~TitleRuntimeAvailabilityBit(GameTitle::Halo3ODST);
+        modules.moduleBases[kOdstSlot] = 0;
+        Check(state.PublishModuleSet(modules, 350) &&
+                  state.Generation(GameTitle::Halo3ODST) == 4 &&
+                  state.LoadAvailability().availabilitySetEpochMs == 400,
+            "a non-monotonic module observation cannot move the set epoch backward");
+    }
+
+    {
+        constexpr size_t kHalo3Slot =
+            TitleRuntimeSlotIndex(GameTitle::Halo3);
+        constexpr size_t kOdstSlot =
+            TitleRuntimeSlotIndex(GameTitle::Halo3ODST);
+        constexpr uint64_t kFreshFor = 500;
+        constexpr uint32_t kUnknownCapability = 0x80000000u;
+        constexpr uint32_t kCapabilities =
+            TitleCapability_Stereo |
+            TitleCapability_ControllerAim |
+            TitleCapability_ControllerInput |
+            TitleCapability_Haptics;
+
+        TitleRuntimeState state;
+        TitleRuntimeModuleSet modules{};
+        modules.availabilityMask =
+            TitleRuntimeAvailabilityBit(GameTitle::Halo3);
+        modules.moduleBases[kHalo3Slot] = 0x100000;
+        Check(state.PublishModuleSet(modules, 100),
+            "atomic publication test establishes a Halo 3 module generation");
+        const uint32_t generation1 = state.Generation(GameTitle::Halo3);
+
+        Check(!state.PublishMode(
+                  GameTitle::Halo3, generation1, RuntimeMode::Gameplay),
+            "mode publication requires a current installed lifecycle");
+        const TitleRuntimeLifecycle unarmed{
+            true, false, false, kCapabilities | kUnknownCapability
+        };
+        Check(state.PublishLifecycle(
+                  GameTitle::Halo3, generation1, unarmed) &&
+                  state.PublishMode(
+                      GameTitle::Halo3, generation1, RuntimeMode::Vehicle) &&
+                  !state.PublishMode(
+                      GameTitle::Halo3, generation1,
+                      static_cast<RuntimeMode>(255)),
+            "current lifecycle tags a valid mode and rejects invalid mode values");
+        Check(!state.PublishHeartbeat(GameTitle::Halo3, generation1, 100) &&
+                  state.PublishHeartbeat(
+                      GameTitle::Halo3, generation1, 101) &&
+                  !state.PublishHeartbeat(
+                      GameTitle::Halo3, generation1, 101) &&
+                  !state.PublishHeartbeat(
+                      GameTitle::Halo3, generation1, 100),
+            "heartbeats must be post-epoch and strictly monotonic within a generation");
+
+        TitleRuntimeCandidate candidate{};
+        Check(state.LoadCandidate(
+                  GameTitle::Halo3, kFreshFor, candidate) &&
+                  candidate.title == GameTitle::Halo3 &&
+                  candidate.generation == generation1 &&
+                  candidate.generationStartMs == 100 &&
+                  candidate.installed && !candidate.armed &&
+                  !candidate.teardownRequested &&
+                  candidate.mode == RuntimeMode::Vehicle &&
+                  candidate.heartbeatMs == 101 &&
+                  candidate.heartbeatFreshForMs == kFreshFor &&
+                  candidate.enabledCapabilities == kCapabilities,
+            "atomic candidate loads one coherent lifecycle, mode, heartbeat, and sanitized mask");
+
+        TitleRuntimeHeartbeatPolicy policy{};
+        policy.freshForMs[kHalo3Slot] = kFreshFor;
+        TitleRuntimeSnapshot snapshot = state.Resolve(101, policy);
+        Check(snapshot.owner == GameTitle::Halo3 &&
+                  snapshot.generation == generation1 &&
+                  !snapshot.armed &&
+                  snapshot.mode == RuntimeMode::Vehicle &&
+                  snapshot.enabledCapabilities == kCapabilities,
+            "the production atomic resolver preserves an unarmed unique owner");
+
+        modules.availabilityMask |=
+            TitleRuntimeAvailabilityBit(GameTitle::Halo3ODST);
+        modules.moduleBases[kOdstSlot] = 0x200000;
+        Check(state.PublishModuleSet(modules, 200) &&
+                  state.Resolve(200, policy).owner == GameTitle::None &&
+                  !state.PublishHeartbeat(
+                      GameTitle::Halo3, generation1, 200) &&
+                  state.PublishHeartbeat(
+                      GameTitle::Halo3, generation1, 201) &&
+                  state.Resolve(201, policy).owner == GameTitle::Halo3,
+            "a set transition requires a strictly newer heartbeat from a resident generation");
+
+        modules.moduleBases[kHalo3Slot] = 0x110000;
+        Check(state.PublishModuleSet(modules, 250),
+            "a rebound Halo 3 base starts a new atomic generation");
+        const uint32_t generation2 = state.Generation(GameTitle::Halo3);
+        Check(generation2 == 2 &&
+                  !state.PublishLifecycle(
+                      GameTitle::Halo3, generation1, unarmed) &&
+                  !state.PublishMode(
+                      GameTitle::Halo3, generation1, RuntimeMode::Paused) &&
+                  !state.PublishHeartbeat(
+                      GameTitle::Halo3, generation1, 251) &&
+                  !state.ClearHeartbeat(GameTitle::Halo3, generation1),
+            "stale lifecycle, mode, heartbeat, and clear publications are rejected");
+        Check(!state.PublishLifecycle(
+                  GameTitle::Halo3ODST, generation2, unarmed) &&
+                  !state.PublishMode(
+                      GameTitle::Halo3ODST, generation2,
+                      RuntimeMode::Gameplay) &&
+                  !state.PublishHeartbeat(
+                      GameTitle::Halo3ODST, generation2, 251) &&
+                  !state.ClearHeartbeat(
+                      GameTitle::Halo3ODST, generation2),
+            "a generation token from another title cannot publish foreign state");
+
+        Check(state.LoadCandidate(
+                  GameTitle::Halo3, kFreshFor, candidate) &&
+                  candidate.generation == generation2 &&
+                  candidate.generationStartMs == 250 &&
+                  !candidate.installed && !candidate.armed &&
+                  !candidate.teardownRequested &&
+                  candidate.mode == RuntimeMode::Shell &&
+                  candidate.heartbeatMs == 0 &&
+                  candidate.enabledCapabilities == TitleCapability_None,
+            "a new module generation cannot inherit prior lifecycle, mode, heartbeat, or capabilities");
+        Check(!state.PublishMode(
+                  GameTitle::Halo3, generation2, RuntimeMode::Gameplay) &&
+                  state.PublishLifecycle(
+                      GameTitle::Halo3, generation2, unarmed) &&
+                  state.PublishMode(
+                      GameTitle::Halo3, generation2, RuntimeMode::Vehicle) &&
+                  !state.PublishHeartbeat(
+                      GameTitle::Halo3, generation2, 250) &&
+                  state.PublishHeartbeat(
+                      GameTitle::Halo3, generation2, 251),
+            "the new generation admits mode and heartbeat only after its lifecycle and boundary");
+        snapshot = state.Resolve(251, policy);
+        Check(snapshot.owner == GameTitle::Halo3 &&
+                  snapshot.generation == generation2 &&
+                  snapshot.mode == RuntimeMode::Vehicle,
+            "current generation publications restore one coherent owner");
+        Check(!state.ClearHeartbeat(
+                  GameTitle::Halo3ODST, generation2) &&
+                  state.Resolve(251, policy).owner == GameTitle::Halo3 &&
+                  state.ClearHeartbeat(GameTitle::Halo3, generation2) &&
+                  state.Resolve(251, policy).owner == GameTitle::None &&
+                  state.LoadCandidate(
+                      GameTitle::Halo3, kFreshFor, candidate) &&
+                  candidate.heartbeatMs == 0,
+            "only the exact title generation can clear a resident heartbeat");
+
+        Check(state.PublishHeartbeat(
+                  GameTitle::Halo3, generation2, 252),
+            "a cleared current generation can publish a fresh heartbeat again");
+        const TitleRuntimeLifecycle teardown{
+            true, true, true, kCapabilities
+        };
+        Check(state.PublishLifecycle(
+                  GameTitle::Halo3, generation2, teardown) &&
+                  !state.PublishMode(
+                      GameTitle::Halo3, generation2, RuntimeMode::Paused) &&
+                  state.Resolve(252, policy).owner == GameTitle::None,
+            "teardown vetoes ownership and further runtime-mode publication");
+        const TitleRuntimeLifecycle notInstalled{
+            false, false, false, kCapabilities
+        };
+        Check(state.PublishLifecycle(
+                  GameTitle::Halo3, generation2, notInstalled) &&
+                  state.Resolve(252, policy).owner == GameTitle::None,
+            "an uninstalled title cannot own through a retained fresh heartbeat");
+        Check(state.PublishLifecycle(
+                  GameTitle::Halo3, generation2, unarmed) &&
+                  state.PublishMode(
+                      GameTitle::Halo3, generation2,
+                      RuntimeMode::Gameplay) &&
+                  state.Resolve(252, policy).owner == GameTitle::Halo3 &&
+                  state.Resolve(252, policy).mode == RuntimeMode::Gameplay,
+            "a safe unarmed lifecycle restores its exact generation-tagged mode");
+
+        Check(!state.PublishLifecycle(
+                  GameTitle::None, generation2, unarmed) &&
+                  !state.PublishMode(
+                      GameTitle::Unknown, generation2,
+                      RuntimeMode::Gameplay) &&
+                  !state.PublishHeartbeat(
+                      GameTitle::None, generation2, 253) &&
+                  !state.ClearHeartbeat(GameTitle::Unknown, generation2) &&
+                  !state.LoadCandidate(
+                      GameTitle::None, kFreshFor, candidate),
+            "non-module titles cannot enter the atomic runtime state API");
+    }
+
+    {
+        constexpr size_t kReachSlot =
+            TitleRuntimeSlotIndex(GameTitle::HaloReach);
+        TitleRuntimeState reachState;
+        TitleRuntimeModuleSet modules{};
+        modules.availabilityMask =
+            TitleRuntimeAvailabilityBit(GameTitle::HaloReach);
+        modules.moduleBases[kReachSlot] = 0x300000;
+        Check(reachState.PublishModuleSet(modules, 100),
+            "the generic runtime state can record Reach as available");
+        const uint32_t generation =
+            reachState.Generation(GameTitle::HaloReach);
+        const TitleRuntimeLifecycle evidenceOnly{
+            true, false, false, TitleCapability_None
+        };
+        Check(reachState.PublishLifecycle(
+                  GameTitle::HaloReach, generation, evidenceOnly) &&
+                  reachState.PublishMode(
+                      GameTitle::HaloReach, generation,
+                      RuntimeMode::Unsupported) &&
+                  reachState.PublishHeartbeat(
+                      GameTitle::HaloReach, generation, 101),
+            "a synthetic Reach observation is generation tagged without enabling behavior");
+        TitleRuntimeHeartbeatPolicy policy{};
+        policy.freshForMs[kReachSlot] = 500;
+        const TitleRuntimeSnapshot reachSnapshot =
+            reachState.Resolve(101, policy);
+        Check(reachSnapshot.owner == GameTitle::HaloReach &&
+                  reachSnapshot.generation == generation &&
+                  !reachSnapshot.armed &&
+                  reachSnapshot.mode == RuntimeMode::Unsupported &&
+                  reachSnapshot.enabledCapabilities == TitleCapability_None &&
+                  TitleRuntimeMaskUnarmedCapabilities(
+                      reachSnapshot, kTitleRuntimeKnownCapabilities) ==
+                      TitleCapability_None,
+            "the shared foundation manufactures zero Reach capabilities");
     }
 
     {

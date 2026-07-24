@@ -1,5 +1,9 @@
 #pragma once
 
+#include <cstdint>
+
+#include "../common/runtime_types.h"
+
 // The Halo 3 engine (halo3.dll) loads only once you enter a level. This module
 // waits for it, then (M1) drives the in-game camera from the headset. Runs on
 // its own threads and never blocks rendering.
@@ -10,7 +14,7 @@ bool Game_IsHeadTracking(); // true while F2 head tracking is on
 bool Game_IsCameraOnlyBringup(); // private ODST camera core; no gameplay features
 bool Game_AllowsSharedGameplayFeatures();
 bool Game_AllowsSharedControllerInput();
-bool Game_AllowsOdstMotionAim(); // narrow ODST-only weapon-aim capability
+bool Game_HasTitleCapability(uint32_t requiredCapabilities);
 bool Game_CanToggleImmersiveView();
 bool Game_ProcessPresentationDetachRequest();
 
@@ -74,4 +78,4 @@ float Game_GetZoomFactor();
 // flash, reticle and bullets stay on one ray as the user trims the mount.
 // Symmetric half-frustum tangents from Halo's active world camera.
 void Game_GetProjectionTangents(float& tanX, float& tanY);
-void Game_GetRenderHalfFov(int eye, float& halfX, float& halfY);
+void Game_GetRenderHalfFovs(float halfX[2], float halfY[2]);

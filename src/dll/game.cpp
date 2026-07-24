@@ -37,6 +37,26 @@
 
 namespace
 {
+    constexpr uint32_t kHalo3RuntimeCapabilities =
+        TitleCapability_Stereo |
+        TitleCapability_ControllerAim |
+        TitleCapability_Hud |
+        TitleCapability_ArmIk |
+        TitleCapability_RuntimeModes |
+        TitleCapability_RoomScale |
+        TitleCapability_ControllerInput |
+        TitleCapability_Haptics;
+    constexpr uint32_t kOdstRuntimeCapabilities =
+        kHalo3RuntimeCapabilities;
+    constexpr uint32_t kRuntimeCapabilitiesRequiringArm =
+        TitleCapability_Stereo |
+        TitleCapability_ControllerAim |
+        TitleCapability_Hud |
+        TitleCapability_ArmIk |
+        TitleCapability_RoomScale |
+        TitleCapability_Haptics;
+    constexpr uint64_t kTitleRuntimeHeartbeatFreshMs = 500;
+
     constexpr uintptr_t kCamCopyRva = 0x2A628C; // fastcall(dst, src) camera copy
     constexpr uintptr_t kSrcFwd = 0x28;         // forward vec offset in src
     constexpr uintptr_t kSrcUp = 0x34;          // up vec offset in src
@@ -56,6 +76,7 @@ namespace
     constexpr uintptr_t kGunProjY = 0x34;
 
     std::atomic<bool> g_hooked{false};
+    std::atomic<uint32_t> g_halo3RuntimeGeneration{0};
     std::atomic<bool> g_renderHooked{false};
     // True only when both halves of the visible-palette path are live:
     // 0x184B08 identifies the interpolated slot, and 0x2C561C consumes a
@@ -305,6 +326,7 @@ namespace
     };
 
     OdstCameraRuntimeState g_odstCamera;
+    std::atomic<uint32_t> g_odstRuntimeGeneration{0};
     thread_local bool g_odstPreparingEyeHud = false;
     std::atomic<uintptr_t> g_odstNativePauseFlag{0};
     std::atomic<float> g_odstRenderHalfFovX[2] = {{1.07338f}, {1.07338f}};
@@ -1047,11 +1069,100 @@ namespace
     std::atomic<bool> g_safeFrameScanInFlight{false};
     SRWLOCK g_hudLayoutWriteLock = SRWLOCK_INIT;
 
-    // Freshness beacon shared with auto-VR. Each title's proven camera-copy
-    // hook updates it only while a level camera is running.
-    std::atomic<uint64_t> g_lastCamCopyMs{0};
+    // Per-title freshness beacons. A resident-but-idle game module cannot
+    // borrow another title's camera ownership.
+    std::atomic<uint64_t> g_halo3LastCamCopyMs{0};
+#if HALOMCCVR_EXPERIMENTAL_ODST_BRINGUP
+    std::atomic<uint64_t> g_odstLastCamCopyMs{0};
+#endif
     std::atomic<uintptr_t> g_nativePauseFlag{0};
     std::atomic<bool> g_enginePauseValidated{false};
+
+    const TitleRuntimeHeartbeatPolicy& RuntimeHeartbeatPolicy()
+    {
+        static const TitleRuntimeHeartbeatPolicy policy = [] {
+            TitleRuntimeHeartbeatPolicy value{};
+            value.freshForMs[TitleRuntimeSlotIndex(GameTitle::Halo3)] =
+                kTitleRuntimeHeartbeatFreshMs;
+            value.freshForMs[TitleRuntimeSlotIndex(GameTitle::Halo3ODST)] =
+                kOdstCameraHardTimeoutMs + 1;
+            return value;
+        }();
+        return policy;
+    }
+
+    GameTitle RetainedRuntimeTitle()
+    {
+        const bool halo3 =
+            g_halo3RuntimeGeneration.load(std::memory_order_acquire) != 0;
+#if HALOMCCVR_EXPERIMENTAL_ODST_BRINGUP
+        const bool odst =
+            g_odstRuntimeGeneration.load(std::memory_order_acquire) != 0;
+        if (halo3 == odst)
+            return GameTitle::None;
+        return halo3 ? GameTitle::Halo3 : GameTitle::Halo3ODST;
+#else
+        return halo3 ? GameTitle::Halo3 : GameTitle::None;
+#endif
+    }
+
+    TitleAdapterRuntimeSnapshot RuntimeSnapshot(uint64_t nowMs)
+    {
+        return TitleAdapter_GetRuntimeSnapshot(
+            nowMs, RuntimeHeartbeatPolicy(), RetainedRuntimeTitle());
+    }
+
+    bool PublishHalo3Lifecycle(
+        bool installed, bool armed, bool teardownRequested)
+    {
+        const uint32_t generation =
+            g_halo3RuntimeGeneration.load(std::memory_order_acquire);
+        if (!generation)
+            return false;
+        TitleRuntimeLifecycle lifecycle{};
+        lifecycle.installed = installed;
+        lifecycle.armed = armed;
+        lifecycle.teardownRequested = teardownRequested;
+        lifecycle.enabledCapabilities = installed && !teardownRequested
+            ? kHalo3RuntimeCapabilities : TitleCapability_None;
+        return TitleAdapter_PublishLifecycle(
+            GameTitle::Halo3, generation, lifecycle);
+    }
+
+#if HALOMCCVR_EXPERIMENTAL_ODST_BRINGUP
+    bool PublishOdstLifecycle()
+    {
+        const uint32_t generation =
+            g_odstRuntimeGeneration.load(std::memory_order_acquire);
+        if (!generation)
+            return false;
+        TitleRuntimeLifecycle lifecycle{};
+        lifecycle.installed =
+            g_odstCamera.installed.load(std::memory_order_acquire);
+        lifecycle.armed =
+            g_odstCamera.armed.load(std::memory_order_acquire);
+        lifecycle.teardownRequested =
+            g_odstCamera.teardownRequested.load(std::memory_order_acquire);
+        lifecycle.enabledCapabilities =
+            lifecycle.installed && !lifecycle.teardownRequested
+                ? kOdstRuntimeCapabilities : TitleCapability_None;
+        return TitleAdapter_PublishLifecycle(
+            GameTitle::Halo3ODST, generation, lifecycle);
+    }
+
+    void ClearOdstRuntimePublication()
+    {
+        const uint32_t generation =
+            g_odstRuntimeGeneration.load(std::memory_order_acquire);
+        if (!generation)
+            return;
+        TitleAdapter_PublishLifecycle(
+            GameTitle::Halo3ODST, generation, {});
+        TitleAdapter_ClearHeartbeat(GameTitle::Halo3ODST, generation);
+        g_odstLastCamCopyMs.store(0, std::memory_order_release);
+        g_odstRuntimeGeneration.store(0, std::memory_order_release);
+    }
+#endif
 
     // Previous addresses and authored baselines are retained in separate
     // per-title caches across generations. The tag allocator often reuses its
@@ -1764,8 +1875,19 @@ namespace
             g_safeFrameScanInFlight.load(std::memory_order_acquire))
             return;
 
-        const uint64_t lastCam =
-            g_lastCamCopyMs.load(std::memory_order_relaxed);
+        uint64_t lastCam = 0;
+        if (profile == HudLayoutProfile::Halo3)
+        {
+            lastCam =
+                g_halo3LastCamCopyMs.load(std::memory_order_relaxed);
+        }
+#if HALOMCCVR_EXPERIMENTAL_ODST_BRINGUP
+        else if (profile == HudLayoutProfile::Halo3ODST)
+        {
+            lastCam =
+                g_odstLastCamCopyMs.load(std::memory_order_relaxed);
+        }
+#endif
         if (!lastCam || now < lastCam || now - lastCam > 1000)
             return;
 
@@ -4328,7 +4450,15 @@ namespace
     {
         VR_NotifyCameraTransform();
         const uint64_t cameraNowMs = GetTickCount64();
-        g_lastCamCopyMs.store(cameraNowMs, std::memory_order_relaxed);
+        const uint32_t runtimeGeneration =
+            g_halo3RuntimeGeneration.load(std::memory_order_acquire);
+        if (runtimeGeneration)
+        {
+            g_halo3LastCamCopyMs.store(
+                cameraNowMs, std::memory_order_relaxed);
+            TitleAdapter_PublishHeartbeat(
+                GameTitle::Halo3, runtimeGeneration, cameraNowMs);
+        }
         // Low-frequency timing proof paired with vr.cpp's HMD sample-rate log.
         // The hook normally runs multiple times per presented frame, and every
         // call below reads the latest once-per-OpenXR-frame predicted pose.
@@ -4884,6 +5014,7 @@ namespace
         g_odstCamera.cameraArrayReady.store(
             false, std::memory_order_release);
         g_odstCamera.teardownRequested.store(true, std::memory_order_release);
+        PublishOdstLifecycle();
         OdstRequestPresentationDetach();
     }
 
@@ -5494,7 +5625,16 @@ namespace
             // signal as well as a heartbeat, including the blend-0 vehicle.
             if (g_odstCamera.armed.load(std::memory_order_acquire))
                 VR_NotifyCameraTransform();
-            g_lastCamCopyMs.store(GetTickCount64(), std::memory_order_release);
+            const uint64_t cameraNowMs = GetTickCount64();
+            g_odstLastCamCopyMs.store(
+                cameraNowMs, std::memory_order_release);
+            const uint32_t runtimeGeneration =
+                g_odstRuntimeGeneration.load(std::memory_order_acquire);
+            if (runtimeGeneration)
+            {
+                TitleAdapter_PublishHeartbeat(
+                    GameTitle::Halo3ODST, runtimeGeneration, cameraNowMs);
+            }
             g_odstCamera.sawValidCamera.store(true, std::memory_order_release);
         }
         return result;
@@ -6832,8 +6972,10 @@ namespace
         }
     }
 
-    void InstallHook(uintptr_t base, size_t size)
+    bool InstallHook(uintptr_t base, size_t size, uint32_t runtimeGeneration)
     {
+        if (!runtimeGeneration)
+            return false;
         LocateNativePauseFlag(base, size);
         LocateCinematicState(base, size);
         uintptr_t hit = sig::Find(base, size, kCamCopySig);
@@ -6841,23 +6983,68 @@ namespace
         {
             LOG("M1: camera signature NOT FOUND — MCC may have updated. Head tracking is");
             LOG("M1: disabled; the game and the VR screen still work normally.");
-            return;
+            return false;
         }
         // Uniqueness check — if the pattern matched twice we can't trust it.
         const uintptr_t after = hit + 1;
         if (sig::Find(after, base + size - after, kCamCopySig))
-            LOG("M1: WARNING camera signature is not unique; using the first match");
+        {
+            LOG("M1: camera signature is not unique; leaving stock Halo 3 untouched");
+            return false;
+        }
         LOG("M1: camera-copy found by signature at halo3.dll+0x%llX (expected 0x%llX for build 1.3528)",
             (unsigned long long)(hit - base), (unsigned long long)kCamCopyRva);
 
         void* target = reinterpret_cast<void*>(hit);
-        if (MH_CreateHook(target, reinterpret_cast<void*>(&CamCopyHook),
-                          reinterpret_cast<void**>(&g_origCamCopy)) != MH_OK ||
-            MH_EnableHook(target) != MH_OK)
+        g_halo3RuntimeGeneration.store(
+            runtimeGeneration, std::memory_order_release);
+        g_halo3LastCamCopyMs.store(0, std::memory_order_release);
+        // A new module generation must begin disarmed even if the prior title
+        // instance or an early manual toggle left the shared flag set.
+        g_enabled.store(false, std::memory_order_release);
+        g_autoVrOwned.store(false, std::memory_order_release);
+        g_autoVrUserVeto.store(false, std::memory_order_release);
+        TitleAdapter_ClearHeartbeat(GameTitle::Halo3, runtimeGeneration);
+        const MH_STATUS createStatus = MH_CreateHook(
+            target, reinterpret_cast<void*>(&CamCopyHook),
+            reinterpret_cast<void**>(&g_origCamCopy));
+        if (createStatus != MH_OK)
         {
-            LOG("M1: FAILED to hook camera-copy at %p; head tracking unavailable", target);
-            return;
+            LOG("M1: FAILED to create camera-copy hook at %p (%d); "
+                "head tracking unavailable",
+                target, static_cast<int>(createStatus));
+            TitleAdapter_ClearHeartbeat(GameTitle::Halo3, runtimeGeneration);
+            g_halo3RuntimeGeneration.store(0, std::memory_order_release);
+            return false;
         }
+        const MH_STATUS enableStatus = MH_EnableHook(target);
+        if (enableStatus != MH_OK)
+        {
+            const MH_STATUS disableStatus = MH_DisableHook(target);
+            const MH_STATUS removeStatus = MH_RemoveHook(target);
+            LOG("M1: FAILED to enable camera-copy hook at %p (%d); "
+                "rollback disable=%d remove=%d",
+                target, static_cast<int>(enableStatus),
+                static_cast<int>(disableStatus),
+                static_cast<int>(removeStatus));
+            if (removeStatus == MH_OK || removeStatus == MH_ERROR_NOT_CREATED)
+                g_origCamCopy = nullptr;
+            TitleAdapter_ClearHeartbeat(GameTitle::Halo3, runtimeGeneration);
+            g_halo3RuntimeGeneration.store(0, std::memory_order_release);
+            return false;
+        }
+        if (!PublishHalo3Lifecycle(true, false, false))
+        {
+            LOG("M1: title generation changed during camera install; rolling back");
+            MH_DisableHook(target);
+            MH_RemoveHook(target);
+            TitleAdapter_ClearHeartbeat(GameTitle::Halo3, runtimeGeneration);
+            g_halo3RuntimeGeneration.store(0, std::memory_order_release);
+            g_origCamCopy = nullptr;
+            return false;
+        }
+        TitleAdapter_PublishMode(
+            GameTitle::Halo3, runtimeGeneration, RuntimeMode::Loading);
         LOG("M1: camera hooked. F2 head tracking, F3 recenter, F6 leaning, F8/F9 pitch trim, F10 screen-follow (yaw/pitch/up flips: F1 menu)");
 
         RememberInstalledGameHook(target);
@@ -7449,12 +7636,12 @@ namespace
         if (!renderHit || sig::Find(renderHit + 1, base + size - renderHit - 1, kRenderViewSig))
         {
             LOG("M2: render-frame signature missing or ambiguous; raw stereo unavailable");
-            return;
+            return true;
         }
         if (!prepareHit || !viewportHit || !matricesHit)
         {
             LOG("M2: derived camera matrix signatures missing; raw stereo unavailable");
-            return;
+            return true;
         }
         g_prepareView = reinterpret_cast<PrepareViewFn>(prepareHit);
         g_buildViewport = reinterpret_cast<BuildViewportFn>(viewportHit);
@@ -7464,12 +7651,13 @@ namespace
             MH_EnableHook(reinterpret_cast<void*>(renderHit)) != MH_OK)
         {
             LOG("M2: FAILED to hook render-frame entry");
-            return;
+            return true;
         }
         RememberInstalledGameHook(reinterpret_cast<void*>(renderHit));
         g_renderHooked = true;
         LOG("M2: inner per-view double-render hook installed at halo3.dll+0x%llX",
             (unsigned long long)(renderHit - base));
+        return true;
     }
 
 #if HALOMCCVR_EXPERIMENTAL_ODST_BRINGUP
@@ -8685,6 +8873,7 @@ namespace
             return false;
 
         g_odstCamera.armed.store(false, std::memory_order_release);
+        PublishOdstLifecycle();
         g_odstCamera.eyeView.store(nullptr, std::memory_order_release);
         g_stereoEye.store(-1, std::memory_order_release);
 
@@ -8741,11 +8930,13 @@ namespace
             // pass-through detour is safer than clearing a trampoline that may
             // still be reachable; the worker retries verified cleanup.
             g_odstCamera.installed.store(true, std::memory_order_release);
+            PublishOdstLifecycle();
             return false;
         }
         if (!RestoreOdstNativeWeaponIkBypass())
         {
             g_odstCamera.installed.store(true, std::memory_order_release);
+            PublishOdstLifecycle();
             LOG("ODST camera rollback: retaining title module until the "
                 "native weapon-IK branch is restored");
             return false;
@@ -8753,6 +8944,7 @@ namespace
         if (!RestoreOdstCrosshairClassGate())
         {
             g_odstCamera.installed.store(true, std::memory_order_release);
+            PublishOdstLifecycle();
             LOG("ODST camera rollback: retaining title module until the "
                 "crosshair class-gate is restored");
             return false;
@@ -8763,11 +8955,15 @@ namespace
         g_odstCamera.teardownRequested.store(false, std::memory_order_release);
         g_odstCamera.fallbackReason.store(
             static_cast<int>(OdstFallbackReason::None), std::memory_order_release);
+        ClearOdstRuntimePublication();
         return true;
     }
 
-    OdstInstallResult InstallOdstCameraCore(uintptr_t base, size_t size)
+    OdstInstallResult InstallOdstCameraCore(
+        uintptr_t base, size_t size, uint32_t runtimeGeneration)
     {
+        if (!runtimeGeneration)
+            return OdstInstallResult::Failed;
         HMODULE moduleReference = nullptr;
         if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
                                 reinterpret_cast<LPCWSTR>(base),
@@ -8897,6 +9093,11 @@ namespace
                 break;
             }
         }
+        g_odstRuntimeGeneration.store(
+            runtimeGeneration, std::memory_order_release);
+        g_odstLastCamCopyMs.store(0, std::memory_order_release);
+        TitleAdapter_ClearHeartbeat(
+            GameTitle::Halo3ODST, runtimeGeneration);
         const MH_STATUS applyStatus = queueOk ? MH_ApplyQueued() : MH_UNKNOWN;
         if (!queueOk || applyStatus != MH_OK)
         {
@@ -8948,7 +9149,7 @@ namespace
         g_odstCamera.armed.store(false, std::memory_order_release);
         g_odstCamera.installedAtMs.store(
             GetTickCount64(), std::memory_order_release);
-        g_lastCamCopyMs.store(0, std::memory_order_release);
+        g_odstLastCamCopyMs.store(0, std::memory_order_release);
         g_stereoEye.store(-1, std::memory_order_release);
         g_aimSeen.store(false, std::memory_order_release);
         for (auto& valid : g_barrelInWristValid)
@@ -8959,6 +9160,14 @@ namespace
         g_enabled.store(false, std::memory_order_release);
         g_positional.store(true, std::memory_order_release);
         g_needRecenter.store(true, std::memory_order_release);
+        if (!PublishOdstLifecycle())
+        {
+            LOG("ODST camera install: title generation changed; requesting verified cleanup");
+            OdstRequestFallback(OdstFallbackReason::TitleLeft);
+            return OdstInstallResult::CleanupPending;
+        }
+        TitleAdapter_PublishMode(
+            GameTitle::Halo3ODST, runtimeGeneration, RuntimeMode::Loading);
         VR_SetScopeActive(false);
         // Resolve ODST's cinematic scene/shot state so OdstApplyHeadLook can
         // rebase the VR yaw at each authored cut, matching Halo 3. The signature
@@ -9028,7 +9237,7 @@ namespace
             reasonName = "native pause boundary";
 
         g_odstCamera.installed.store(false, std::memory_order_release);
-        g_lastCamCopyMs.store(0, std::memory_order_release);
+        g_odstLastCamCopyMs.store(0, std::memory_order_release);
         g_stereoEye.store(-1, std::memory_order_release);
         g_aimSeen.store(false, std::memory_order_release);
         for (auto& valid : g_barrelInWristValid)
@@ -9042,6 +9251,7 @@ namespace
         g_odstCamera.teardownRequested.store(false, std::memory_order_release);
         g_odstCamera.fallbackReason.store(
             static_cast<int>(OdstFallbackReason::None), std::memory_order_release);
+        ClearOdstRuntimePublication();
         LOG("ODST camera teardown complete (%s); stock renderer owns the title",
             reasonName);
         return true;
@@ -9096,6 +9306,7 @@ namespace
         bool gameHooked = false;
         bool hookRefreshPending = false;
         uintptr_t hookedBase = 0;
+        uint32_t haloAttemptedGeneration = 0;
         uint64_t nextInputRefreshMs = 0;
 #if HALOMCCVR_EXPERIMENTAL_ODST_BRINGUP
         bool odstHooked = false;
@@ -9108,8 +9319,15 @@ namespace
 #endif
         for (;;)
         {
-            const TitleDescriptor* activeTitle = TitleAdapter_PollLoaded();
             const uint64_t pollNow = GetTickCount64();
+            const TitleDescriptor* activeTitle =
+                TitleAdapter_PollLoaded(pollNow);
+            const TitleAdapterRuntimeSnapshot runtime =
+                RuntimeSnapshot(pollNow);
+            // Snapshot resolution is deliberately side-effect free so render
+            // and input callers cannot log. The worker owns fallback-mode
+            // publication when no title render path is publishing a mode.
+            TitleAdapter_SetRuntimeMode(runtime.runtime.mode);
             if (pollNow >= nextInputRefreshMs)
             {
                 Input_InstallXInputHook();
@@ -9118,9 +9336,35 @@ namespace
             }
             const TitleHookPlan hookPlan = TitleRegistry_HookPlan(
                 activeTitle ? activeTitle->title : GameTitle::None);
-            const bool haloActive = hookPlan == TitleHookPlan::Halo3Full;
+            const bool haloAvailableForInstall =
+                hookPlan == TitleHookPlan::Halo3Full;
+            const uint32_t haloGeneration =
+                g_halo3RuntimeGeneration.load(std::memory_order_acquire);
+            const uint32_t observedHaloGeneration =
+                TitleAdapter_GetGeneration(GameTitle::Halo3);
+            const bool haloGenerationMismatch = gameHooked &&
+                (!haloGeneration ||
+                 haloGeneration != observedHaloGeneration);
+            const bool haloRuntimeRetained = gameHooked && haloGeneration &&
+                runtime.runtime.owner == GameTitle::Halo3 &&
+                runtime.runtime.generation == haloGeneration &&
+                (runtime.runtime.qualifyingOwnerCount == 1 ||
+                 runtime.ownershipPending);
+            const bool haloActive = !haloGenerationMismatch &&
+                (haloAvailableForInstall || haloRuntimeRetained);
             if (gameHooked && !haloActive)
             {
+                PublishHalo3Lifecycle(true, false, true);
+                TitleAdapter_ClearHeartbeat(
+                    GameTitle::Halo3, haloGeneration);
+                g_halo3LastCamCopyMs.store(0, std::memory_order_release);
+                // Stop new camera transactions immediately. Presentation
+                // detaches on the render thread in Game_AutoVrTick.
+                g_enabled.store(false, std::memory_order_release);
+                g_autoVrOwned.store(false, std::memory_order_release);
+                g_autoVrUserVeto.store(false, std::memory_order_release);
+                g_halo3RuntimeGeneration.store(0, std::memory_order_release);
+                haloAttemptedGeneration = 0;
                 // MCC can unload and later map halo3.dll at the same address.
                 // MinHook's bookkeeping survives while the new module bytes no
                 // longer contain detours, so remember this title boundary.
@@ -9137,8 +9381,22 @@ namespace
             }
 
 #if HALOMCCVR_EXPERIMENTAL_ODST_BRINGUP
-            const bool odstActive =
+            const bool odstAvailableForInstall =
                 hookPlan == TitleHookPlan::OdstExperimentalCameraCore;
+            const uint32_t odstGeneration =
+                g_odstRuntimeGeneration.load(std::memory_order_acquire);
+            const uint32_t observedOdstGeneration =
+                TitleAdapter_GetGeneration(GameTitle::Halo3ODST);
+            const bool odstGenerationMismatch = odstHooked &&
+                (!odstGeneration ||
+                 odstGeneration != observedOdstGeneration);
+            const bool odstRuntimeRetained = odstHooked && odstGeneration &&
+                runtime.runtime.owner == GameTitle::Halo3ODST &&
+                runtime.runtime.generation == odstGeneration &&
+                (runtime.runtime.qualifyingOwnerCount == 1 ||
+                 runtime.ownershipPending);
+            const bool odstActive = !odstGenerationMismatch &&
+                (odstAvailableForInstall || odstRuntimeRetained);
             if (odstActive && !odstPresentationPrepared)
             {
                 // Prime the render-thread detach while ODST is still loading.
@@ -9161,14 +9419,14 @@ namespace
                     "private camera hooks before any Save & Quit teardown");
                 OdstRequestFallback(OdstFallbackReason::NativePause);
             }
-            if (odstHooked &&
+            if (odstHooked && odstActive &&
                 !g_odstCamera.teardownRequested.load(std::memory_order_acquire))
             {
                 const uint64_t now = GetTickCount64();
                 const uint64_t installedAt =
                     g_odstCamera.installedAtMs.load(std::memory_order_acquire);
                 const uint64_t last =
-                    g_lastCamCopyMs.load(std::memory_order_acquire);
+                    g_odstLastCamCopyMs.load(std::memory_order_acquire);
                 const bool sawCamera =
                     g_odstCamera.sawValidCamera.load(std::memory_order_acquire);
                 const bool cameraReady = OdstCameraArraySupportsBringup(
@@ -9205,7 +9463,7 @@ namespace
                 if (!odstActive)
                 {
                     const uint64_t lastCam =
-                        g_lastCamCopyMs.load(std::memory_order_acquire);
+                        g_odstLastCamCopyMs.load(std::memory_order_acquire);
                     const uint64_t age = (lastCam && pollNow >= lastCam)
                         ? pollNow - lastCam
                         : UINT64_MAX;
@@ -9220,7 +9478,7 @@ namespace
                             : "NO (ODST heartbeat stale -- genuine title exit)");
                 }
                 const bool cameraReadyBeforeRemoval =
-                    g_odstCamera.gunCameraArray &&
+                    !odstGenerationMismatch && g_odstCamera.gunCameraArray &&
                     OdstCameraArraySupportsBringup(
                         g_odstCamera.gunCameraArray);
                 if (RemoveOdstCameraCore())
@@ -9270,7 +9528,7 @@ namespace
                     false, std::memory_order_release);
                 ClearOdstStaticPreflightCache();
             }
-            else if (odstActive && !odstHooked &&
+            else if (odstAvailableForInstall && !odstHooked &&
                      (odstRearmGate.IsBlocked() ||
                       odstPauseRearmGate.IsBlocked()))
             {
@@ -9289,16 +9547,20 @@ namespace
             }
 #endif
 
-            if (!gameHooked && haloActive
+            if (!gameHooked && haloAvailableForInstall
 #if HALOMCCVR_EXPERIMENTAL_ODST_BRINGUP
                 && !odstHooked
 #endif
                 )
             {
+                const uint32_t generation =
+                    TitleAdapter_GetGeneration(GameTitle::Halo3);
                 uintptr_t base = 0;
                 size_t size = 0;
-                if (sig::ModuleRange(activeTitle->moduleName, base, size))
+                if (generation && generation != haloAttemptedGeneration &&
+                    sig::ModuleRange(activeTitle->moduleName, base, size))
                 {
+                    haloAttemptedGeneration = generation;
                     if (hookRefreshPending)
                     {
                         if (hookedBase == base)
@@ -9308,16 +9570,19 @@ namespace
                     }
                     LOG("%ls loaded at %p, size 0x%zX",
                         activeTitle->moduleName, (void*)base, size);
-                    InstallHook(base, size);
-                    g_hooked = true;
-                    gameHooked = true;
-                    hookRefreshPending = false;
-                    hookedBase = base;
+                    if (InstallHook(base, size, generation))
+                    {
+                        g_hooked = true;
+                        gameHooked = true;
+                        hookRefreshPending = false;
+                        hookedBase = base;
+                    }
                 }
             }
 
 #if HALOMCCVR_EXPERIMENTAL_ODST_BRINGUP
-            if (!odstHooked && !odstAttempted && odstActive && !gameHooked &&
+            if (!odstHooked && !odstAttempted &&
+                odstAvailableForInstall && !gameHooked &&
                 odstRearmGate.CanAttemptInstall() &&
                 odstPauseRearmGate.CanAttemptInstall() &&
                 pollNow >= odstNextAttemptMs)
@@ -9326,8 +9591,10 @@ namespace
                 size_t size = 0;
                 if (sig::ModuleRange(activeTitle->moduleName, base, size))
                 {
+                    const uint32_t generation =
+                        TitleAdapter_GetGeneration(GameTitle::Halo3ODST);
                     const OdstInstallResult result =
-                        InstallOdstCameraCore(base, size);
+                        InstallOdstCameraCore(base, size, generation);
                     if (result == OdstInstallResult::Installed)
                     {
                         odstHooked = true;
@@ -9373,7 +9640,7 @@ void Game_Init()
 {
     // Establish the atomic title policy before globally shared input detours can
     // receive their first call. The worker refreshes it throughout transitions.
-    TitleAdapter_PollLoaded();
+    TitleAdapter_PollLoaded(GetTickCount64());
     // Claim MCC's controller path synchronously, before OpenXR startup blocks
     // on SteamVR. The worker keeps re-asserting it if Steam replaces the IAT.
     Input_InstallXInputHook();
@@ -9410,6 +9677,7 @@ bool Game_ProcessPresentationDetachRequest()
         return false;
     }
     g_odstCamera.armed.store(false, std::memory_order_release);
+    PublishOdstLifecycle();
     g_enabled.store(false, std::memory_order_release);
     g_autoVrOwned.store(false, std::memory_order_release);
     g_autoVrUserVeto.store(false, std::memory_order_release);
@@ -9428,65 +9696,55 @@ bool Game_ProcessPresentationDetachRequest()
 }
 bool Game_AllowsSharedGameplayFeatures()
 {
-    const uint64_t now = GetTickCount64();
-    const uint64_t lastCamera = g_lastCamCopyMs.load(std::memory_order_acquire);
     const GameTitle activeTitle = TitleAdapter_GetActiveTitle();
-    const uint64_t titleTransition =
-        TitleAdapter_GetActiveTitleEpochMs();
 #if HALOMCCVR_EXPERIMENTAL_ODST_BRINGUP
-    const bool cameraOnlyOwned = OdstCameraOnlyContext();
-#else
-    const bool cameraOnlyOwned = false;
+    if (OdstCameraOnlyContext())
+        return false;
 #endif
-    const bool halo3CameraOwned = !cameraOnlyOwned &&
-        activeTitle == GameTitle::Unknown &&
-        TitleRegistry_Halo3CameraOwnsAmbiguousState(
-            now, lastCamera, titleTransition);
-    return TitleRegistry_AllowsSharedGameplayFeatures(
-        activeTitle, halo3CameraOwned, cameraOnlyOwned);
+    if (activeTitle == GameTitle::None || activeTitle == GameTitle::Halo3)
+        return true;
+    if (activeTitle != GameTitle::Unknown)
+        return false;
+    const TitleAdapterRuntimeSnapshot runtime =
+        RuntimeSnapshot(GetTickCount64());
+    return runtime.runtime.owner == GameTitle::Halo3 &&
+        runtime.runtime.qualifyingOwnerCount == 1 &&
+        runtime.runtime.installed && !runtime.runtime.teardownRequested;
 }
 bool Game_AllowsSharedControllerInput()
 {
-    const uint64_t now = GetTickCount64();
-    const uint64_t lastCamera = g_lastCamCopyMs.load(std::memory_order_acquire);
     const GameTitle activeTitle = TitleAdapter_GetActiveTitle();
-    const uint64_t titleTransition = TitleAdapter_GetActiveTitleEpochMs();
 #if HALOMCCVR_EXPERIMENTAL_ODST_BRINGUP
     const bool cameraOnlyOwned = OdstCameraOnlyContext();
-#else
-    const bool cameraOnlyOwned = false;
+    if (cameraOnlyOwned && activeTitle != GameTitle::Halo3ODST &&
+        activeTitle != GameTitle::Unknown)
+    {
+        return false;
+    }
+    if (activeTitle == GameTitle::Halo3ODST)
+    {
+        return TitleRegistry_HookPlan(GameTitle::Halo3ODST) ==
+            TitleHookPlan::OdstExperimentalCameraCore;
+    }
 #endif
-    const bool halo3CameraOwned = !cameraOnlyOwned &&
-        activeTitle == GameTitle::Unknown &&
-        TitleRegistry_Halo3CameraOwnsAmbiguousState(
-            now, lastCamera, titleTransition);
-#if HALOMCCVR_EXPERIMENTAL_ODST_BRINGUP
-    const bool allowAmbiguousFrontend = activeTitle == GameTitle::Unknown;
-    const bool allowCameraOnlyControllerInput =
-        activeTitle == GameTitle::Halo3ODST;
-#else
-    const bool allowAmbiguousFrontend = false;
-    const bool allowCameraOnlyControllerInput = false;
-#endif
-    return TitleRegistry_AllowsSharedControllerInput(
-        activeTitle, halo3CameraOwned, cameraOnlyOwned,
-        allowAmbiguousFrontend, allowCameraOnlyControllerInput);
+    if (activeTitle == GameTitle::None || activeTitle == GameTitle::Halo3)
+        return true;
+    if (activeTitle != GameTitle::Unknown)
+        return false;
+    return Game_HasTitleCapability(TitleCapability_ControllerInput);
 }
-bool Game_AllowsOdstMotionAim()
+bool Game_HasTitleCapability(uint32_t requiredCapabilities)
 {
-    // ODST's explicitly gated controller-aim capability. The private title
-    // adapter also feeds the shared weapon/arm solver from its own hooks, while
-    // broad shared gameplay remains closed so unrelated Halo 3 patches cannot
-    // leak into ODST. Fail-closed in the public OFF build.
-#if HALOMCCVR_EXPERIMENTAL_ODST_BRINGUP
-    return OdstMotionAimEligible(
-        OdstCameraOnlyContext(),
-        g_odstCamera.armed.load(std::memory_order_acquire),
-        g_enabled.load(std::memory_order_acquire),
-        g_odstCamera.teardownRequested.load(std::memory_order_acquire));
-#else
-    return false;
-#endif
+    if (!requiredCapabilities ||
+        (requiredCapabilities & ~kTitleRuntimeKnownCapabilities))
+    {
+        return false;
+    }
+    const TitleAdapterRuntimeSnapshot runtime =
+        RuntimeSnapshot(GetTickCount64());
+    const uint32_t enabled = TitleRuntimeMaskUnarmedCapabilities(
+        runtime.runtime, kRuntimeCapabilitiesRequiringArm);
+    return (enabled & requiredCapabilities) == requiredCapabilities;
 }
 bool Game_CanToggleImmersiveView()
 {
@@ -9497,8 +9755,12 @@ bool Game_HasAuthoritativePauseState()
     if (g_enginePauseValidated.load(std::memory_order_acquire))
         return true;
 #if HALOMCCVR_EXPERIMENTAL_ODST_BRINGUP
-    const TitleDescriptor* title = TitleAdapter_GetActive();
-    return title && title->title == GameTitle::Halo3ODST &&
+    const GameTitle activeTitle = TitleAdapter_GetActiveTitle();
+    const TitleAdapterRuntimeSnapshot runtime =
+        RuntimeSnapshot(GetTickCount64());
+    return (activeTitle == GameTitle::Halo3ODST ||
+            (runtime.runtime.owner == GameTitle::Halo3ODST &&
+             runtime.runtime.qualifyingOwnerCount == 1)) &&
         g_odstNativePauseFlag.load(std::memory_order_acquire) != 0;
 #else
     return false;
@@ -9540,6 +9802,8 @@ void Game_ToggleHeadTracking()
         return;
     const bool on = !g_enabled.load();
     g_enabled = on;
+    if (!Game_IsCameraOnlyBringup())
+        PublishHalo3Lifecycle(true, on, false);
     if (on)
         g_needRecenter = true;
     else
@@ -9581,7 +9845,8 @@ void Game_AutoVrTick()
         // the ODST-false Game_AllowsSharedGameplayFeatures() gate.
         UpdateCinematicFovPolicy();
         const uint64_t now = GetTickCount64();
-        const uint64_t last = g_lastCamCopyMs.load(std::memory_order_acquire);
+        const uint64_t last =
+            g_odstLastCamCopyMs.load(std::memory_order_acquire);
         const bool cameraReady = g_odstCamera.cameraArrayReady.load(
             std::memory_order_acquire);
         const bool cameraFresh = cameraReady && last != 0 && now >= last &&
@@ -9596,9 +9861,13 @@ void Game_AutoVrTick()
         const bool inLevelStable =
             odstFreshDebounce.Update(now, cameraFresh);
 
-        const TitleDescriptor* activeTitle = TitleAdapter_GetActive();
+        const GameTitle availableTitle = TitleAdapter_GetActiveTitle();
+        const TitleAdapterRuntimeSnapshot titleRuntime = RuntimeSnapshot(now);
         const bool odstTitleActive =
-            activeTitle && activeTitle->title == GameTitle::Halo3ODST;
+            (availableTitle == GameTitle::Halo3ODST ||
+             (titleRuntime.runtime.owner == GameTitle::Halo3ODST &&
+              titleRuntime.runtime.qualifyingOwnerCount == 1)) &&
+            !g_odstCamera.teardownRequested.load(std::memory_order_acquire);
         VR_SetScopeActive(false);
         // Cutscene-facing confirmation for ODST: OdstApplyHeadLook bumps the
         // shared rebase serial at each authored cut. Log the transition here (a
@@ -9670,8 +9939,13 @@ void Game_AutoVrTick()
                 (nativePauseKnown && nativePaused) ? RuntimeMode::Paused
                 : (odstStereoActive ? RuntimeMode::Gameplay
                                     : RuntimeMode::Loading);
-            // Transitions are traced by TitleAdapter_SetRuntimeMode itself.
-            TitleAdapter_SetRuntimeMode(odstMode);
+            const uint32_t generation =
+                g_odstRuntimeGeneration.load(std::memory_order_acquire);
+            if (generation)
+            {
+                TitleAdapter_PublishMode(
+                    GameTitle::Halo3ODST, generation, odstMode);
+            }
         }
 
         // Match Halo 3's live HUD-config timing: begin title-owned layout
@@ -9679,7 +9953,7 @@ void Game_AutoVrTick()
         // waiting for the one-second stereo arm. The shared writer still
         // verifies ODST's exact adapter anchor before every foreign write.
         if (OdstHudLayoutEligible(
-                true, odstCameraContext,
+                odstTitleActive, odstCameraContext,
                 g_odstCamera.installed.load(std::memory_order_acquire),
                 cameraFresh,
                 g_odstCamera.teardownRequested.load(
@@ -9710,6 +9984,7 @@ void Game_AutoVrTick()
             // render thread immediately so no stereo transaction can begin
             // while pause or Save & Quit advances title teardown.
             g_odstCamera.armed.store(false, std::memory_order_release);
+            PublishOdstLifecycle();
             g_enabled.store(false, std::memory_order_release);
             g_autoVrOwned.store(false, std::memory_order_release);
             g_autoVrUserVeto.store(false, std::memory_order_release);
@@ -9726,6 +10001,7 @@ void Game_AutoVrTick()
             LOG("ODST camera presentation: verified heartbeat loss; "
                 "detaching stereo while hook teardown completes");
             g_odstCamera.armed.store(false, std::memory_order_release);
+            PublishOdstLifecycle();
             g_enabled.store(false, std::memory_order_release);
             g_autoVrOwned.store(false, std::memory_order_release);
             g_autoVrUserVeto.store(false, std::memory_order_release);
@@ -9737,6 +10013,7 @@ void Game_AutoVrTick()
             if (g_autoVrOwned.load(std::memory_order_acquire))
             {
                 g_odstCamera.armed.store(false, std::memory_order_release);
+                PublishOdstLifecycle();
                 g_enabled.store(false, std::memory_order_release);
                 g_autoVrOwned.store(false, std::memory_order_release);
                 g_autoVrUserVeto.store(false, std::memory_order_release);
@@ -9744,19 +10021,31 @@ void Game_AutoVrTick()
             }
             else
             {
-                g_odstCamera.armed.store(OdstManualArmEligible(
+                const bool wasArmed =
+                    g_odstCamera.armed.load(std::memory_order_acquire);
+                const bool eligible = OdstManualArmEligible(
                     inLevelStable,
                     g_enabled.load(std::memory_order_acquire),
                     VR_IsStereoEnabled(),
                     g_odstCamera.teardownRequested.load(
-                        std::memory_order_acquire)),
+                        std::memory_order_acquire));
+                // Pending may retain a transaction that was already armed,
+                // but it cannot start a new one before the post-transition
+                // camera heartbeat establishes real ownership.
+                g_odstCamera.armed.store(
+                    eligible &&
+                        (wasArmed ||
+                         (odstTitleActive &&
+                          !titleRuntime.ownershipPending)),
                     std::memory_order_release);
+                PublishOdstLifecycle();
             }
             return;
         }
         if (inLevelStable)
         {
-            if (!g_autoVrUserVeto.load(std::memory_order_relaxed) &&
+            if (odstTitleActive && !titleRuntime.ownershipPending &&
+                !g_autoVrUserVeto.load(std::memory_order_relaxed) &&
                 !g_odstCamera.teardownRequested.load(std::memory_order_acquire) &&
                 (!g_enabled.load(std::memory_order_relaxed) ||
                  !VR_IsStereoEnabled() ||
@@ -9768,6 +10057,7 @@ void Game_AutoVrTick()
                     VR_ToggleStereo();
                 g_autoVrOwned.store(true, std::memory_order_release);
                 g_odstCamera.armed.store(true, std::memory_order_release);
+                PublishOdstLifecycle();
                 LOG("ODST camera bring-up: stable stock camera detected; "
                     "head tracking, stereo, and 6DOF ON");
             }
@@ -9793,19 +10083,53 @@ void Game_AutoVrTick()
 
     if (!Game_AllowsSharedGameplayFeatures())
     {
+        const TitleAdapterRuntimeSnapshot transition =
+            RuntimeSnapshot(GetTickCount64());
+        if (TitleAdapter_GetActiveTitle() == GameTitle::Unknown &&
+            transition.ownershipPending &&
+            transition.runtime.owner == GameTitle::Halo3 &&
+            transition.runtime.installed &&
+            !transition.runtime.teardownRequested)
+        {
+            // The bounded pending state retains an already-running transaction
+            // only long enough for its next camera copy. It grants no input,
+            // HUD, aim, haptics, or new arming work.
+            return;
+        }
         InvalidateHudLayoutProfile(HudLayoutProfile::Halo3);
-        const TitleDescriptor* activeTitle = TitleAdapter_GetActive();
-        if (activeTitle)
-            TitleAdapter_SetRuntimeMode(RuntimeMode::Unsupported);
         if (g_enabled.load(std::memory_order_relaxed) ||
             VR_IsStereoEnabled() || g_autoVrOwned.load(std::memory_order_relaxed))
         {
             g_enabled.store(false, std::memory_order_release);
+            PublishHalo3Lifecycle(true, false, false);
             g_autoVrOwned.store(false, std::memory_order_release);
             g_autoVrUserVeto.store(false, std::memory_order_release);
             VR_DetachGamePresentation();
         }
         return;
+    }
+
+    // A same-title unload/reload can complete between two Present calls. Do
+    // not inherit the prior instance's arm or fresh-camera debounce: detach on
+    // this render thread and require a full new one-second stable interval.
+    static uint32_t haloFreshGeneration = 0;
+    static uint64_t freshSince = 0;
+    const uint32_t currentHaloGeneration =
+        g_halo3RuntimeGeneration.load(std::memory_order_acquire);
+    if (currentHaloGeneration != haloFreshGeneration)
+    {
+        haloFreshGeneration = currentHaloGeneration;
+        freshSince = 0;
+        const bool presentationWasActive =
+            g_enabled.exchange(false, std::memory_order_acq_rel) ||
+            VR_IsStereoEnabled() ||
+            g_autoVrOwned.load(std::memory_order_acquire);
+        g_autoVrOwned.store(false, std::memory_order_release);
+        g_autoVrUserVeto.store(false, std::memory_order_release);
+        if (currentHaloGeneration)
+            PublishHalo3Lifecycle(true, false, false);
+        if (presentationWasActive)
+            VR_DetachGamePresentation();
     }
 
     UpdateCinematicFovPolicy();
@@ -9892,7 +10216,8 @@ void Game_AutoVrTick()
         }
     }
     const uint64_t now = GetTickCount64();
-    const uint64_t last = g_lastCamCopyMs.load(std::memory_order_relaxed);
+    const uint64_t last =
+        g_halo3LastCamCopyMs.load(std::memory_order_relaxed);
     const bool cameraFresh = last != 0 && now >= last &&
         (now - last) < 500; // camera driving now
     const bool cameraStale = last == 0 || now < last ||
@@ -9900,12 +10225,14 @@ void Game_AutoVrTick()
 
     // Debounce entry: require the camera to have been fresh continuously for a
     // short spell before arming, so a single stray frame doesn't flip us.
-    static uint64_t freshSince = 0;
     if (cameraFresh) { if (freshSince == 0) freshSince = now; }
     else freshSince = 0;
     const bool inLevelStable = freshSince != 0 && (now - freshSince) > 1000;
 
-    const TitleDescriptor* activeTitle = TitleAdapter_GetActive();
+    const GameTitle availableTitle = TitleAdapter_GetActiveTitle();
+    const TitleAdapterRuntimeSnapshot titleRuntime = RuntimeSnapshot(now);
+    const bool haloTitleActive = availableTitle == GameTitle::Halo3 ||
+        titleRuntime.runtime.owner == GameTitle::Halo3;
     const bool pausePresentation = VR_IsPausePresentation();
     bool enginePaused = false;
     static bool previousEnginePaused = false;
@@ -9954,7 +10281,7 @@ void Game_AutoVrTick()
     }
     static bool pauseExitClearRequested = false;
     if (pausePresentation &&
-        (!activeTitle || activeTitle->title != GameTitle::Halo3))
+        !haloTitleActive)
     {
         // Leaving the title through Halo's pause menu must not strand the next
         // level in the pause override. This changes presentation only; it does
@@ -9968,12 +10295,19 @@ void Game_AutoVrTick()
     }
     else
         pauseExitClearRequested = false;
-    if (activeTitle && activeTitle->title == GameTitle::Halo3)
-        TitleAdapter_SetRuntimeMode(pausePresentation
-            ? RuntimeMode::Paused
-            : (inLevelStable ? RuntimeMode::Gameplay : RuntimeMode::Loading));
-    else if (activeTitle && !activeTitle->runtimeSupported)
-        TitleAdapter_SetRuntimeMode(RuntimeMode::Unsupported);
+    if (haloTitleActive)
+    {
+        const uint32_t generation =
+            g_halo3RuntimeGeneration.load(std::memory_order_acquire);
+        if (generation)
+        {
+            TitleAdapter_PublishMode(
+                GameTitle::Halo3, generation,
+                pausePresentation ? RuntimeMode::Paused
+                    : (inLevelStable ? RuntimeMode::Gameplay
+                                     : RuntimeMode::Loading));
+        }
+    }
 
     // MCC keeps several game DLLs resident, so module presence cannot identify
     // the active renderer. The camera hook is the proven ownership signal.
@@ -9984,6 +10318,7 @@ void Game_AutoVrTick()
         (g_enabled.load() || VR_IsStereoEnabled() || g_autoVrOwned.load()))
     {
         g_enabled = false;
+        PublishHalo3Lifecycle(true, false, false);
         g_autoVrOwned = false;
         g_autoVrUserVeto = false;
         VR_DetachGamePresentation();
@@ -9996,6 +10331,7 @@ void Game_AutoVrTick()
         if (!g_enabled.load() && !g_autoVrUserVeto.load())
         {
             g_enabled = true;
+            PublishHalo3Lifecycle(true, true, false);
             g_needRecenter = true;
             if (!VR_IsStereoEnabled()) VR_ToggleStereo();
             g_autoVrOwned = true;
@@ -10008,6 +10344,7 @@ void Game_AutoVrTick()
         if (g_autoVrOwned.load() && g_enabled.load())
         {
             g_enabled = false;
+            PublishHalo3Lifecycle(true, false, false);
             if (VR_IsStereoEnabled()) VR_ToggleStereo();
             g_autoVrOwned = false;
             LOG("auto-VR: left the level — back to the flat menu screen");
@@ -10075,7 +10412,7 @@ void Game_ToggleVrAim()
 
 bool Game_ComputeAimStick(float& outRx, float& outRy)
 {
-    if (!Game_AllowsSharedGameplayFeatures() && !Game_AllowsOdstMotionAim())
+    if (!Game_HasTitleCapability(TitleCapability_ControllerAim))
         return false;
     // Closed-loop aim: emit a right-stick deflection proportional to the
     // angular error between the game's aim and the controller ray. The game
@@ -10151,7 +10488,7 @@ bool Game_ComputeAimStick(float& outRx, float& outRy)
 
 void Game_MapMoveStick(float& mx, float& my)
 {
-    if (!Game_AllowsSharedGameplayFeatures() && !Game_AllowsOdstMotionAim())
+    if (!Game_HasTitleCapability(TitleCapability_ControllerAim))
         return;
     // The game moves relative to its aim heading, which VR aim points at the
     // hand. Rotate the move vector by (head - aim) yaw so pushing forward
@@ -10207,21 +10544,33 @@ void Game_GetProjectionTangents(float& tanX, float& tanY)
     tanY = g_projectionTanY.load();
 }
 
-void Game_GetRenderHalfFov(int eye, float& halfX, float& halfY)
+void Game_GetRenderHalfFovs(float halfX[2], float halfY[2])
 {
+    const float fallbackX = g_renderHalfFovX.load();
+    const float fallbackY = g_renderHalfFovY.load();
+    halfX[0] = fallbackX;
+    halfX[1] = fallbackX;
+    halfY[0] = fallbackY;
+    halfY[1] = fallbackY;
 #if HALOMCCVR_EXPERIMENTAL_ODST_BRINGUP
-    if ((eye == 0 || eye == 1) &&
-        g_odstCamera.installed.load(std::memory_order_acquire))
+    const uint32_t generation =
+        g_odstRuntimeGeneration.load(std::memory_order_acquire);
+    const TitleAdapterRuntimeSnapshot runtime =
+        RuntimeSnapshot(GetTickCount64());
+    if (generation &&
+        runtime.runtime.owner == GameTitle::Halo3ODST &&
+        runtime.runtime.qualifyingOwnerCount == 1 &&
+        runtime.runtime.generation == generation &&
+        runtime.runtime.installed && runtime.runtime.armed &&
+        !runtime.runtime.teardownRequested &&
+        (runtime.runtime.enabledCapabilities & TitleCapability_Stereo) != 0)
     {
-        halfX = g_odstRenderHalfFovX[eye].load(std::memory_order_relaxed);
-        halfY = g_odstRenderHalfFovY[eye].load(std::memory_order_relaxed);
-        return;
+        halfX[0] = g_odstRenderHalfFovX[0].load(std::memory_order_relaxed);
+        halfX[1] = g_odstRenderHalfFovX[1].load(std::memory_order_relaxed);
+        halfY[0] = g_odstRenderHalfFovY[0].load(std::memory_order_relaxed);
+        halfY[1] = g_odstRenderHalfFovY[1].load(std::memory_order_relaxed);
     }
-#else
-    (void)eye;
 #endif
-    halfX = g_renderHalfFovX.load();
-    halfY = g_renderHalfFovY.load();
 }
 
 

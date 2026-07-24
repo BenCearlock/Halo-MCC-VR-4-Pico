@@ -365,10 +365,17 @@ namespace
 
     DWORD ProcessSetState(DWORD result, DWORD user, XINPUT_VIBRATION* vibration)
     {
-        if (!Game_AllowsSharedControllerInput())
-            return result;
         if (user != 0 || !vibration)
             return result;
+        if (!Game_HasTitleCapability(TitleCapability_Haptics))
+        {
+            // A title/arm transition can close the capability gate before the
+            // game's zero-motor update arrives. Clear our retained request on
+            // every gated call so an earlier rumble cannot resume when the
+            // next title becomes armed.
+            VR_SetGameHaptics(0.0f);
+            return result;
+        }
         VR_SetGameHaptics(BlendXInputMotors(
             vibration->wLeftMotorSpeed, vibration->wRightMotorSpeed));
         return ERROR_SUCCESS;

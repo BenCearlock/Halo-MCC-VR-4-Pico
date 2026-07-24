@@ -114,6 +114,7 @@ add_library(halo3xr SHARED
     src/common/input_logic.cpp
     src/common/scope_logic.cpp
     src/common/title_registry.cpp
+    src/common/title_runtime_state.cpp
     src/dll/dllmain.cpp
     src/dll/d3d11_hook.cpp
     src/dll/vr.cpp
@@ -165,6 +166,7 @@ if(BUILD_TESTING)
         src/common/input_logic.cpp
         src/common/scope_logic.cpp
         src/common/title_registry.cpp
+        src/common/title_runtime_state.cpp
         src/common/config.cpp
         src/common/log.cpp
         src/dll/reach_adapter.cpp)

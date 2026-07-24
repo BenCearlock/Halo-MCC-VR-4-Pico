@@ -10,9 +10,131 @@
 
 namespace
 {
+    constexpr uint32_t kAdapterSnapshotReadAttempts = 8;
+    constexpr uint64_t kAmbiguousOwnershipPendingMs = 100;
+
+    TitleRuntimeState g_titleRuntime;
     std::atomic<GameTitle> g_activeTitle{ GameTitle::None };
     std::atomic<uint64_t> g_activeTitleEpochMs{ 0 };
     std::atomic<RuntimeMode> g_runtimeMode{ RuntimeMode::Shell };
+
+    GameTitle UniqueAvailableTitle(uint32_t availabilityMask)
+    {
+        const uint32_t known =
+            availabilityMask & kTitleRuntimeAvailabilityMask;
+        if (!known || (known & (known - 1u)) != 0)
+            return known ? GameTitle::Unknown : GameTitle::None;
+        for (size_t slot = 0; slot < kTitleRuntimeSlotCount; ++slot)
+        {
+            if (known & (uint32_t{1} << slot))
+                return TitleRuntimeSlotTitle(slot);
+        }
+        return GameTitle::None;
+    }
+
+    RuntimeMode FallbackRuntimeMode(uint32_t availabilityMask)
+    {
+        const GameTitle available = UniqueAvailableTitle(availabilityMask);
+        if (available == GameTitle::None)
+            return RuntimeMode::Shell;
+        const TitleDescriptor* descriptor = TitleRegistry_Find(available);
+        return descriptor &&
+                (descriptor->runtimeSupported ||
+                 TitleRegistry_HookPlan(available) != TitleHookPlan::None)
+            ? RuntimeMode::Loading
+            : RuntimeMode::Unsupported;
+    }
+
+    bool ModuleSetMatches(
+        const TitleRuntimeAvailabilitySnapshot& previous,
+        const TitleRuntimeModuleSet& next)
+    {
+        if (!previous.stable ||
+            previous.availabilityMask != next.availabilityMask)
+        {
+            return false;
+        }
+        for (size_t slot = 0; slot < kTitleRuntimeSlotCount; ++slot)
+        {
+            if (previous.moduleBases[slot] != next.moduleBases[slot])
+                return false;
+        }
+        return true;
+    }
+
+    bool LoadResolveInput(
+        uint64_t nowMs, const TitleRuntimeHeartbeatPolicy& policy,
+        TitleRuntimeResolveInput& input)
+    {
+        for (uint32_t attempt = 0;
+             attempt < kAdapterSnapshotReadAttempts; ++attempt)
+        {
+            const TitleRuntimeAvailabilitySnapshot availability =
+                g_titleRuntime.LoadAvailability();
+            if (!availability.stable)
+                continue;
+
+            TitleRuntimeResolveInput next{};
+            next.availabilityMask = availability.availabilityMask;
+            next.availabilitySetEpochMs =
+                availability.availabilitySetEpochMs;
+            next.nowMs = nowMs;
+
+            bool candidatesStable = true;
+            for (size_t slot = 0; slot < kTitleRuntimeSlotCount; ++slot)
+            {
+                const GameTitle title = TitleRuntimeSlotTitle(slot);
+                if (!g_titleRuntime.LoadCandidate(
+                        title, policy.freshForMs[slot], next.titles[slot]))
+                {
+                    if (g_titleRuntime.Generation(title) != 0)
+                    {
+                        candidatesStable = false;
+                        break;
+                    }
+                    next.titles[slot].title = title;
+                    next.titles[slot].heartbeatFreshForMs =
+                        policy.freshForMs[slot];
+                }
+            }
+            if (!candidatesStable)
+                continue;
+
+            const TitleRuntimeAvailabilitySnapshot after =
+                g_titleRuntime.LoadAvailability();
+            if (!after.stable ||
+                after.revision != availability.revision ||
+                after.availabilityMask != availability.availabilityMask ||
+                after.availabilitySetEpochMs !=
+                    availability.availabilitySetEpochMs ||
+                after.moduleBases != availability.moduleBases)
+            {
+                continue;
+            }
+
+            input = next;
+            return true;
+        }
+        return false;
+    }
+
+    TitleRuntimeSnapshot PendingSnapshotFromCandidate(
+        const TitleRuntimeCandidate& candidate)
+    {
+        TitleRuntimeSnapshot snapshot{};
+        snapshot.owner = candidate.title;
+        snapshot.generation = candidate.generation;
+        snapshot.installed = candidate.installed;
+        // Pending is teardown retention only. It must never manufacture an
+        // armed owner, a gameplay mode, a heartbeat, or any capability before
+        // the first post-transition camera publication.
+        snapshot.armed = false;
+        snapshot.teardownRequested = candidate.teardownRequested;
+        snapshot.mode = RuntimeMode::Loading;
+        snapshot.heartbeatMs = 0;
+        snapshot.enabledCapabilities = TitleCapability_None;
+        return snapshot;
+    }
 }
 
 const TitleDescriptor* TitleAdapter_GetActive()
@@ -37,59 +159,175 @@ RuntimeMode TitleAdapter_GetRuntimeMode()
 
 void TitleAdapter_SetRuntimeMode(RuntimeMode mode)
 {
-    const RuntimeMode previous = g_runtimeMode.exchange(mode, std::memory_order_acq_rel);
+    const RuntimeMode previous =
+        g_runtimeMode.exchange(mode, std::memory_order_acq_rel);
     if (previous != mode)
-        LOG("Runtime mode: %s -> %s", RuntimeModeName(previous), RuntimeModeName(mode));
+        LOG("Runtime mode: %s -> %s",
+            RuntimeModeName(previous), RuntimeModeName(mode));
 }
 
-const TitleDescriptor* TitleAdapter_PollLoaded()
+uint32_t TitleAdapter_GetGeneration(GameTitle title)
+{
+    return g_titleRuntime.Generation(title);
+}
+
+TitleRuntimeAvailabilitySnapshot TitleAdapter_GetAvailability()
+{
+    return g_titleRuntime.LoadAvailability();
+}
+
+bool TitleAdapter_GetCandidate(
+    GameTitle title, uint64_t heartbeatFreshForMs,
+    TitleRuntimeCandidate& candidate)
+{
+    return g_titleRuntime.LoadCandidate(
+        title, heartbeatFreshForMs, candidate);
+}
+
+bool TitleAdapter_PublishLifecycle(
+    GameTitle title, uint32_t generation,
+    const TitleRuntimeLifecycle& lifecycle)
+{
+    return g_titleRuntime.PublishLifecycle(title, generation, lifecycle);
+}
+
+bool TitleAdapter_PublishMode(
+    GameTitle title, uint32_t generation, RuntimeMode mode)
+{
+    if (!g_titleRuntime.PublishMode(title, generation, mode))
+        return false;
+    TitleAdapter_SetRuntimeMode(mode);
+    return true;
+}
+
+bool TitleAdapter_PublishHeartbeat(
+    GameTitle title, uint32_t generation, uint64_t heartbeatMs)
+{
+    return g_titleRuntime.PublishHeartbeat(title, generation, heartbeatMs);
+}
+
+bool TitleAdapter_ClearHeartbeat(GameTitle title, uint32_t generation)
+{
+    return g_titleRuntime.ClearHeartbeat(title, generation);
+}
+
+TitleAdapterRuntimeSnapshot TitleAdapter_GetRuntimeSnapshot(
+    uint64_t nowMs, const TitleRuntimeHeartbeatPolicy& policy,
+    GameTitle retainedOwner)
+{
+    TitleAdapterRuntimeSnapshot result{};
+    TitleRuntimeResolveInput input{};
+    if (!LoadResolveInput(nowMs, policy, input))
+    {
+        result.runtime.mode = RuntimeMode::Unsupported;
+        return result;
+    }
+
+    const uint32_t availableTitles =
+        input.availabilityMask & kTitleRuntimeAvailabilityMask;
+    if (availableTitles &&
+        (availableTitles & (availableTitles - 1u)) != 0)
+    {
+        // Resident-module ambiguity has a deliberately tighter ownership
+        // window than each title's normal loading/teardown heartbeat policy.
+        // A zero policy remains disabled; all enabled title candidates must
+        // keep publishing inside the accepted 100 ms ambiguity limit.
+        for (TitleRuntimeCandidate& candidate : input.titles)
+        {
+            if (candidate.heartbeatFreshForMs >
+                kAmbiguousOwnershipPendingMs)
+            {
+                candidate.heartbeatFreshForMs =
+                    kAmbiguousOwnershipPendingMs;
+            }
+        }
+    }
+
+    result.runtime = ResolveTitleRuntime(input);
+    if (result.runtime.owner == GameTitle::None &&
+        TitleRuntimeOwnershipMayBePending(
+            input, retainedOwner, kAmbiguousOwnershipPendingMs))
+    {
+        const size_t slot = TitleRuntimeSlotIndex(retainedOwner);
+        if (slot < kTitleRuntimeSlotCount)
+        {
+            result.runtime = PendingSnapshotFromCandidate(input.titles[slot]);
+            result.ownershipPending = true;
+        }
+    }
+
+    if (result.runtime.owner == GameTitle::None)
+        result.runtime.mode = FallbackRuntimeMode(input.availabilityMask);
+    return result;
+}
+
+const TitleDescriptor* TitleAdapter_PollLoaded(uint64_t observedAtMs)
 {
     size_t count = 0;
     const TitleDescriptor* titles = TitleRegistry_All(count);
+    TitleRuntimeModuleSet modules{};
     const TitleDescriptor* detected = nullptr;
     size_t detectedCount = 0;
     for (size_t i = 0; i < count; ++i)
     {
-        if (GetModuleHandleW(titles[i].moduleName))
-        {
-            if (!detected)
-                detected = &titles[i];
-            ++detectedCount;
-        }
+        const HMODULE module = GetModuleHandleW(titles[i].moduleName);
+        if (!module)
+            continue;
+        const size_t slot = TitleRuntimeSlotIndex(titles[i].title);
+        if (slot >= kTitleRuntimeSlotCount)
+            continue;
+        modules.availabilityMask |= uint32_t{1} << slot;
+        modules.moduleBases[slot] = reinterpret_cast<uintptr_t>(module);
+        if (!detected)
+            detected = &titles[i];
+        ++detectedCount;
+    }
+
+    const TitleRuntimeAvailabilitySnapshot previousAvailability =
+        g_titleRuntime.LoadAvailability();
+    const bool moduleSetChanged =
+        !ModuleSetMatches(previousAvailability, modules);
+    if (!g_titleRuntime.PublishModuleSet(modules, observedAtMs))
+    {
+        LOG("Title adapter: module availability publication failed; "
+            "leaving runtime ownership unchanged");
+        return nullptr;
     }
 
     const bool ambiguous = detectedCount > 1;
     const GameTitle next = ambiguous ? GameTitle::Unknown :
         (detected ? detected->title : GameTitle::None);
-    const GameTitle previous = g_activeTitle.load(std::memory_order_acquire);
-    if (previous == next)
+    const GameTitle previous =
+        g_activeTitle.load(std::memory_order_acquire);
+    if (!moduleSetChanged && previous == next)
         return ambiguous ? nullptr : detected;
-    // Publish the transition epoch before the new title. An acquire load that
-    // observes Unknown can therefore never inherit a Halo 3 camera heartbeat
-    // from before the resident-module ambiguity began.
-    g_activeTitleEpochMs.store(GetTickCount64(), std::memory_order_release);
+
+    // Publish the exact module-set observation before the raw availability
+    // title. Ownership resolution separately requires a title heartbeat newer
+    // than this transition.
+    g_activeTitleEpochMs.store(observedAtMs, std::memory_order_release);
     g_activeTitle.store(next, std::memory_order_release);
 
     if (ambiguous)
     {
-        // Name the resident modules so the log shows exactly which titles MCC
-        // kept loaded (e.g. halo3.dll left resident after switching to ODST).
-        // This is the evidence for a heartbeat-based retention fix so a
-        // resident-but-idle second module cannot disable the active title.
         char names[256];
         names[0] = '\0';
         for (size_t i = 0; i < count; ++i)
         {
-            if (GetModuleHandleW(titles[i].moduleName))
+            const size_t slot = TitleRuntimeSlotIndex(titles[i].title);
+            if (slot >= kTitleRuntimeSlotCount ||
+                (modules.availabilityMask & (uint32_t{1} << slot)) == 0)
             {
-                const size_t used = strlen(names);
-                _snprintf_s(names + used, sizeof(names) - used, _TRUNCATE,
-                            "%s%ls", used ? "," : "", titles[i].moduleName);
+                continue;
             }
+            const size_t used = strlen(names);
+            _snprintf_s(names + used, sizeof(names) - used, _TRUNCATE,
+                        "%s%ls", used ? "," : "", titles[i].moduleName);
         }
         LOG("Title adapter: ambiguous MCC state (%zu game modules loaded: %s); "
-            "disabling game hooks", detectedCount, names);
-        TitleAdapter_SetRuntimeMode(RuntimeMode::Unsupported);
+            "runtime ownership is awaiting one unique post-transition camera "
+            "heartbeat",
+            detectedCount, names);
         return nullptr;
     }
     if (!detected)
@@ -120,7 +358,10 @@ const TitleDescriptor* TitleAdapter_PollLoaded()
                 "leaving stock game untouched",
                 detected->displayName, detected->moduleName);
         }
-        TitleAdapter_SetRuntimeMode(RuntimeMode::Unsupported);
+        TitleAdapter_SetRuntimeMode(
+            TitleRegistry_HookPlan(detected->title) != TitleHookPlan::None
+                ? RuntimeMode::Loading
+                : RuntimeMode::Unsupported);
     }
     else
     {
