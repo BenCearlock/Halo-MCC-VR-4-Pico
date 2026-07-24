@@ -9592,10 +9592,10 @@ namespace
         bool motionBlurResolved = false;
         bool motionBlurSuppressed = false;
         uint8_t* patchyFogFlags = nullptr;
-        // Optional passive FP skeleton probe (log-only). Null when the probe
+        // Optional passive FP palette probe (log-only). Null when the probe
         // prologue check or MinHook install failed; the camera core is
         // unaffected either way. Torn down with the two render hooks.
-        void* specialBoneProbeTarget = nullptr;
+        void* fpPaletteProbeTarget = nullptr;
     } g_reachCamera;
     static_assert(std::atomic<int>::is_always_lock_free);
 
@@ -9608,10 +9608,13 @@ namespace
 
     ReachPlayerViewRenderFn g_reachOrigPlayerViewRender = nullptr;
     ReachMainRenderViewFn g_reachOrigMainRenderView = nullptr;
-    // Passive first-person skeleton probe trampoline (log-only; see
-    // ReachSpecialBoneComposerProbe). Same ABI as the Halo 3 special-bone
-    // composer, verified byte-identical against the pinned Reach image.
-    ComposeSpecialBonesFn g_reachOrigSpecialBoneProbe = nullptr;
+    // Passive first-person palette probe trampoline (log-only; see
+    // ReachFpPaletteProbe). ABI verified against the pinned Reach image at
+    // 0x2B4EB0 and matching the accepted Halo 3 visible-palette consumer.
+    using ReachFpPaletteFn = void(__fastcall*)(
+        uint16_t, const BoneMatrix*, BoneMatrix*, uintptr_t,
+        const BoneMatrix*, const int32_t*);
+    ReachFpPaletteFn g_reachOrigFpPalette = nullptr;
 
     // Reach's apply_distortions pass divides motion_blur_max by
     // motion_blur_scale. Zeroing both controls creates 0/0 NaNs in the
@@ -10370,18 +10373,18 @@ namespace
         }
     }
 
-    // ---- Passive first-person skeleton probe (experimental, log-only) -------
+    // ---- Passive first-person palette probe (experimental, log-only) -------
     // Learns Reach's real weapon/arm rig before any IK is attempted. It is a
-    // pure passthrough to the stock special-bone composer, then a rate-limited,
-    // SEH-guarded dump of the node table that composer just consumed. It reads
-    // only, never writes game memory, never changes behaviour, and allocates
-    // nothing. All addressing was read from the composer's OWN code (see
-    // reach_render_logic.h): handle=[model+0x4C], blockBase=blockTable[handle>>28]
-    // at kReachNodeRecordBlockTableRva, record i at blockBase+(handle+i*11)*4,
-    // parent int16 at record+8. The skeleton is logged as "index=stringId/parent"
-    // exactly like the Halo 3 dump so wrist / camera_control can be identified by
-    // id OR topology from the headset log. Project law: only a runtime dump is
-    // trusted for these facts.
+    // pure passthrough to the stock visible-palette consumer 0x2B4EB0 (the FP
+    // path; the special-bone composer 0x213224 proved silent in a headset test),
+    // then a rate-limited, SEH-guarded dump of the render model it consumed. It
+    // reads only, never writes game memory, never changes behaviour, and
+    // allocates nothing. All addressing was read from that function's OWN code
+    // (see reach_render_logic.h): modelHandle=table[tag].+4, blockBase=
+    // blockTable[modelHandle>>28], count=*(u32)(blockBase+modelHandle*4+0x30).
+    // Per bone it logs the boneMap source index and that source bone's
+    // translation + scale so the hand/gun bones are identifiable by count and
+    // geometry. Project law: only a runtime dump is trusted for these facts.
     static int SafeReadBytes(const void* src, void* dst, size_t n)
     {
         __try { memcpy(dst, src, n); }
@@ -10389,86 +10392,98 @@ namespace
         return 1;
     }
 
-    void ReachSpecialBoneProbeDump(const void* model, int firstSpecial,
-                                   int secondSpecial)
+    void ReachFpPaletteProbeDump(uint16_t tag, const BoneMatrix* root,
+                                 const BoneMatrix* source, const int32_t* boneMap)
     {
         const uintptr_t base = g_reachCamera.base;
         const DWORD now = GetTickCount();
-        // Entry diagnostic (rate-limited to 1 s, NOT gated on armed or record
-        // validity): proves whether the composer runs at all during Reach FP
-        // gameplay, and with which node-table handle. A silent v1 probe could
-        // not distinguish "never called" from "called but bad reads".
+        // Entry diagnostic (rate-limited to 1 s, ungated): proves the FP palette
+        // consumer runs and with which model tag / render root.
         static std::atomic<DWORD> lastEntryMs{0};
         const bool logEntry =
             now - lastEntryMs.load(std::memory_order_relaxed) >= 1000;
-        uint32_t handle = 0;
-        const bool handleOk = model && base &&
-            SafeReadBytes(reinterpret_cast<const uint8_t*>(model) + 0x4C,
-                          &handle, sizeof(handle));
         if (logEntry)
         {
             lastEntryMs.store(now, std::memory_order_relaxed);
-            LOG("REACH FPPROBE entry: armed=%d model=%p handleOk=%d handle=%08X "
-                "special=%d/%d",
+            LOG("REACH FPPROBE entry: armed=%d tag=%u root=%p source=%p boneMap=%p",
                 static_cast<int>(g_reachCamera.armed.load(
                     std::memory_order_acquire)),
-                model, static_cast<int>(handleOk), handle, firstSpecial,
-                secondSpecial);
+                static_cast<unsigned>(tag), root, source, boneMap);
         }
-        if (!handleOk || !base)
+        if (!base || !source || !boneMap)
             return;
-        const uint8_t* tableSlot =
-            reinterpret_cast<const uint8_t*>(base + kReachNodeRecordBlockTableRva) +
-            static_cast<size_t>(handle >> 28) * 8u;
-        const uint8_t* blockBase = nullptr;
-        const bool blockOk =
-            SafeReadBytes(tableSlot, &blockBase, sizeof(blockBase)) && blockBase;
 
-        // Dump each distinct node table once (dedupe by handle, cap total).
-        // RAW and validation-free so the true record layout is visible even if
-        // the assumed id@+0 / parent@+8 offsets are wrong for Reach: four
-        // candidate fields per record with rec = blockBase+(handle+i*11)*4.
-        static std::atomic<uint32_t> lastHandle{0xFFFFFFFFu};
-        if (lastHandle.exchange(handle, std::memory_order_relaxed) == handle)
+        // Resolve the render model exactly as 0x2B4EB0 does, to read the node
+        // count: modelHandle = table[tag].+4; blockBase = blockTable[hi];
+        // count = *(u32)(blockBase + modelHandle*4 + 0x30) clamped to 120.
+        uint32_t modelHandle = 0;
+        if (!SafeReadBytes(reinterpret_cast<const uint8_t*>(
+                    base + kReachRenderModelTableRva) +
+                    static_cast<size_t>(tag) * 8u + 4u,
+                &modelHandle, sizeof(modelHandle)))
+            return;
+        const uint8_t* blockBase = nullptr;
+        if (!SafeReadBytes(reinterpret_cast<const uint8_t*>(
+                    base + kReachNodeRecordBlockTableRva) +
+                    static_cast<size_t>(modelHandle >> 28) * 8u,
+                &blockBase, sizeof(blockBase)) ||
+            !blockBase)
+            return;
+        uint32_t rawCount = 0;
+        if (!SafeReadBytes(
+                blockBase + static_cast<size_t>(modelHandle) * 4u + 0x30,
+                &rawCount, sizeof(rawCount)))
+            return;
+        int count = static_cast<int>(rawCount);
+        if (count < 0) count = 0;
+        if (count > 120) count = 120;
+
+        // Dump each distinct model tag once (cap total). Lists, per output bone,
+        // the boneMap source index and that source bone's translation + scale so
+        // the hand/gun bones are identifiable by count and geometry.
+        static std::atomic<uint32_t> lastTag{0xFFFFFFFFu};
+        if (lastTag.exchange(tag, std::memory_order_relaxed) == tag)
             return;
         static std::atomic<int> dumped{0};
-        if (dumped.fetch_add(1, std::memory_order_relaxed) >= 12)
+        if (dumped.fetch_add(1, std::memory_order_relaxed) >= 8)
             return;
-        LOG("REACH FPPROBE dump: handle=%08X blockOk=%d blockBase=%p "
-            "(rec=blockBase+(handle+i*11)*4):",
-            handle, static_cast<int>(blockOk), blockBase);
-        if (!blockOk)
-            return;
-        for (int i = 0; i < 24; ++i)
+
+        float rootT[3] = {0, 0, 0};
+        const bool haveRoot =
+            root && SafeReadBytes(root->translation, rootT, sizeof(rootT));
+        LOG("REACH FPPROBE dump: tag=%u modelHandle=%08X count=%d haveRoot=%d "
+            "rootT=(%.3f,%.3f,%.3f)",
+            static_cast<unsigned>(tag), modelHandle, count,
+            static_cast<int>(haveRoot), rootT[0], rootT[1], rootT[2]);
+        for (int i = 0; i < count && i < 48; ++i)
         {
-            const uint8_t* rec = blockBase +
-                static_cast<size_t>(handle + static_cast<uint32_t>(i) * 11u) * 4u;
-            uint32_t w0 = 0, w4 = 0;
-            int16_t h8 = 0, hA = 0;
-            const bool ok = SafeReadBytes(rec, &w0, sizeof(w0)) &&
-                SafeReadBytes(rec + 4, &w4, sizeof(w4)) &&
-                SafeReadBytes(rec + 8, &h8, sizeof(h8)) &&
-                SafeReadBytes(rec + 10, &hA, sizeof(hA));
-            if (!ok)
-            {
-                LOG("REACH FPPROBE dump: rec[%d] unreadable @ %p", i, rec);
+            int32_t src = -1;
+            if (!SafeReadBytes(boneMap + i, &src, sizeof(src)))
                 break;
+            float t[3] = {0, 0, 0};
+            float scale = 0.0f;
+            bool ok = false;
+            if (src >= 0 && src < 120)
+            {
+                const BoneMatrix* sb = source + src;
+                ok = SafeReadBytes(sb->translation, t, sizeof(t)) &&
+                    SafeReadBytes(&sb->scale, &scale, sizeof(scale));
             }
-            LOG("REACH FPPROBE dump: rec[%d] +0=%08X +4=%08X +8w=%d +Aw=%d",
-                i, w0, w4, h8, hA);
+            LOG("REACH FPPROBE dump: bone[%d] src=%d ok=%d t=(%.3f,%.3f,%.3f) "
+                "sc=%.3f",
+                i, src, static_cast<int>(ok), t[0], t[1], t[2], scale);
         }
     }
 
-    __declspec(noinline) void __fastcall ReachSpecialBoneComposerProbe(
-        void* model, BoneMatrix* output, void* source, void* defaults,
-        int firstSpecial, int secondSpecial)
+    __declspec(noinline) void __fastcall ReachFpPaletteProbe(
+        uint16_t tag, const BoneMatrix* root, BoneMatrix* destination,
+        uintptr_t unused, const BoneMatrix* source, const int32_t* boneMap)
     {
         g_reachCamera.activeCallbacks.fetch_add(1, std::memory_order_acq_rel);
         __try
         {
-            g_reachOrigSpecialBoneProbe(model, output, source, defaults,
-                                        firstSpecial, secondSpecial);
-            ReachSpecialBoneProbeDump(model, firstSpecial, secondSpecial);
+            g_reachOrigFpPalette(tag, root, destination, unused, source, boneMap);
+            ReachFpPaletteProbeDump(tag, root, source, boneMap);
         }
         __finally
         {
@@ -10927,7 +10942,7 @@ namespace
             const void* functions[] = {
                 reinterpret_cast<const void*>(&ReachMainRenderViewDetour),
                 reinterpret_cast<const void*>(&ReachPlayerViewRenderDetour),
-                reinterpret_cast<const void*>(&ReachSpecialBoneComposerProbe),
+                reinterpret_cast<const void*>(&ReachFpPaletteProbe),
             };
             static_assert(_countof(functions) == _countof(ranges));
             bool resolved = true;
@@ -10943,12 +10958,12 @@ namespace
         void* const targets[] = {
             g_reachCamera.outerTarget,
             g_reachCamera.innerTarget,
-            g_reachCamera.specialBoneProbeTarget,
+            g_reachCamera.fpPaletteProbeTarget,
         };
         void* const trampolines[] = {
             reinterpret_cast<void*>(g_reachOrigMainRenderView),
             reinterpret_cast<void*>(g_reachOrigPlayerViewRender),
-            reinterpret_cast<void*>(g_reachOrigSpecialBoneProbe),
+            reinterpret_cast<void*>(g_reachOrigFpPalette),
         };
         static_assert(_countof(targets) == _countof(ranges));
         static_assert(_countof(trampolines) == _countof(ranges));
@@ -11045,7 +11060,7 @@ namespace
         void* const targets[] = {
             g_reachCamera.outerTarget,
             g_reachCamera.innerTarget,
-            g_reachCamera.specialBoneProbeTarget,
+            g_reachCamera.fpPaletteProbeTarget,
         };
         for (void* target : targets)
         {
@@ -11063,20 +11078,20 @@ namespace
             return false;
 
         bool removedAll = true;
-        if (g_reachCamera.specialBoneProbeTarget)
+        if (g_reachCamera.fpPaletteProbeTarget)
         {
             const MH_STATUS status =
-                MH_RemoveHook(g_reachCamera.specialBoneProbeTarget);
+                MH_RemoveHook(g_reachCamera.fpPaletteProbeTarget);
             if (status == MH_OK || status == MH_ERROR_NOT_CREATED)
             {
-                g_reachCamera.specialBoneProbeTarget = nullptr;
-                g_reachOrigSpecialBoneProbe = nullptr;
+                g_reachCamera.fpPaletteProbeTarget = nullptr;
+                g_reachOrigFpPalette = nullptr;
             }
             else
             {
                 removedAll = false;
                 LOG("Reach FP probe cleanup: remove failed for %p (%d)",
-                    g_reachCamera.specialBoneProbeTarget,
+                    g_reachCamera.fpPaletteProbeTarget,
                     static_cast<int>(status));
             }
         }
@@ -11345,38 +11360,38 @@ namespace
         // 28-byte prologue is re-verified here as a belt-and-suspenders guard.
         {
             void* const probeTarget =
-                reinterpret_cast<void*>(base + kReachSpecialBoneComposerRva);
+                reinterpret_cast<void*>(base + kReachFpVisiblePaletteRva);
             static constexpr uint8_t kProbePrologue[] = {
-                0x48,0x8B,0xC4,0x48,0x89,0x58,0x08,0x48,0x89,0x70,0x10,0x48,0x89,
-                0x78,0x18,0x4C,0x89,0x60,0x20,0x55,0x41,0x55,0x41,0x56,0x48,0x8D,
-                0x68,0xB8};
+                0x48,0x89,0x5C,0x24,0x08,0x48,0x89,0x6C,0x24,0x10,0x48,0x89,0x74,
+                0x24,0x18,0x57,0x41,0x56,0x41,0x57,0x48,0x83,0xEC,0x20,0x48,0x8B,
+                0x05,0x31,0x57,0x96,0x00,0x49,0x8B,0xF0,0x0F,0xB7,0xC9,0x4C,0x8B,
+                0xF2};
             uint8_t prologue[sizeof(kProbePrologue)];
             const bool prologueOk =
-                kReachSpecialBoneComposerRva < size &&
+                kReachFpVisiblePaletteRva < size &&
                 SafeReadBytes(probeTarget, prologue, sizeof(prologue)) &&
                 memcmp(prologue, kProbePrologue, sizeof(prologue)) == 0;
             if (prologueOk &&
                 MH_CreateHook(probeTarget,
-                    reinterpret_cast<void*>(&ReachSpecialBoneComposerProbe),
-                    reinterpret_cast<void**>(&g_reachOrigSpecialBoneProbe)) ==
-                        MH_OK &&
+                    reinterpret_cast<void*>(&ReachFpPaletteProbe),
+                    reinterpret_cast<void**>(&g_reachOrigFpPalette)) == MH_OK &&
                 MH_EnableHook(probeTarget) == MH_OK)
             {
-                g_reachCamera.specialBoneProbeTarget = probeTarget;
-                LOG("Reach FP probe installed: passive skeleton dump on "
-                    "special-bone composer at haloreach.dll+0x%llX",
+                g_reachCamera.fpPaletteProbeTarget = probeTarget;
+                LOG("Reach FP probe installed: passive palette dump on "
+                    "visible-palette consumer at haloreach.dll+0x%llX",
                     static_cast<unsigned long long>(
-                        kReachSpecialBoneComposerRva));
+                        kReachFpVisiblePaletteRva));
             }
             else
             {
-                if (g_reachOrigSpecialBoneProbe)
+                if (g_reachOrigFpPalette)
                 {
                     MH_RemoveHook(probeTarget);
-                    g_reachOrigSpecialBoneProbe = nullptr;
+                    g_reachOrigFpPalette = nullptr;
                 }
-                g_reachCamera.specialBoneProbeTarget = nullptr;
-                LOG("Reach FP probe: prologue/hook unavailable; skeleton dump "
+                g_reachCamera.fpPaletteProbeTarget = nullptr;
+                LOG("Reach FP probe: prologue/hook unavailable; palette dump "
                     "inactive (camera core unaffected)");
             }
         }

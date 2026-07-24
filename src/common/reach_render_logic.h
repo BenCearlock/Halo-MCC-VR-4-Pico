@@ -72,15 +72,18 @@ inline constexpr uintptr_t kReachMotionBlurMaxEntryRva = 0x00B3A1C8;
 inline constexpr uintptr_t kReachMotionBlurScaleEntryRva = 0x00B3A1E0;
 inline constexpr uintptr_t kReachMotionBlurMaxValueRva = 0x00B44600;
 inline constexpr uintptr_t kReachMotionBlurScaleValueRva = 0x00B44604;
-// First-person skeleton PROBE anchors (passive, log-only). The special-bone
-// composer prologue is byte-identical to the accepted Halo 3 composer and
-// matches exactly once in the pinned image; its own body (and the shared
-// compose loop at 0x213188) resolve the animation node table as
-// handle=[model+0x4C], blockBase=blockTable[handle>>28] at
-// kReachNodeRecordBlockTableRva, record i at blockBase+(handle+i*11)*4, with
-// the parent int16 at record+8 (element stride 11 words = 44 bytes). See
-// docs/REACH-SIGNATURE-EVIDENCE.md (first-person facts remain runtime-pending).
-inline constexpr uintptr_t kReachSpecialBoneComposerRva = 0x00213224;
+// First-person skeleton PROBE anchors (passive, log-only). 0x2B4EB0 is the final
+// visible first-person palette consumer (prologue byte-identical to the accepted
+// Halo 3 consumer; unique in the pinned image). Its own body decodes the render
+// model: modelHandle = *(u32*)(kReachRenderModelTableRva + tag*8 + 4);
+// blockBase = *(void**)(kReachNodeRecordBlockTableRva + (modelHandle>>28)*8);
+// descriptor = blockBase + modelHandle*4; node count = *(u32*)(descriptor+0x30)
+// clamped to 120. It builds dest[i] = root(arg2) ∘ source[boneMap[i]] over count
+// bones (BoneMatrix stride 0x34). See docs/REACH-SIGNATURE-EVIDENCE.md
+// (first-person facts remain runtime-pending). 0x213224 (special-bone composer)
+// proved to NOT run on the FP path in a headset test and was abandoned.
+inline constexpr uintptr_t kReachFpVisiblePaletteRva = 0x002B4EB0;
+inline constexpr uintptr_t kReachRenderModelTableRva = 0x00C1A600;
 inline constexpr uintptr_t kReachNodeRecordBlockTableRva = 0x04E39F20;
 // Retail apply_distortions divides the maximum by the scale at both sites.
 // The scale must therefore remain positive even when the maximum is zeroed.
