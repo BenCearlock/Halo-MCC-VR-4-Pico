@@ -33,6 +33,12 @@ MenuPointerHit IntersectMenuQuad(const float origin[3], const float direction[3]
 
 float BlendXInputMotors(uint16_t lowFrequencyMotor, uint16_t highFrequencyMotor);
 
+// The mod owns virtual slot 0 when no physical pad is present. A valid
+// XInputSetState request must therefore observe a connected controller even
+// when title capability policy suppresses the actual haptic effect.
+uint32_t NormalizeVirtualXInputSetStateResult(
+    uint32_t originalResult, uint32_t userIndex, bool hasVibrationRequest);
+
 // Menu/Start is always passed through as controller input, but only a proven
 // Halo 3 gameplay owner may use its edge to change VR pause presentation.
 bool PausePresentationInputAllowed(bool sharedGameplayOwner);

@@ -78,6 +78,12 @@ float BlendXInputMotors(uint16_t lowFrequencyMotor, uint16_t highFrequencyMotor)
     return blended > 1.0f ? 1.0f : blended;
 }
 
+uint32_t NormalizeVirtualXInputSetStateResult(
+    uint32_t originalResult, uint32_t userIndex, bool hasVibrationRequest)
+{
+    return userIndex == 0 && hasVibrationRequest ? 0u : originalResult;
+}
+
 bool PausePresentationInputAllowed(bool sharedGameplayOwner)
 {
     return sharedGameplayOwner;

@@ -9714,24 +9714,30 @@ bool Game_AllowsSharedGameplayFeatures()
 bool Game_AllowsSharedControllerInput()
 {
     const GameTitle activeTitle = TitleAdapter_GetActiveTitle();
+    const bool resolvedOwnerAllowsControllerInput =
+        activeTitle == GameTitle::Unknown &&
+        Game_HasTitleCapability(TitleCapability_ControllerInput);
 #if HALOMCCVR_EXPERIMENTAL_ODST_BRINGUP
     const bool cameraOnlyOwned = OdstCameraOnlyContext();
-    if (cameraOnlyOwned && activeTitle != GameTitle::Halo3ODST &&
-        activeTitle != GameTitle::Unknown)
-    {
-        return false;
-    }
-    if (activeTitle == GameTitle::Halo3ODST)
-    {
-        return TitleRegistry_HookPlan(GameTitle::Halo3ODST) ==
-            TitleHookPlan::OdstExperimentalCameraCore;
-    }
+    // Preserve the accepted cumulative frontend transport rule. MCC commonly
+    // keeps several title DLLs resident in its shell, so raw availability is
+    // Unknown and there is intentionally no camera owner/capability snapshot.
+    // Ordinary virtual-pad input must remain usable there. Camera-only teardown
+    // still wins unless a unique owner publishes ControllerInput, and explicit
+    // unsupported titles remain fail-closed.
+    const bool allowAmbiguousFrontend =
+        activeTitle == GameTitle::Unknown;
+    const bool allowCameraOnlyControllerInput =
+        TitleRegistry_HookPlan(GameTitle::Halo3ODST) ==
+        TitleHookPlan::OdstExperimentalCameraCore;
+#else
+    const bool cameraOnlyOwned = false;
+    const bool allowAmbiguousFrontend = false;
+    const bool allowCameraOnlyControllerInput = false;
 #endif
-    if (activeTitle == GameTitle::None || activeTitle == GameTitle::Halo3)
-        return true;
-    if (activeTitle != GameTitle::Unknown)
-        return false;
-    return Game_HasTitleCapability(TitleCapability_ControllerInput);
+    return TitleRegistry_AllowsSharedControllerInput(
+        activeTitle, resolvedOwnerAllowsControllerInput, cameraOnlyOwned,
+        allowAmbiguousFrontend, allowCameraOnlyControllerInput);
 }
 bool Game_HasTitleCapability(uint32_t requiredCapabilities)
 {

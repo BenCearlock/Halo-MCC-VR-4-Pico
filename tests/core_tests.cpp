@@ -1095,12 +1095,21 @@ int main()
         Check(TitleRegistry_AllowsSharedControllerInput(
                   GameTitle::Unknown, false, false, true, false),
             "the private frontend exception retains controller input");
+        Check(TitleRegistry_AllowsSharedControllerInput(
+                  GameTitle::Unknown, true, false, false, false),
+            "a resolved owner's controller capability admits ambiguous input");
         Check(!TitleRegistry_AllowsSharedControllerInput(
                   GameTitle::Unknown, false, false, false, false),
             "the normal build keeps ambiguous title input fail-closed");
         Check(TitleRegistry_AllowsSharedControllerInput(
+                  GameTitle::None, false, false, false, false),
+            "the unambiguous MCC shell retains ordinary controller input");
+        Check(TitleRegistry_AllowsSharedControllerInput(
                   GameTitle::Halo3ODST, false, true, false, true),
             "private ODST camera ownership permits ordinary gamepad input");
+        Check(TitleRegistry_AllowsSharedControllerInput(
+                  GameTitle::Halo3ODST, false, false, false, true),
+            "private ODST admits controller input before camera ownership");
         Check(!TitleRegistry_AllowsSharedControllerInput(
                   GameTitle::Halo3ODST, false, true, false, false),
             "public ODST camera ownership keeps controller input stock");
@@ -1110,6 +1119,9 @@ int main()
         Check(!TitleRegistry_AllowsSharedControllerInput(
                   GameTitle::Unknown, false, true, true, true),
             "owned ODST teardown beats resident-module ambiguity");
+        Check(TitleRegistry_AllowsSharedControllerInput(
+                  GameTitle::Unknown, true, true, true, true),
+            "a unique ambiguous owner may retain ordinary controller input");
         Check(!TitleRegistry_AllowsSharedGameplayFeatures(
                   GameTitle::Halo3, true, true),
             "private camera ownership overrides a stale Halo 3 signal");
@@ -1759,6 +1771,17 @@ int main()
     Check(lowOnly > highOnly && highOnly > 0.0f,
         "Both motor bands contribute to the blended haptic amplitude");
 
+    Check(NormalizeVirtualXInputSetStateResult(
+              ERROR_DEVICE_NOT_CONNECTED, 0, true) == ERROR_SUCCESS,
+        "Virtual slot 0 stays connected when title policy suppresses haptics");
+    Check(NormalizeVirtualXInputSetStateResult(
+              ERROR_DEVICE_NOT_CONNECTED, 1, true) ==
+              ERROR_DEVICE_NOT_CONNECTED,
+        "Foreign XInput slots preserve the underlying SetState result");
+    Check(NormalizeVirtualXInputSetStateResult(
+              ERROR_DEVICE_NOT_CONNECTED, 0, false) ==
+              ERROR_DEVICE_NOT_CONNECTED,
+        "An invalid vibration request preserves the underlying SetState result");
     if (g_failures == 0)
         std::cout << "HaloMCCVR core tests passed\n";
     return g_failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;

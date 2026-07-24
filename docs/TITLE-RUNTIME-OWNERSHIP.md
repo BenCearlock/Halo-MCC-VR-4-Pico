@@ -20,6 +20,30 @@ the runtime owner only when its currently installed, non-teardown lifecycle
 generation publishes the one unique fresh camera heartbeat. Zero or multiple
 qualifying titles expose no owner and no capabilities.
 
+## Rejected first package and retained fix
+
+The exact `38c480a` package (`halo3xr.dll` SHA-256
+`C6B49BD0F94E2F2366FDEBDC71D8359123A4FBA2035B381A5BF3478B9952B290`)
+was rejected during its first Halo 3 headset regression. Gameplay controller
+input, stereo, 6DOF, native HUD/weapon presentation, pause, resume, and title
+exit all ran, but ordinary VR-pad input stopped after Save & Quit while MCC
+held a multi-resident `Unknown` module set in the frontend.
+
+The failure did not invalidate generation-tagged ownership. The resolver
+correctly returned zero owner and zero capabilities after the module-set epoch
+changed; the controller admission call site incorrectly treated that as a
+reason to suppress title-independent frontend input. The retained fix restores
+the accepted 0.2.2 rule only for ordinary controller transport in `None` or
+multi-resident `Unknown` frontend/transition states. A unique owner may also
+publish `ControllerInput`. Explicit Reach, CE, H2, and H4 states remain stock,
+and stereo, aim, HUD, IK, room scale, runtime modes, and haptics receive no
+fallback capability. The fabricated XInput slot also remains connected across
+gated haptic transitions; stale haptic amplitude is still cleared.
+
+The installed test files were restored from the verified official 0.2.2 ZIP.
+The source foundation was retained and corrected for a new uniquely hashed
+replacement candidate.
+
 ## State and transition rules
 
 - The fixed title table tracks the exact loaded-module mask and base address.

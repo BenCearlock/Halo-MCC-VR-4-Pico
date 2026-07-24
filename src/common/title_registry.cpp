@@ -104,16 +104,19 @@ bool TitleRegistry_AllowsSharedGameplayFeatures(
 }
 
 bool TitleRegistry_AllowsSharedControllerInput(
-    GameTitle activeTitle, bool halo3CameraOwned, bool cameraOnlyOwned,
+    GameTitle activeTitle, bool resolvedOwnerAllowsControllerInput,
+    bool cameraOnlyOwned,
     bool allowAmbiguousFrontend, bool allowCameraOnlyControllerInput)
 {
+    if (activeTitle == GameTitle::Unknown)
+        return resolvedOwnerAllowsControllerInput ||
+            (allowAmbiguousFrontend && !cameraOnlyOwned);
+    if (activeTitle == GameTitle::Halo3ODST)
+        return allowCameraOnlyControllerInput;
     if (cameraOnlyOwned)
-        return allowCameraOnlyControllerInput &&
-            activeTitle == GameTitle::Halo3ODST;
-    if (activeTitle == GameTitle::Unknown && allowAmbiguousFrontend)
-        return true;
-    return TitleRegistry_AllowsSharedGameplayFeatures(
-        activeTitle, halo3CameraOwned, false);
+        return false;
+    return activeTitle == GameTitle::None ||
+        activeTitle == GameTitle::Halo3;
 }
 
 bool TitleRegistry_Halo3CameraOwnsAmbiguousState(

@@ -367,18 +367,22 @@ namespace
     {
         if (user != 0 || !vibration)
             return result;
+        const DWORD connectedResult = static_cast<DWORD>(
+            NormalizeVirtualXInputSetStateResult(result, user, true));
         if (!Game_HasTitleCapability(TitleCapability_Haptics))
         {
             // A title/arm transition can close the capability gate before the
             // game's zero-motor update arrives. Clear our retained request on
             // every gated call so an earlier rumble cannot resume when the
-            // next title becomes armed.
+            // next title becomes armed. Capability policy suppresses only the
+            // effect: slot 0 remains the same connected virtual controller
+            // exposed by GetState/GetCapabilities.
             VR_SetGameHaptics(0.0f);
-            return result;
+            return connectedResult;
         }
         VR_SetGameHaptics(BlendXInputMotors(
             vibration->wLeftMotorSpeed, vibration->wRightMotorSpeed));
-        return ERROR_SUCCESS;
+        return connectedResult;
     }
 
     template <int Slot>
