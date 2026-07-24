@@ -10412,14 +10412,34 @@ namespace
         }
         if (!base || !source || !boneMap)
             return;
+        // Only dump while the Reach camera is armed (the FP path also runs once
+        // pre-arm with garbage) and rate-limit the dump on its OWN timer so it
+        // re-emits periodically instead of being suppressed after a stale call.
+        if (!g_reachCamera.armed.load(std::memory_order_acquire))
+            return;
+        static std::atomic<DWORD> lastDumpMs{0};
+        if (now - lastDumpMs.load(std::memory_order_relaxed) < 1000)
+            return;
+        lastDumpMs.store(now, std::memory_order_relaxed);
+        static std::atomic<int> dumped{0};
+        if (dumped.fetch_add(1, std::memory_order_relaxed) >= 16)
+            return;
 
         // Resolve the render model exactly as 0x2B4EB0 does, to read the node
-        // count: modelHandle = table[tag].+4; blockBase = blockTable[hi];
-        // count = *(u32)(blockBase + modelHandle*4 + 0x30) clamped to 120.
+        // count. NOTE the leading dereference: the function loads a GLOBAL
+        // POINTER at kReachRenderModelTableRva first (mov rax,[rip+..]) and only
+        // then indexes it -- omitting that deref is what produced modelHandle=
+        // FFFFFFFF in probe v3. modelHandle = (*table)[tag].+4;
+        // blockBase = blockTable[hi]; count = *(u32)(blockBase+modelHandle*4+0x30).
+        const uint8_t* modelTable = nullptr;
+        if (!SafeReadBytes(reinterpret_cast<const void*>(
+                    base + kReachRenderModelTableRva),
+                &modelTable, sizeof(modelTable)) ||
+            !modelTable)
+            return;
         uint32_t modelHandle = 0;
-        if (!SafeReadBytes(reinterpret_cast<const uint8_t*>(
-                    base + kReachRenderModelTableRva) +
-                    static_cast<size_t>(tag) * 8u + 4u,
+        if (!SafeReadBytes(
+                modelTable + static_cast<size_t>(tag) * 8u + 4u,
                 &modelHandle, sizeof(modelHandle)))
             return;
         const uint8_t* blockBase = nullptr;
@@ -10438,23 +10458,30 @@ namespace
         if (count < 0) count = 0;
         if (count > 120) count = 120;
 
-        // Dump each distinct model tag once (cap total). Lists, per output bone,
-        // the boneMap source index and that source bone's translation + scale so
-        // the hand/gun bones are identifiable by count and geometry.
-        static std::atomic<uint32_t> lastTag{0xFFFFFFFFu};
-        if (lastTag.exchange(tag, std::memory_order_relaxed) == tag)
-            return;
-        static std::atomic<int> dumped{0};
-        if (dumped.fetch_add(1, std::memory_order_relaxed) >= 8)
-            return;
-
-        float rootT[3] = {0, 0, 0};
+        // Dump the render root's FULL transform (scale, 3x3 rotation, xlate).
+        // This is the coordinate-space ground truth for the IK candidate: the
+        // palette fn premultiplies EVERY first-person bone by this one matrix
+        // (destination[i] = root (X) source[boneMap[i]]), so substituting root
+        // with a controller pose rigidly carries the whole gun+arms assembly.
+        // Then, per output bone, the boneMap source index + that source bone's
+        // translation + scale so hand/gun bones are identifiable by geometry.
+        BoneMatrix rootM{};
         const bool haveRoot =
-            root && SafeReadBytes(root->translation, rootT, sizeof(rootT));
-        LOG("REACH FPPROBE dump: tag=%u modelHandle=%08X count=%d haveRoot=%d "
-            "rootT=(%.3f,%.3f,%.3f)",
+            root && SafeReadBytes(root, &rootM, sizeof(rootM));
+        LOG("REACH FPPROBE dump: tag=%u modelHandle=%08X count=%d haveRoot=%d",
             static_cast<unsigned>(tag), modelHandle, count,
-            static_cast<int>(haveRoot), rootT[0], rootT[1], rootT[2]);
+            static_cast<int>(haveRoot));
+        if (haveRoot)
+        {
+            LOG("REACH FPPROBE root: sc=%.4f T=(%.3f,%.3f,%.3f)",
+                rootM.scale, rootM.translation[0], rootM.translation[1],
+                rootM.translation[2]);
+            LOG("REACH FPPROBE root: R0=(%.4f,%.4f,%.4f) R1=(%.4f,%.4f,%.4f) "
+                "R2=(%.4f,%.4f,%.4f)",
+                rootM.rotation[0], rootM.rotation[1], rootM.rotation[2],
+                rootM.rotation[3], rootM.rotation[4], rootM.rotation[5],
+                rootM.rotation[6], rootM.rotation[7], rootM.rotation[8]);
+        }
         for (int i = 0; i < count && i < 48; ++i)
         {
             int32_t src = -1;
