@@ -150,6 +150,15 @@ namespace
     std::atomic<float> g_aimFwdX{1}, g_aimFwdY{0}, g_aimFwdZ{0};
     std::atomic<bool> g_aimSeen{false};
 
+    // Reach has no controller-aim body-heading contract yet, so its stock
+    // movement heading is the yaw of the pristine per-frame compact camera (the
+    // engine's own facing), published from the Reach visibility build. Head-
+    // relative locomotion rotates the move stick by (gaze - this) so forward
+    // walks where the headset looks. This is the Reach analog of g_aimFwd; it is
+    // NOT published as aim and writes nothing back into the game.
+    std::atomic<float> g_reachStockHeadingYaw{0.0f};
+    std::atomic<bool> g_reachMoveHeadingValid{false};
+
     // Yaw is relative (the game's heading is arbitrary, so we recenter it to
     // the head). Pitch is absolute (head-level == game-level), which avoids
     // capturing a bad reference on recenter.
@@ -9952,6 +9961,23 @@ namespace
         {
             return false;
         }
+        // Publish the game's own facing yaw from the pristine stock camera
+        // forward (offset 0x0C, same convention as the recenter reference at
+        // g_gameYawRef = atan2f(fwd[1], fwd[0])) BEFORE the head transform
+        // overwrites it. Head-relative locomotion reads this to rotate the move
+        // stick to gaze. Read-only: this does not modify stockCompact.
+        {
+            const float* stockFwd =
+                reinterpret_cast<const float*>(stockCompact + 0x0C);
+            const float sfx = stockFwd[0], sfy = stockFwd[1];
+            if (isfinite(sfx) && isfinite(sfy) &&
+                (sfx * sfx + sfy * sfy) > 1e-8f)
+            {
+                g_reachStockHeadingYaw.store(atan2f(sfy, sfx),
+                                             std::memory_order_relaxed);
+                g_reachMoveHeadingValid.store(true, std::memory_order_release);
+            }
+        }
         memcpy(headCenter, stockCompact, kReachCompactCameraBytes);
         ApplyVrTurn(tracking.pad);
         if (!ReachApplyHeadLook(headCenter, tracking))
@@ -12508,6 +12534,37 @@ bool Game_ComputeAimStick(float& outRx, float& outRy)
 
 void Game_MapMoveStick(float& mx, float& my)
 {
+    if (TitleAdapter_GetActiveTitle() == GameTitle::HaloReach)
+    {
+        // Reach has no controller aim: its stock movement heading is frozen (the
+        // right stick is suppressed and nothing steers the sim camera), while the
+        // render view follows the head + VR turn. Rotate the move vector by
+        // (gaze - stock heading) so forward walks where you look. This mirrors the
+        // Halo 3 rotation below with aimYaw sourced from the published stock
+        // camera facing instead of g_aimFwd. Self-neutralizing: once a real Reach
+        // body-heading integration lands and the stock heading tracks gaze, the
+        // delta goes to zero and this becomes a no-op.
+        if (!g_enabled.load() || !g_vrAim.load() ||
+            !g_reachMoveHeadingValid.load(std::memory_order_acquire))
+            return;
+        float q[4], p[3];
+        if (!VR_GetHeadPose(q, p))
+            return;
+        const float x = q[0], y = q[1], z = q[2], w = q[3];
+        const float fx = -2.0f * (w * y + x * z);
+        const float fz = -(1.0f - 2.0f * (x * x + y * y));
+        const float hy = atan2f(fx, -fz);
+        const float gaze = g_gameYawRef + g_yawSign.load() * WrapPi(hy - g_headYawRef);
+        const float stockYaw =
+            g_reachStockHeadingYaw.load(std::memory_order_relaxed);
+        const float delta = WrapPi(gaze - stockYaw);
+        const float c = cosf(delta), s = sinf(delta);
+        const float nx = mx * c - my * s;
+        const float ny = mx * s + my * c;
+        mx = nx;
+        my = ny;
+        return;
+    }
     if (!Game_HasTitleCapability(TitleCapability_ControllerAim))
         return;
     // The game moves relative to its aim heading, which VR aim points at the
