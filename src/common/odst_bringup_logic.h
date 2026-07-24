@@ -335,15 +335,21 @@ private:
 
 // Native pause is a safe pre-shutdown boundary for the private camera hooks.
 // After removing them, do not reinstall on a stale pause-menu camera: require
-// the native pause byte to clear and the ordinary camera to remain live for the
-// same full stability interval used by initial auto-arm.
+// the native pause byte to clear, the ordinary camera to be seen live at least
+// once, and a short settle window (kOdstPauseRearmStableMs) to elapse. The gate
+// is deliberately flicker-tolerant: with the copy hook removed the live camera
+// array is sampled directly and reads ready/not-ready frame-to-frame, so ONLY a
+// genuine re-pause restarts the window -- a momentary not-ready sample does not
+// (headset log 2026-07-24: a continuous-ready reset stalled the rearm for tens
+// of seconds). Stage 2's fresh-camera arm debounce still proves real stability
+// before stereo re-engages, so a slightly-early reinstall cannot arm on garbage.
 class OdstPauseRearmGate
 {
 public:
     void Block()
     {
         m_blocked = true;
-        m_readySince = 0;
+        m_pauseClearedSince = 0;
         m_readyObserved = false;
     }
 
@@ -353,28 +359,32 @@ public:
         if (!titleActive)
         {
             m_blocked = false;
-            m_readySince = 0;
+            m_pauseClearedSince = 0;
             m_readyObserved = false;
             return;
         }
         if (!m_blocked)
             return;
-        if (nativePaused || !cameraActive)
+        // A genuine (re-)pause is the ONLY event that restarts the settle
+        // window. A single not-ready sample from the live, un-hooked camera
+        // array is flicker, not a re-pause, and must not reset progress.
+        if (nativePaused)
         {
-            m_readySince = 0;
+            m_pauseClearedSince = 0;
             m_readyObserved = false;
             return;
         }
-        if (!m_readyObserved)
-        {
-            m_readySince = now;
+        // Native pause has cleared: start the settle window on the first tick,
+        // and latch that the ordinary camera has been seen live at least once.
+        if (!m_pauseClearedSince)
+            m_pauseClearedSince = now;
+        if (cameraActive)
             m_readyObserved = true;
-            return;
-        }
-        if (now >= m_readySince && now - m_readySince > kOdstPauseRearmStableMs)
+        if (m_readyObserved && now >= m_pauseClearedSince &&
+            now - m_pauseClearedSince > kOdstPauseRearmStableMs)
         {
             m_blocked = false;
-            m_readySince = 0;
+            m_pauseClearedSince = 0;
             m_readyObserved = false;
         }
     }
@@ -384,6 +394,6 @@ public:
 
 private:
     bool m_blocked = false;
-    uint64_t m_readySince = 0;
+    uint64_t m_pauseClearedSince = 0;
     bool m_readyObserved = false;
 };

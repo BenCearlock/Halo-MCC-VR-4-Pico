@@ -2350,15 +2350,32 @@ int main()
         pauseGate.Observe(201 + pauseStable, true, false, true);
         Check(pauseGate.CanAttemptInstall(),
             "stable gameplay after pause exit permits camera-hook reinstall");
+        // Flicker tolerance: with the copy hook removed the live camera array
+        // reads ready/not-ready frame-to-frame. A momentary not-ready sample
+        // must NOT restart the settle window (a continuous-ready reset stalled
+        // the post-pause rearm for tens of seconds in the headset log).
         pauseGate.Block();
-        pauseGate.Observe(5000, true, false, true);
-        pauseGate.Observe(5100, true, false, false);
-        pauseGate.Observe(5100 + pauseStable, true, false, true);
+        pauseGate.Observe(5000, true, false, true);   // pause cleared, camera seen live
+        pauseGate.Observe(5100, true, false, false);  // momentary not-ready flicker
+        pauseGate.Observe(5000 + pauseStable, true, false, false);
         Check(!pauseGate.CanAttemptInstall(),
-            "camera loss resets the pause-exit stability interval");
-        pauseGate.Observe(5101 + 2 * pauseStable, true, false, true);
+            "a not-ready flicker does not release the gate before the window");
+        pauseGate.Observe(5001 + pauseStable, true, false, true);
         Check(pauseGate.CanAttemptInstall(),
-            "a new continuous camera interval clears the pause gate");
+            "a momentary flicker no longer restarts the pause-exit window");
+        // A genuine re-pause, however, does restart the window from its exit.
+        pauseGate.Block();
+        pauseGate.Observe(6000, true, false, true);   // window starts at 6000
+        pauseGate.Observe(6100, true, true, true);    // re-pause before it elapses
+        Check(!pauseGate.CanAttemptInstall(),
+            "a re-pause during the settle window blocks reinstall again");
+        pauseGate.Observe(6200, true, false, true);   // window restarts at 6200
+        pauseGate.Observe(6200 + pauseStable, true, false, true);
+        Check(!pauseGate.CanAttemptInstall(),
+            "the re-pause restarted the settle window from its exit");
+        pauseGate.Observe(6201 + pauseStable, true, false, true);
+        Check(pauseGate.CanAttemptInstall(),
+            "a full settle window after the last pause exit clears the gate");
         pauseGate.Block();
         pauseGate.Observe(9000, false, false, false);
         Check(pauseGate.CanAttemptInstall(),
