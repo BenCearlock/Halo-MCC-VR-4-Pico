@@ -10389,83 +10389,74 @@ namespace
         return 1;
     }
 
-    void ReachSpecialBoneProbeDump(const void* model)
+    void ReachSpecialBoneProbeDump(const void* model, int firstSpecial,
+                                   int secondSpecial)
     {
-        if (!model || !g_reachCamera.armed.load(std::memory_order_acquire))
-            return;
         const uintptr_t base = g_reachCamera.base;
-        if (!base)
-            return;
-        // Throttle the whole read/dump path so the game-thread composer stays
-        // light: at most one attempt every 500 ms.
-        static std::atomic<DWORD> lastAttemptMs{0};
         const DWORD now = GetTickCount();
-        if (now - lastAttemptMs.load(std::memory_order_relaxed) < 500)
-            return;
-        lastAttemptMs.store(now, std::memory_order_relaxed);
-
+        // Entry diagnostic (rate-limited to 1 s, NOT gated on armed or record
+        // validity): proves whether the composer runs at all during Reach FP
+        // gameplay, and with which node-table handle. A silent v1 probe could
+        // not distinguish "never called" from "called but bad reads".
+        static std::atomic<DWORD> lastEntryMs{0};
+        const bool logEntry =
+            now - lastEntryMs.load(std::memory_order_relaxed) >= 1000;
         uint32_t handle = 0;
-        if (!SafeReadBytes(reinterpret_cast<const uint8_t*>(model) + 0x4C,
-                           &handle, sizeof(handle)))
+        const bool handleOk = model && base &&
+            SafeReadBytes(reinterpret_cast<const uint8_t*>(model) + 0x4C,
+                          &handle, sizeof(handle));
+        if (logEntry)
+        {
+            lastEntryMs.store(now, std::memory_order_relaxed);
+            LOG("REACH FPPROBE entry: armed=%d model=%p handleOk=%d handle=%08X "
+                "special=%d/%d",
+                static_cast<int>(g_reachCamera.armed.load(
+                    std::memory_order_acquire)),
+                model, static_cast<int>(handleOk), handle, firstSpecial,
+                secondSpecial);
+        }
+        if (!handleOk || !base)
             return;
         const uint8_t* tableSlot =
             reinterpret_cast<const uint8_t*>(base + kReachNodeRecordBlockTableRva) +
             static_cast<size_t>(handle >> 28) * 8u;
         const uint8_t* blockBase = nullptr;
-        if (!SafeReadBytes(tableSlot, &blockBase, sizeof(blockBase)) || !blockBase)
-            return;
+        const bool blockOk =
+            SafeReadBytes(tableSlot, &blockBase, sizeof(blockBase)) && blockBase;
 
-        uint32_t ids[64];
-        int parents[64];
-        int count = 0;
-        for (int i = 0; i < 64; ++i)
+        // Dump each distinct node table once (dedupe by handle, cap total).
+        // RAW and validation-free so the true record layout is visible even if
+        // the assumed id@+0 / parent@+8 offsets are wrong for Reach: four
+        // candidate fields per record with rec = blockBase+(handle+i*11)*4.
+        static std::atomic<uint32_t> lastHandle{0xFFFFFFFFu};
+        if (lastHandle.exchange(handle, std::memory_order_relaxed) == handle)
+            return;
+        static std::atomic<int> dumped{0};
+        if (dumped.fetch_add(1, std::memory_order_relaxed) >= 12)
+            return;
+        LOG("REACH FPPROBE dump: handle=%08X blockOk=%d blockBase=%p "
+            "(rec=blockBase+(handle+i*11)*4):",
+            handle, static_cast<int>(blockOk), blockBase);
+        if (!blockOk)
+            return;
+        for (int i = 0; i < 24; ++i)
         {
             const uint8_t* rec = blockBase +
                 static_cast<size_t>(handle + static_cast<uint32_t>(i) * 11u) * 4u;
-            uint32_t id = 0;
-            int16_t parent = 0;
-            if (!SafeReadBytes(rec, &id, sizeof(id)) ||
-                !SafeReadBytes(rec + 8, &parent, sizeof(parent)))
-                break;
-            if (parent < -1 || parent >= 64)
-                break;
-            ids[i] = id;
-            parents[i] = parent;
-            count = i + 1;
-        }
-        if (count < 3)
-            return;
-
-        // Dedupe by skeleton identity and cap total distinct dumps so a busy
-        // scene cannot spam the log.
-        uint64_t key = static_cast<uint64_t>(count);
-        for (int i = 0; i < count; ++i)
-            key = key * 131u + ids[i] * 31u + static_cast<uint32_t>(parents[i] + 1);
-        static std::atomic<uint64_t> lastKey{0};
-        if (lastKey.exchange(key, std::memory_order_relaxed) == key)
-            return;
-        static std::atomic<int> dumped{0};
-        if (dumped.fetch_add(1, std::memory_order_relaxed) >= 16)
-            return;
-
-        LOG("REACH FPPROBE: skeleton handle=%08X count=%d (index=stringId/parent):",
-            handle, count);
-        char lineBuf[512];
-        int pos = 0, from = 0;
-        for (int i = 0; i < count; ++i)
-        {
-            const int n = snprintf(lineBuf + pos, sizeof(lineBuf) - pos,
-                                   "%d=%X/%d ", i, ids[i], parents[i]);
-            if (n < 0 || pos + n >= static_cast<int>(sizeof(lineBuf)) - 1)
+            uint32_t w0 = 0, w4 = 0;
+            int16_t h8 = 0, hA = 0;
+            const bool ok = SafeReadBytes(rec, &w0, sizeof(w0)) &&
+                SafeReadBytes(rec + 4, &w4, sizeof(w4)) &&
+                SafeReadBytes(rec + 8, &h8, sizeof(h8)) &&
+                SafeReadBytes(rec + 10, &hA, sizeof(hA));
+            if (!ok)
             {
-                lineBuf[pos] = 0;
-                LOG("REACH FPPROBE: [%d..%d] %s", from, i - 1, lineBuf);
-                pos = 0; from = i; --i; continue;
+                LOG("REACH FPPROBE dump: rec[%d] unreadable @ %p", i, rec);
+                break;
             }
-            pos += n;
+            LOG("REACH FPPROBE dump: rec[%d] +0=%08X +4=%08X +8w=%d +Aw=%d",
+                i, w0, w4, h8, hA);
         }
-        lineBuf[pos] = 0;
-        LOG("REACH FPPROBE: [%d..%d] %s", from, count - 1, lineBuf);
     }
 
     __declspec(noinline) void __fastcall ReachSpecialBoneComposerProbe(
@@ -10477,7 +10468,7 @@ namespace
         {
             g_reachOrigSpecialBoneProbe(model, output, source, defaults,
                                         firstSpecial, secondSpecial);
-            ReachSpecialBoneProbeDump(model);
+            ReachSpecialBoneProbeDump(model, firstSpecial, secondSpecial);
         }
         __finally
         {
