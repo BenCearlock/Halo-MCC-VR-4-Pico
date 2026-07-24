@@ -462,6 +462,11 @@ namespace
         changed |= ImGui::Checkbox("Motion blur", &g_config.motion_blur);
         ImGui::TextDisabled("Off is the VR standard. In stereo the game's blur is fed the wrong\n"
                             "previous frame and smears bright edges into repeating echoes.");
+        changed |= ImGui::SliderFloat("Draw distance", &g_config.draw_distance,
+                                      kDrawDistanceMin, kDrawDistanceMax, "%.2f");
+        ImGui::TextDisabled("1.00 = full stock draw distance. Lower culls distant scenery earlier\n"
+                            "to free CPU for smoother stereo (helps weaker machines). Applies live\n"
+                            "to all three games; VR is CPU-limited so the picture stays sharp.");
 
         ImGui::EndTabItem();
         }

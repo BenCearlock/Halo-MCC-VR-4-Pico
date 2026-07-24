@@ -58,6 +58,8 @@ static void Clamp()
     // to the six installer tiers, so any custom value was silently rounded.)
     g_config.resolution_scale = std::clamp(g_config.resolution_scale,
                                            kResolutionScaleMin, kResolutionScaleMax);
+    g_config.draw_distance = std::clamp(g_config.draw_distance,
+                                        kDrawDistanceMin, kDrawDistanceMax);
     g_config.hud_size = std::clamp(g_config.hud_size, 0.30f, 1.00f);
     g_config.hud_aspect = std::clamp(g_config.hud_aspect, kHudAspectMin, kHudAspectMax);
     g_config.hud_curvature = std::clamp(g_config.hud_curvature,
@@ -216,6 +218,8 @@ void ConfigLoad(const wchar_t* path)
             g_config.game_brightness = (float)atof(val);
         else if (!strcmp(key, "resolution_scale"))
             g_config.resolution_scale = (float)atof(val);
+        else if (!strcmp(key, "draw_distance"))
+            g_config.draw_distance = (float)atof(val);
         else if (!strcmp(key, "hud_size"))
             g_config.hud_size = (float)atof(val);
         else if (!strcmp(key, "hud_aspect"))
@@ -489,6 +493,14 @@ void ConfigSave()
     fprintf(f, "# (default %.2f, range %.2f to %.2f)\n",
             d.resolution_scale, kResolutionScaleMin, kResolutionScaleMax);
     fprintf(f, "resolution_scale = %.2f\n\n", g_config.resolution_scale);
+    fprintf(f, "# Draw distance: how far the game renders geometry, as a fraction of\n");
+    fprintf(f, "# stock. Applies live to all three games (Halo 3, ODST, Reach). 1.00 =\n");
+    fprintf(f, "# full stock draw distance; lower culls distant scenery earlier to free\n");
+    fprintf(f, "# CPU and smooth stereo judder on weaker machines. VR is usually CPU-\n");
+    fprintf(f, "# limited, not GPU, so the picture stays sharp. No restart needed.\n");
+    fprintf(f, "# (default %.2f, range %.2f to %.2f)\n",
+            d.draw_distance, kDrawDistanceMin, kDrawDistanceMax);
+    fprintf(f, "draw_distance = %.2f\n\n", g_config.draw_distance);
     fprintf(f, "# HUD size: fraction of the view the HUD lays out into. Smaller pulls\n");
     fprintf(f, "# shields/radar/ammo toward the center so both VR eyes see them.\n");
     fprintf(f, "# (default %.2f = calibrated stock layout, range 0.30 to 1.00)\n", d.hud_size);

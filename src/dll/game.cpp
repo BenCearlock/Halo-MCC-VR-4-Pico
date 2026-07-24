@@ -950,6 +950,56 @@ namespace
             g_reduceCinematicFovApplied.store(false, std::memory_order_release);
     }
 
+    // Shared draw-distance trim for all three titles. The engine's render
+    // far-clip plane is the debug var "render_far_clip_distance" (stock 10240
+    // world units), the same name in Halo 3, ODST, and Reach. Trimming it makes
+    // the engine cull distant geometry earlier -> fewer draw calls -> CPU
+    // headroom in sequential stereo, where the render thread (not the GPU) is
+    // the limit. Resolved BY NAME (no RVAs), cached per module so the whole-
+    // module name scan runs only when the title/instance changes, and re-
+    // asserted from the 20 ms worker so it survives level and tag loads.
+    // draw_distance 1.00 writes the captured stock value back, so the default
+    // trims nothing. Fail-open: unresolved or an insane stock value is a no-op.
+    struct DrawDistanceControl
+    {
+        float* slot = nullptr;
+        float stock = 0.0f;
+        uintptr_t base = 0;
+        uint32_t generation = 0;
+    };
+    DrawDistanceControl g_drawDistance;
+
+    void Game_ApplyDrawDistance(
+        uintptr_t base, size_t size, uint32_t generation)
+    {
+        if (!base || !size)
+            return;
+        if (!g_drawDistance.slot || g_drawDistance.base != base ||
+            g_drawDistance.generation != generation)
+        {
+            // Module changed: re-resolve exactly once. This whole-module name
+            // scan does NOT run every tick -- only on a title/instance change.
+            g_drawDistance = {};
+            float* slot =
+                FindDebugVarFloat(base, size, "render_far_clip_distance");
+            float stock = 0.0f;
+            if (!slot || !SafeReadFloat(slot, &stock) ||
+                !(stock > 1.0f) || !isfinite(stock))
+                return; // leave unresolved; retry on a later tick
+            g_drawDistance.slot = slot;
+            g_drawDistance.stock = stock;
+            g_drawDistance.base = base;
+            g_drawDistance.generation = generation;
+        }
+        float scale = g_config.draw_distance;
+        if (scale < kDrawDistanceMin) scale = kDrawDistanceMin;
+        if (scale > kDrawDistanceMax) scale = kDrawDistanceMax;
+        const float target = g_drawDistance.stock * scale;
+        float current = 0.0f;
+        if (SafeReadFloat(g_drawDistance.slot, &current) && current != target)
+            SafeWriteFloat(g_drawDistance.slot, target);
+    }
+
     void ResolveCinematicFovVar(uintptr_t base, size_t size)
     {
         auto* slot = reinterpret_cast<uint8_t*>(
@@ -11192,6 +11242,19 @@ namespace
                 TitleAdapter_PollLoaded(pollNow);
             const TitleAdapterRuntimeSnapshot runtime =
                 RuntimeSnapshot(pollNow);
+            // Draw-distance trim for whatever title currently owns the frame.
+            // Game_ApplyDrawDistance caches by module, so this is a cheap
+            // per-tick reassert of the user's scaled render far-clip (survives
+            // level/tag loads), not a per-tick whole-module scan.
+            if (activeTitle)
+            {
+                uintptr_t ddBase = 0;
+                size_t ddSize = 0;
+                if (sig::ModuleRange(activeTitle->moduleName, ddBase, ddSize))
+                    Game_ApplyDrawDistance(
+                        ddBase, ddSize,
+                        TitleAdapter_GetGeneration(activeTitle->title));
+            }
 #if HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE
             {
                 const bool soleReachTitle = activeTitle &&

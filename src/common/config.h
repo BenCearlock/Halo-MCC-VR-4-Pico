@@ -14,6 +14,10 @@ inline constexpr int kNativeRenderWidth = 2912;
 inline constexpr int kNativeRenderHeight = 2100;
 inline constexpr float kResolutionScaleMin = 0.35f;
 inline constexpr float kResolutionScaleMax = 2.00f;
+// Draw-distance trim: fraction of the engine's stock render far-clip distance.
+// 1.00 = full stock draw distance; the floor still keeps distant landmarks.
+inline constexpr float kDrawDistanceMin = 0.25f;
+inline constexpr float kDrawDistanceMax = 1.00f;
 inline constexpr float kHudCurvatureMin = 0.00f;
 inline constexpr float kHudCurvatureMax = 1.00f;
 inline constexpr float kHudAspectMin = 0.50f;
@@ -125,6 +129,13 @@ struct Config
     // high 1.00, ultra 1.10, keith david 1.50) are only F1 shortcuts.
     // The OpenXR projection remains at the headset's full size.
     float resolution_scale = 1.0f;
+
+    // Render draw-distance trim, applied live to every title's shared
+    // render_far_clip_distance debug var (stock 10240 world units), resolved by
+    // name — no hardcoded addresses. 1.00 = full stock draw distance (no
+    // change); lower culls distant geometry earlier for CPU headroom in stereo.
+    // Halo 3, ODST, and Reach all honor it. Takes effect immediately, no restart.
+    float draw_distance = 1.0f;
 
     // (The 0x2EEFC8 placement-slider experiment is retired: measured 2026-07-19,
     // that struct holds colors/alpha/animation only — Halo's HUD has no position
