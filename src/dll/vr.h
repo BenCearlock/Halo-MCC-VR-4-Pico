@@ -176,6 +176,31 @@ struct VrPadState
     bool clickL = false, clickR = false, menu = false;
 };
 void VR_GetPadState(VrPadState& out);
+#if HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE
+// One immutable, exact-serial OpenXR tracking snapshot for Reach's complete
+// outer visibility + inner stereo transaction. The reader is lock-free and
+// fails immediately if publication is changing; render hooks never wait on the
+// controller/head-pose critical section.
+struct ReachVrEyeSnapshot
+{
+    float position[3]{};
+    float orientation[4]{0.0f, 0.0f, 0.0f, 1.0f};
+    float fov[4]{}; // left, right, up, down
+};
+
+struct ReachVrRenderSnapshot
+{
+    uint64_t preparedSerial = 0;
+    float headOrientation[4]{0.0f, 0.0f, 0.0f, 1.0f};
+    float headPosition[3]{};
+    VrPadState pad{};
+    ReachVrEyeSnapshot eyes[2]{};
+};
+
+bool VR_ReachGetRenderSnapshot(
+    const ReachPreparedFrameToken& prepared,
+    ReachVrRenderSnapshot& snapshot);
+#endif
 // Universal scope state is owned by the VR controller input path and consumed
 // by the render/compositor path. It is independent of Halo's native zoom.
 void VR_SetScopeActive(bool active);

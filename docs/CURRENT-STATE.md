@@ -61,6 +61,35 @@ projection and eye copies to the same prepared frame and gives the armed tracked
 camera exclusive visual look-stick ownership. It remains headset-pending and
 does not claim Reach weapon/body aim, HUD, or arm IK.
 
+### Unaccepted Reach stereo-pass / culling-fail result - 2026-07-24
+
+This result is evidence only and does not advance the accepted pointer above.
+
+| Identity | Value |
+| --- | --- |
+| Tested runtime source | `f953bbe373df22dbbd4b41c344c1226b738260ba` |
+| Candidate package | `out/candidates/f953bbe-reach-camera-20260724-102013546Z` |
+| `halo3xr.dll` SHA-256 | `2B492F23ECF7CBB158B5EE4072B01CDE1F4BF7439C8BFF8886649547269AC980` |
+| `halo3xr_launcher.exe` SHA-256 | `B5E5D136D8283B3B8AE5864AC6EC43FB65D99DC987F64C0D6030A86425F29DDE` |
+| Preserved failure evidence | `out/test-runs/f953bbe-reach-stereo-pass-culling-fail-20260724-102643Z` |
+| Headset result | The Reach 3D looked great, but world visibility/culling followed the gun/stock aim camera instead of the headset |
+
+The exact installed DLL matched the candidate manifest. The runtime armed
+Reach stereo/6DOF, sustained approximately 100 FPS, submitted an OpenXR
+projection layer, and reported zero frame-order failures. Retail and pinned
+HREK evidence then isolated the remaining ordering defect: `main_render_view`
+computes visibility from the secondary workspace camera at `+0x154/+0x1E4`
+before the inner `player_view_render` hook installs either HMD eye. The next
+forward candidate builds and mirrors one head-centred binocular-union camera at
+the exact normal outer boundary before visibility. Its union covers the actual
+widened symmetric image each canted eye rasterizes, and the bounded player-view
+state receives the same centre for coherent fallback. Both eyes then derive from
+that centre without applying turn, head pose, or lean twice. Head/pad/eye data is
+one lock-free exact-frame snapshot, and title teardown proves callback/relay
+quiescence before releasing hooks or the retained Reach module.
+The stock pre-head direction remains separate and is not claimed as Reach
+projectile or controller aim.
+
 ### Reach stock runtime observation - 2026-07-23
 
 The external read-only Reach observer from source

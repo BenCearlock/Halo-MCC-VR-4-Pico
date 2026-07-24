@@ -1,5 +1,6 @@
 #include <windows.h>
 #include <tlhelp32.h>
+#include <array>
 #include <atomic>
 #include <cmath>
 #include <cstdio>
@@ -4408,12 +4409,10 @@ namespace
     // M3: snap/smooth turning from the right Sense stick. Rotating the yaw
     // reference turns the head-locked view instantly, and the hand-steered aim
     // follows because its target is expressed relative to the same reference.
-    void ApplyVrTurn()
+    void ApplyVrTurn(const VrPadState& pad)
     {
         if (!g_vrAim.load())
             return;
-        VrPadState pad;
-        VR_GetPadState(pad);
         if (!pad.valid)
             return;
         // Smooth turn needs a sub-frame timebase. GetTickCount only updates on
@@ -4450,6 +4449,13 @@ namespace
             else if (fabsf(x) < 0.3f)
                 latched = false;
         }
+    }
+
+    void ApplyVrTurn()
+    {
+        VrPadState pad;
+        VR_GetPadState(pad);
+        ApplyVrTurn(pad);
     }
 
     void* __fastcall CamCopyHook(void* dst, void* src)
@@ -9365,21 +9371,103 @@ namespace
         return target == base + expectedTargetRva;
     }
 
+    bool ReachVerifyRipRelativeLea(
+        uintptr_t base, uintptr_t siteRva,
+        uint8_t opcode0, uint8_t opcode1, uint8_t opcode2,
+        uintptr_t expectedTargetRva)
+    {
+        const uint8_t* p = reinterpret_cast<const uint8_t*>(base + siteRva);
+        if (p[0] != opcode0 || p[1] != opcode1 || p[2] != opcode2)
+            return false;
+        int32_t displacement = 0;
+        memcpy(&displacement, p + 3, sizeof(displacement));
+        const uintptr_t target = static_cast<uintptr_t>(
+            static_cast<intptr_t>(base + siteRva + 7) + displacement);
+        return target == base + expectedTargetRva;
+    }
+
+    // The complete main_render_view body is already hash-pinned by the cold
+    // preflight. Recheck its live visibility edges and the callee's exact
+    // secondary-camera load before authorizing pre-visibility mutation, so an
+    // in-memory mismatch remains stock instead of silently culling from an
+    // unknown camera object.
+    bool ReachVerifyVisibilityConsumer(uintptr_t base, size_t size)
+    {
+        constexpr uintptr_t kWorkspaceLeaRva = 0x000C3319;
+        constexpr uint8_t kSecondaryCompactLea[7]{
+            0x48, 0x8D, 0x8A, 0x54, 0x01, 0x00, 0x00};
+        const auto fits = [size](uintptr_t rva, size_t bytes)
+        {
+            return rva < size && bytes <= size - rva;
+        };
+        if (!fits(kWorkspaceLeaRva, 7) ||
+            !fits(kReachVisibilityClusterLookupCallRva, 5) ||
+            !fits(kReachVisibilitySecondaryCompactLeaRva,
+                  sizeof(kSecondaryCompactLea)) ||
+            !fits(kReachVisibilitySecondaryDerivedLeaRva, 7) ||
+            !fits(kReachVisibilityBuildCallRva, 5))
+        {
+            return false;
+        }
+        return ReachVerifyRipRelativeLea(
+                   base, kWorkspaceLeaRva, 0x48, 0x8D, 0x15,
+                   kReachDefaultWorkspaceRva) &&
+            ReachVerifyRel32Call(
+                base, kReachVisibilityClusterLookupCallRva,
+                kReachVisibilityClusterLookupTargetRva) &&
+            memcmp(reinterpret_cast<const void*>(
+                       base + kReachVisibilitySecondaryCompactLeaRva),
+                   kSecondaryCompactLea,
+                   sizeof(kSecondaryCompactLea)) == 0 &&
+            ReachVerifyRipRelativeLea(
+                base, kReachVisibilitySecondaryDerivedLeaRva,
+                0x4C, 0x8D, 0x05,
+                kReachVisibilitySecondaryDerivedAddressRva) &&
+            ReachVerifyRel32Call(
+                base, kReachVisibilityBuildCallRva,
+                kReachVisibilityBuildTargetRva);
+    }
+
+    constexpr size_t kReachCompactCameraBytes = 0x90;
+
+    struct ReachEyeRenderInput
+    {
+        float position[3]{};
+        ReachEyeCullFrustum frustum{};
+        ReachSymmetricFovCover rasterCover{};
+    };
+
     struct ReachOwnerScope
     {
         bool active = false;
         uintptr_t workspace = 0;
         uintptr_t playerView = 0;
+        int32_t cameraStackDepthBefore = -1;
+        uint64_t preparedSerial = 0;
+        ReachVrRenderAccess* renderAccess = nullptr;
+        alignas(16) unsigned char headCenter[kReachCompactCameraBytes]{};
+        ReachEyeRenderInput eyes[2]{};
     };
 
     // Outer and inner hooks run on the same render thread in one synchronous
     // call stack, so a thread-local owner scope needs no cross-thread sync.
     thread_local ReachOwnerScope g_reachOwnerScope;
+    // A nested main_render_view must be entirely stock. Clearing the owner
+    // scope alone is insufficient if that nested call recursively enters the
+    // outer hook again, so carry an explicit suppression bit through the whole
+    // nested stock call tree.
+    thread_local bool g_reachNestedOuterSuppressed = false;
 
     struct ReachCameraCore
     {
         std::atomic<bool> installed{false};
         std::atomic<bool> armed{false};
+        std::atomic<bool> teardownRequested{false};
+        // Counts both Reach detours from wrapper entry until every
+        // trampoline/original call has returned. Teardown disables both hooks,
+        // then proves that neither a callback nor a MinHook relay ingress
+        // remains before freeing either trampoline or the retained title DLL.
+        std::atomic<int> activeCallbacks{0};
         uintptr_t base = 0;
         size_t size = 0;
         uint32_t generation = 0;
@@ -9388,6 +9476,7 @@ namespace
         void* outerTarget = nullptr;
         uint64_t installedAtMs = 0;
     } g_reachCamera;
+    static_assert(std::atomic<int>::is_always_lock_free);
 
     // Published only after the matching eye was rendered and copied. The
     // release/acquire serial binds each pair of projection scales to the exact
@@ -9399,7 +9488,6 @@ namespace
     ReachPlayerViewRenderFn g_reachOrigPlayerViewRender = nullptr;
     ReachMainRenderViewFn g_reachOrigMainRenderView = nullptr;
 
-    constexpr size_t kReachCompactCameraBytes = 0x90;
     // kReachSecondaryCompactOffset and the derived/render-bounds sub-block
     // offsets now live in reach_render_logic.h alongside the rest of the proven
     // workspace layout.
@@ -9414,11 +9502,30 @@ namespace
     // onto Reach's compact-camera offsets (pos +0x00, fwd +0x0C, up +0x18). It
     // shares the universal recenter/turn references so F-key recenter and stick
     // turn behave for Reach exactly as for Halo 3 and ODST.
-    bool ReachApplyHeadLook(unsigned char* cam)
+    bool ReachApplyHeadLook(
+        unsigned char* cam, const ReachVrRenderSnapshot& tracking)
     {
-        float q[4], hpos[3];
-        if (!VR_GetHeadPose(q, hpos))
+        float q[4] = {
+            tracking.headOrientation[0], tracking.headOrientation[1],
+            tracking.headOrientation[2], tracking.headOrientation[3]};
+        const float hpos[3] = {
+            tracking.headPosition[0], tracking.headPosition[1],
+            tracking.headPosition[2]};
+        float qLengthSquared = 0.0f;
+        for (float component : q)
+        {
+            if (!isfinite(component))
+                return false;
+            qLengthSquared += component * component;
+        }
+        for (float component : hpos)
+            if (!isfinite(component))
+                return false;
+        if (!isfinite(qLengthSquared) || qLengthSquared <= 1e-8f)
             return false;
+        const float qLength = sqrtf(qLengthSquared);
+        for (float& component : q)
+            component /= qLength;
         const float x = q[0], y = q[1], z = q[2], w = q[3];
         const float hfx = -2.0f * (w * y + x * z);
         const float hfy =  2.0f * (w * x - y * z);
@@ -9490,17 +9597,17 @@ namespace
         return true;
     }
 
-    // Adds this eye's exact OpenXR separation/cant and selects the smallest
-    // symmetric Reach vertical FOV that covers all four headset angles at the
-    // compact camera's proven render bounds. Missing eye data fails the whole
-    // transaction instead of falling back to a mismatched fixed headset pose.
-    bool ReachApplyEyeOffset(
-        unsigned char* cam, int eye,
+    // Snapshot both eyes once at the outer, pre-visibility boundary. Reach
+    // rasterizes a symmetric fixed-aspect cover for each asymmetric OpenXR eye,
+    // so the binocular cull is built from those actual widened raster corners
+    // plus relative eye cant. The inner loop consumes the same snapshot instead
+    // of re-reading a potentially different xrLocateViews result.
+    bool ReachCollectEyeInputs(
         const ReachObservedRect& renderBounds,
-        ReachSymmetricFovCover& fovCover)
+        const ReachVrRenderSnapshot& tracking,
+        ReachEyeRenderInput (&inputs)[2],
+        ReachSymmetricFovCover& cullCover)
     {
-        if (!cam || eye < 0 || eye > 1)
-            return false;
         const int renderWidth =
             static_cast<int>(renderBounds.x1) - renderBounds.x0;
         const int renderHeight =
@@ -9508,20 +9615,78 @@ namespace
         if (renderWidth <= 0 || renderHeight <= 0)
             return false;
 
-        float eyePosition[3]{};
-        float eyeOrientation[4]{};
-        float eyeFov[4]{};
-        if (!VR_GetEyeViewOffset(eye, eyePosition, eyeOrientation) ||
-            !VR_GetEyeFov(eye, eyeFov))
+        std::array<ReachEyeCullFrustum, 2> cullFrusta{};
+        for (int eye = 0; eye < 2; ++eye)
+        {
+            const ReachVrEyeSnapshot& eyeSnapshot = tracking.eyes[eye];
+            memcpy(inputs[eye].position, eyeSnapshot.position,
+                   sizeof(inputs[eye].position));
+            for (float component : inputs[eye].position)
+                if (!isfinite(component))
+                    return false;
+
+            ReachEyeCullFrustum frustum{};
+            frustum.angleLeft = eyeSnapshot.fov[0];
+            frustum.angleRight = eyeSnapshot.fov[1];
+            frustum.angleUp = eyeSnapshot.fov[2];
+            frustum.angleDown = eyeSnapshot.fov[3];
+            frustum.relativeOrientation = {
+                eyeSnapshot.orientation[0], eyeSnapshot.orientation[1],
+                eyeSnapshot.orientation[2], eyeSnapshot.orientation[3]};
+            inputs[eye].frustum = frustum;
+            inputs[eye].rasterCover = SelectReachSymmetricFovCover(
+                frustum.angleLeft, frustum.angleRight,
+                frustum.angleUp, frustum.angleDown,
+                static_cast<uint32_t>(renderWidth),
+                static_cast<uint32_t>(renderHeight));
+            if (!inputs[eye].rasterCover.valid)
+                return false;
+            if (!BuildReachSymmetricRasterCullFrustum(
+                    inputs[eye].rasterCover,
+                    inputs[eye].frustum.relativeOrientation,
+                    static_cast<uint32_t>(renderWidth),
+                    static_cast<uint32_t>(renderHeight),
+                    cullFrusta[eye]))
+            {
+                return false;
+            }
+        }
+
+        cullCover = SelectReachStereoCullFovCover(
+            cullFrusta, static_cast<uint32_t>(renderWidth),
+            static_cast<uint32_t>(renderHeight));
+        return cullCover.valid;
+    }
+
+    // Adds one eye's exact OpenXR separation/cant and stamps the already
+    // validated symmetric raster FOV. Missing or non-finite input fails the
+    // whole transaction; there is no fixed-IPD or stale-view fallback.
+    bool ReachApplyEyeOffset(
+        unsigned char* cam, const ReachEyeRenderInput& input)
+    {
+        if (!cam || !input.rasterCover.valid)
+            return false;
+
+        float eyeOrientation[4] = {
+            input.frustum.relativeOrientation[0],
+            input.frustum.relativeOrientation[1],
+            input.frustum.relativeOrientation[2],
+            input.frustum.relativeOrientation[3]};
+        float orientationLengthSquared = 0.0f;
+        for (float component : eyeOrientation)
+        {
+            if (!isfinite(component))
+                return false;
+            orientationLengthSquared += component * component;
+        }
+        if (!isfinite(orientationLengthSquared) ||
+            orientationLengthSquared <= 1e-8f)
         {
             return false;
         }
-        fovCover = SelectReachSymmetricFovCover(
-            eyeFov[0], eyeFov[1], eyeFov[2], eyeFov[3],
-            static_cast<uint32_t>(renderWidth),
-            static_cast<uint32_t>(renderHeight));
-        if (!fovCover.valid)
-            return false;
+        const float orientationLength = sqrtf(orientationLengthSquared);
+        for (float& component : eyeOrientation)
+            component /= orientationLength;
 
         float* pos = reinterpret_cast<float*>(cam + 0x00);
         float* fwd = reinterpret_cast<float*>(cam + 0x0C);
@@ -9532,9 +9697,9 @@ namespace
             fwd[0] * up[1] - fwd[1] * up[0]};
         const float s = g_worldScale.load();
         for (int axis = 0; axis < 3; ++axis)
-            pos[axis] += (right[axis] * eyePosition[0] +
-                          up[axis] * eyePosition[1] -
-                          fwd[axis] * eyePosition[2]) * s;
+            pos[axis] += (right[axis] * input.position[0] +
+                          up[axis] * input.position[1] -
+                          fwd[axis] * input.position[2]) * s;
         const float sinHalf = sqrtf(eyeOrientation[0] * eyeOrientation[0] +
                                     eyeOrientation[1] * eyeOrientation[1] +
                                     eyeOrientation[2] * eyeOrientation[2]);
@@ -9553,8 +9718,54 @@ namespace
             RotateAboutAxis(fwd, axisVec, cosA, sinA);
             RotateAboutAxis(up, axisVec, cosA, sinA);
         }
-        *reinterpret_cast<float*>(cam + 0x28) = fovCover.verticalFov;
+        *reinterpret_cast<float*>(cam + 0x28) =
+            input.rasterCover.verticalFov;
         return true;
+    }
+
+    // Build the single head-centre camera consumed by Reach's outer CPU
+    // visibility pass. The frustum/projection helpers are the exact stock
+    // pre-scope pair. The caller commits this same centre to the bounded
+    // player-view state as a coherent one-render fallback, while the inner
+    // transaction replaces it with each exact eye and rolls it back afterward.
+    bool ReachBuildHeadCullCamera(
+        const unsigned char* stockCompact,
+        const ReachSymmetricFovCover& cullCover,
+        const ReachVrRenderSnapshot& tracking,
+        unsigned char* headCenter,
+        unsigned char* headDerived)
+    {
+        if (!stockCompact || !headCenter || !headDerived ||
+            !cullCover.valid || !g_reachHelpers.Ready())
+        {
+            return false;
+        }
+        memcpy(headCenter, stockCompact, kReachCompactCameraBytes);
+        ApplyVrTurn(tracking.pad);
+        if (!ReachApplyHeadLook(headCenter, tracking))
+            return false;
+        *reinterpret_cast<float*>(headCenter + 0x28) = cullCover.verticalFov;
+
+        ReachCompactCameraObservation transformed{};
+        if (!ValidateReachCompactCamera(
+                headCenter, kReachCompactCameraBytes, transformed))
+        {
+            return false;
+        }
+        float frustumBounds[4]{};
+        if (!g_reachHelpers.frustum(headCenter, frustumBounds))
+            return false;
+        for (float component : frustumBounds)
+            if (!isfinite(component))
+                return false;
+        g_reachHelpers.projection(
+            headCenter, frustumBounds, headDerived, 0.0f);
+        const float* projectionMatrix = reinterpret_cast<const float*>(
+            headDerived + kReachDerivedProjectionOffset);
+        const ReachProjectionHalfFovs rasterFov =
+            DecodeReachProjectionHalfFovs(
+                projectionMatrix[0], projectionMatrix[5]);
+        return ReachProjectionCoversOpenXr(rasterFov, cullCover);
     }
 
     // Byte-exact rollback of everything the per-eye transaction can touch,
@@ -9581,12 +9792,28 @@ namespace
         const uintptr_t workspace = g_reachOwnerScope.workspace;
         unsigned char* compact = reinterpret_cast<unsigned char*>(workspace);
 
-        if (!g_reachHelpers.Ready())
+        if (!g_reachHelpers.Ready() || !access.active ||
+            !g_reachOwnerScope.active ||
+            access.preparedSerial != g_reachOwnerScope.preparedSerial)
             return false;
 
         ReachCompactCameraObservation observed{};
-        if (!ValidateReachCompactCamera(compact, kReachCompactCameraBytes, observed))
+        ReachCompactCameraObservation secondaryObserved{};
+        const unsigned char* secondaryCompact =
+            reinterpret_cast<const unsigned char*>(
+                workspace + kReachSecondaryCompactOffset);
+        if (!ValidateReachCompactCamera(
+                compact, kReachCompactCameraBytes, observed) ||
+            !ValidateReachCompactCamera(
+                secondaryCompact, kReachCompactCameraBytes,
+                secondaryObserved) ||
+            memcmp(compact, g_reachOwnerScope.headCenter,
+                   kReachCompactCameraBytes) != 0 ||
+            memcmp(secondaryCompact, g_reachOwnerScope.headCenter,
+                   kReachCompactCameraBytes) != 0)
+        {
             return false;
+        }
 
         // player_view_render loads the render-camera owner global (0x04E38A90)
         // into rax and dereferences [rax+0xB0], and it CLEARS that global to zero
@@ -9618,14 +9845,12 @@ namespace
                reinterpret_cast<void*>(playerView + kReachPvSnapshotBegin),
                kReachPvSnapshotBytes);
 
-        // Consume the OpenXR turn action and head-track the centre camera once
-        // per prepared frame (one recenter consume), then derive both eyes from
-        // that single combined yaw/pose. Stock RX/RY is suppressed while this
-        // armed camera owns the look stick (Game_VrOwnsLookStick).
-        memcpy(center, compact, kReachCompactCameraBytes);
-        ApplyVrTurn();
-        if (!ReachApplyHeadLook(center))
-            return false;
+        // The outer hook already consumed turn/head pose once before CPU
+        // visibility. Both exact eyes must derive from that identical centre;
+        // applying either transform again here would double room-scale lean and
+        // split culling from the raster camera.
+        memcpy(center, g_reachOwnerScope.headCenter,
+               kReachCompactCameraBytes);
 
         const uint8_t originalLastWindow =
             *reinterpret_cast<uint8_t*>(playerView + kReachLastWindowFlagOffset);
@@ -9648,10 +9873,11 @@ namespace
                 // cant, and symmetric covering FOV, stamped into the primary
                 // compact camera.
                 memcpy(compact, center, kReachCompactCameraBytes);
-                ReachSymmetricFovCover requestedFov{};
-                if (!ReachApplyEyeOffset(
-                        compact, policy.eye, observed.renderBounds,
-                        requestedFov))
+                const ReachEyeRenderInput& eyeInput =
+                    g_reachOwnerScope.eyes[policy.eye];
+                const ReachSymmetricFovCover& requestedFov =
+                    eyeInput.rasterCover;
+                if (!ReachApplyEyeOffset(compact, eyeInput))
                 {
                     transactionValid = false;
                     break;
@@ -9670,7 +9896,19 @@ namespace
                 unsigned char* primaryDerived = reinterpret_cast<unsigned char*>(
                     workspace + kReachPrimaryDerivedOffset);
                 float frustumBounds[4] = {0.0f, 0.0f, 0.0f, 0.0f};
-                g_reachHelpers.frustum(compact, frustumBounds);
+                if (!g_reachHelpers.frustum(compact, frustumBounds))
+                {
+                    transactionValid = false;
+                    break;
+                }
+                bool frustumFinite = true;
+                for (float component : frustumBounds)
+                    frustumFinite = isfinite(component) && frustumFinite;
+                if (!frustumFinite)
+                {
+                    transactionValid = false;
+                    break;
+                }
                 g_reachHelpers.projection(
                     compact, frustumBounds, primaryDerived, 0.0f);
                 const float* projectionMatrix = reinterpret_cast<const float*>(
@@ -9750,13 +9988,66 @@ namespace
         return completed;
     }
 
-    void __fastcall ReachPlayerViewRenderDetour(uintptr_t playerView)
+    bool ReachInnerScopeMatchesLive(
+        uintptr_t playerView, uintptr_t returnAddress)
     {
-        if (!g_reachCamera.armed.load(std::memory_order_acquire) ||
-            !g_reachOwnerScope.active ||
-            g_reachOwnerScope.playerView != playerView)
+        const ReachOwnerScope& scope = g_reachOwnerScope;
+        const uintptr_t base = g_reachCamera.base;
+        if (g_reachNestedOuterSuppressed ||
+            !scope.active || !base || scope.playerView != playerView ||
+            !scope.renderAccess || !scope.renderAccess->active ||
+            scope.cameraStackDepthBefore < 0 ||
+            scope.cameraStackDepthBefore >= 3)
+        {
+            return false;
+        }
+
+        const int32_t depth = *reinterpret_cast<const int32_t*>(
+            base + kReachCameraStackDepthRva);
+        if (depth != scope.cameraStackDepthBefore + 1 ||
+            depth < 0 || depth > 3)
+        {
+            return false;
+        }
+        const uintptr_t topWorkspace = *reinterpret_cast<const uintptr_t*>(
+            base + kReachCameraStackPointersRva +
+            static_cast<uintptr_t>(depth) * sizeof(uintptr_t));
+        return returnAddress == base + kReachPlayerViewRenderReturnRva &&
+            *reinterpret_cast<const uintptr_t*>(
+                base + kReachActiveViewRva) == playerView &&
+            topWorkspace == scope.workspace &&
+            *reinterpret_cast<const uintptr_t*>(
+                scope.workspace + kReachRenderScopeSnapshotSize -
+                sizeof(uintptr_t)) ==
+                    base + kReachCameraStackCallbackRva &&
+            *reinterpret_cast<const uint32_t*>(
+                base + kReachSelectedSpecializationRva) == 0;
+    }
+
+    // Only an exact admitted inner call may repair the render-owner global.
+    // The stock renderer dereferences this owner and clears it on every call;
+    // a failed partial eye transaction or an asynchronous disarm can therefore
+    // leave zero here. Re-arm the proven player-view owner before the coherent
+    // head-centre fallback, then let stock clear it normally.
+    void ReachScopedStockFallback(uintptr_t playerView)
+    {
+        *reinterpret_cast<uintptr_t*>(
+            g_reachCamera.base + kReachRenderCameraOwnerRva) =
+                playerView + kReachPlayerViewCameraStateOffset;
+        g_reachOrigPlayerViewRender(playerView);
+    }
+
+    void ReachPlayerViewRenderBody(
+        uintptr_t playerView, uintptr_t returnAddress)
+    {
+        if (!ReachInnerScopeMatchesLive(playerView, returnAddress))
         {
             g_reachOrigPlayerViewRender(playerView);
+            return;
+        }
+        if (!g_reachCamera.armed.load(std::memory_order_acquire))
+        {
+            ReachScopedStockFallback(playerView);
             return;
         }
 
@@ -9764,17 +10055,20 @@ namespace
         const ReachPreflightToken preflight =
             ReachRenderCandidate_GetPreflight(epoch);
         const ReachPreparedFrameToken prepared = VR_ReachPreparedFrame(epoch);
-        ReachVrRenderAccess access{};
         if (!preflight.Complete() ||
             !ReachRenderCandidate_IsPreflightCurrent(preflight) ||
             !prepared.Ready() ||
+            prepared.Serial() != g_reachOwnerScope.preparedSerial ||
             !VR_ReachDisplayReady(epoch) ||
-            !VR_ReachBeginRenderAccess(epoch, prepared, access))
+            !g_reachOwnerScope.renderAccess ||
+            g_reachOwnerScope.renderAccess->preparedSerial !=
+                prepared.Serial())
         {
-            g_reachOrigPlayerViewRender(playerView);
+            ReachScopedStockFallback(playerView);
             return;
         }
 
+        ReachVrRenderAccess& access = *g_reachOwnerScope.renderAccess;
         bool handled = false;
         __try
         {
@@ -9784,49 +10078,654 @@ namespace
         {
             handled = false;
         }
-        VR_ReachEndRenderAccess(access);
         if (!handled)
+            ReachScopedStockFallback(playerView);
+    }
+
+    // Keep the counter wrapper separate from the SEH-heavy body. The wrapper's
+    // complete unwind range is also part of worker-side ingress scanning, which
+    // closes the pre-counter instruction and MinHook-relay teardown windows.
+    __declspec(noinline) void __fastcall ReachPlayerViewRenderDetour(
+        uintptr_t playerView)
+    {
+        // Capture the engine caller before entering the helper body. Calling
+        // _ReturnAddress() from that body would see this wrapper's call site
+        // and make the exact retail caller gate fail permanently.
+        const uintptr_t returnAddress =
+            reinterpret_cast<uintptr_t>(_ReturnAddress());
+        g_reachCamera.activeCallbacks.fetch_add(
+            1, std::memory_order_acq_rel);
+        __try
         {
-            // player_view_render clears this owner on every call. A failed
-            // transaction may already have rendered one eye, so restore the
-            // exact admitted owner before asking stock to render its fallback.
-            // The stock call will clear it again as usual.
-            *reinterpret_cast<uintptr_t*>(
-                epoch.moduleBase + kReachRenderCameraOwnerRva) =
-                playerView + kReachPlayerViewCameraStateOffset;
-            g_reachOrigPlayerViewRender(playerView);
+            ReachPlayerViewRenderBody(playerView, returnAddress);
+        }
+        __finally
+        {
+            g_reachCamera.activeCallbacks.fetch_sub(
+                1, std::memory_order_acq_rel);
         }
     }
 
-    uintptr_t __fastcall ReachMainRenderViewDetour(
+    uintptr_t ReachMainRenderViewBody(
+        uintptr_t workspace, uintptr_t playerView, uint32_t windowIndex,
+        uintptr_t returnAddress)
+    {
+        const ReachOwnerScope previous = g_reachOwnerScope;
+        if (g_reachNestedOuterSuppressed)
+            return g_reachOrigMainRenderView(
+                workspace, playerView, windowIndex);
+        if (previous.active)
+        {
+            // The camera stack can saturate at depth three. Leaving the parent
+            // TLS token visible while a nested stock call runs could let its
+            // inner renderer satisfy the parent's pointers/depth by accident.
+            // Suppress the complete nested call tree, then restore the parent
+            // token even if stock raises an SEH exception.
+            uintptr_t nestedResult = 0;
+            g_reachOwnerScope = {};
+            g_reachNestedOuterSuppressed = true;
+            __try
+            {
+                nestedResult = g_reachOrigMainRenderView(
+                    workspace, playerView, windowIndex);
+            }
+            __finally
+            {
+                g_reachNestedOuterSuppressed = false;
+                g_reachOwnerScope = previous;
+            }
+            return nestedResult;
+        }
+
+        const ReachModuleEpoch epoch{
+            g_reachCamera.base, g_reachCamera.generation};
+        uintptr_t expectedWorkspace = 0;
+        uintptr_t expectedPlayerView = 0;
+        const ReachPreflightToken preflight =
+            ReachRenderCandidate_GetPreflight(epoch);
+        const ReachPreparedFrameToken prepared = VR_ReachPreparedFrame(epoch);
+        if (!g_reachCamera.armed.load(std::memory_order_acquire) ||
+            windowIndex != 0 || !g_reachHelpers.Ready() ||
+            ClassifyReachOuterRenderCaller(
+                epoch.moduleBase, kReachRetailImageSize, returnAddress) !=
+                ReachOuterRenderCaller::NormalPlayer ||
+            !ReachAddressFromRva(
+                epoch.moduleBase, kReachRetailImageSize,
+                kReachDefaultWorkspaceRva, expectedWorkspace) ||
+            !ReachAddressFromRva(
+                epoch.moduleBase, kReachRetailImageSize,
+                kReachPlayerViewArrayRva, expectedPlayerView) ||
+            workspace != expectedWorkspace ||
+            playerView != expectedPlayerView ||
+            !preflight.Complete() ||
+            !ReachRenderCandidate_IsPreflightCurrent(preflight) ||
+            !prepared.Ready() || !VR_ReachDisplayReady(epoch))
+        {
+            return g_reachOrigMainRenderView(
+                workspace, playerView, windowIndex);
+        }
+
+        ReachVrRenderSnapshot tracking{};
+        if (!VR_ReachGetRenderSnapshot(prepared, tracking) ||
+            tracking.preparedSerial != prepared.Serial())
+        {
+            return g_reachOrigMainRenderView(
+                workspace, playerView, windowIndex);
+        }
+
+        const int32_t stackDepthBefore =
+            *reinterpret_cast<const int32_t*>(
+                epoch.moduleBase + kReachCameraStackDepthRva);
+        const uintptr_t expectedOwner =
+            playerView + kReachPlayerViewCameraStateOffset;
+        unsigned char* primaryCompact =
+            reinterpret_cast<unsigned char*>(workspace);
+        unsigned char* primaryDerived = reinterpret_cast<unsigned char*>(
+            workspace + kReachPrimaryDerivedOffset);
+        const unsigned char* secondaryCompact =
+            reinterpret_cast<const unsigned char*>(
+                workspace + kReachSecondaryCompactOffset);
+        const unsigned char* secondaryDerived =
+            reinterpret_cast<const unsigned char*>(
+                workspace + kReachSecondaryDerivedOffset);
+        ReachCompactCameraObservation observedPrimary{};
+        ReachCompactCameraObservation observedSecondary{};
+        if (stackDepthBefore < 0 || stackDepthBefore >= 3 ||
+            *reinterpret_cast<const uintptr_t*>(
+                epoch.moduleBase + kReachRenderCameraOwnerRva) !=
+                    expectedOwner ||
+            *reinterpret_cast<const uint32_t*>(
+                epoch.moduleBase + kReachSelectedSpecializationRva) != 0 ||
+            !ValidateReachCompactCamera(
+                primaryCompact, kReachCompactCameraBytes,
+                observedPrimary) ||
+            !ValidateReachCompactCamera(
+                secondaryCompact, kReachCompactCameraBytes,
+                observedSecondary) ||
+            memcmp(primaryCompact, secondaryCompact,
+                   kReachCompactCameraBytes) != 0 ||
+            memcmp(primaryDerived, secondaryDerived,
+                   kReachDerivedBlockSize) != 0)
+        {
+            return g_reachOrigMainRenderView(
+                workspace, playerView, windowIndex);
+        }
+
+        ReachOwnerScope candidate{};
+        candidate.workspace = workspace;
+        candidate.playerView = playerView;
+        candidate.cameraStackDepthBefore = stackDepthBefore;
+        candidate.preparedSerial = prepared.Serial();
+        ReachSymmetricFovCover cullCover{};
+        if (!ReachCollectEyeInputs(
+                observedPrimary.renderBounds, tracking,
+                candidate.eyes, cullCover))
+        {
+            return g_reachOrigMainRenderView(
+                workspace, playerView, windowIndex);
+        }
+
+        ReachVrRenderAccess access{};
+        if (!VR_ReachBeginRenderAccess(epoch, prepared, access))
+            return g_reachOrigMainRenderView(
+                workspace, playerView, windowIndex);
+
+        alignas(16) unsigned char headDerived[kReachDerivedBlockSize]{};
+        bool headCullReady = false;
+        __try
+        {
+            headCullReady = ReachBuildHeadCullCamera(
+                primaryCompact, cullCover, tracking,
+                candidate.headCenter, headDerived);
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            headCullReady = false;
+        }
+        const ReachPreparedFrameToken currentPrepared =
+            VR_ReachPreparedFrame(epoch);
+        if (!headCullReady || !currentPrepared.Ready() ||
+            currentPrepared.Serial() != candidate.preparedSerial ||
+            access.preparedSerial != candidate.preparedSerial)
+        {
+            VR_ReachEndRenderAccess(access);
+            return g_reachOrigMainRenderView(
+                workspace, playerView, windowIndex);
+        }
+
+        alignas(16) unsigned char savedWorkspace[kReachCameraPairDataSize];
+        alignas(16) unsigned char savedPv[kReachPvSnapshotBytes];
+        memcpy(savedWorkspace, reinterpret_cast<const void*>(workspace),
+               kReachCameraPairDataSize);
+        memcpy(savedPv,
+               reinterpret_cast<const void*>(
+                   playerView + kReachPvSnapshotBegin),
+               kReachPvSnapshotBytes);
+
+        // Commit one coherent head-centre fallback before the outer function's
+        // visibility work. Visibility reads the secondary workspace pair before
+        // player_view_render; stock fallback reads player-view camera state and
+        // matrices. Updating both with the exact proven setup helpers prevents
+        // a failed/withheld stereo transaction from mixing head-owned culling
+        // with the old gun/aim-owned raster matrices.
+        bool headCommitReady = false;
+        __try
+        {
+            memcpy(primaryCompact, candidate.headCenter,
+                   kReachCompactCameraBytes);
+            memcpy(primaryDerived, headDerived, kReachDerivedBlockSize);
+            memcpy(reinterpret_cast<void*>(
+                       workspace + kReachSecondaryCompactOffset),
+                   candidate.headCenter, kReachCompactCameraBytes);
+            memcpy(reinterpret_cast<void*>(
+                       workspace + kReachSecondaryDerivedOffset),
+                   headDerived, kReachDerivedBlockSize);
+            g_reachHelpers.cameraState(
+                reinterpret_cast<void*>(expectedOwner),
+                candidate.headCenter);
+            g_reachHelpers.matrix(
+                reinterpret_cast<void*>(
+                    playerView + kReachPlayerViewCurrentMatricesOffset),
+                headDerived,
+                headDerived + kReachDerivedProjectionOffset,
+                candidate.headCenter + kReachCompactRenderBoundsOffset,
+                reinterpret_cast<void*>(
+                    playerView +
+                    kReachPlayerViewProjectionOffsetPairOffset));
+            *reinterpret_cast<uintptr_t*>(
+                epoch.moduleBase + kReachRenderCameraOwnerRva) = expectedOwner;
+            headCommitReady = true;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            headCommitReady = false;
+        }
+        if (!headCommitReady)
+        {
+            memcpy(reinterpret_cast<void*>(workspace), savedWorkspace,
+                   kReachCameraPairDataSize);
+            memcpy(reinterpret_cast<void*>(
+                       playerView + kReachPvSnapshotBegin),
+                   savedPv, kReachPvSnapshotBytes);
+            *reinterpret_cast<uintptr_t*>(
+                epoch.moduleBase + kReachRenderCameraOwnerRva) = expectedOwner;
+            VR_ReachEndRenderAccess(access);
+            return g_reachOrigMainRenderView(
+                workspace, playerView, windowIndex);
+        }
+        candidate.renderAccess = &access;
+        candidate.active = true;
+        g_reachOwnerScope = candidate;
+
+        uintptr_t result = 0;
+        __try
+        {
+            result = g_reachOrigMainRenderView(
+                workspace, playerView, windowIndex);
+        }
+        __finally
+        {
+            // Restore only the proven camera-pair data. The engine owns the
+            // camera-stack callback at +0x2A8 and its push/pop lifetime.
+            const uint8_t finalLastWindow =
+                *reinterpret_cast<const uint8_t*>(
+                    playerView + kReachLastWindowFlagOffset);
+            memcpy(reinterpret_cast<void*>(workspace), savedWorkspace,
+                   kReachCameraPairDataSize);
+            memcpy(reinterpret_cast<void*>(
+                       playerView + kReachPvSnapshotBegin),
+                   savedPv, kReachPvSnapshotBytes);
+            *reinterpret_cast<uint8_t*>(
+                playerView + kReachLastWindowFlagOffset) = finalLastWindow;
+            g_reachOwnerScope = previous;
+            VR_ReachEndRenderAccess(access);
+        }
+        return result;
+    }
+
+    __declspec(noinline) uintptr_t __fastcall ReachMainRenderViewDetour(
         uintptr_t workspace, uintptr_t playerView, uint32_t windowIndex)
     {
         const uintptr_t returnAddress =
             reinterpret_cast<uintptr_t>(_ReturnAddress());
-        const ReachOwnerScope previous = g_reachOwnerScope;
-        g_reachOwnerScope = {};
-        uintptr_t expectedWorkspace = 0;
-        if (g_reachCamera.armed.load(std::memory_order_acquire) &&
-            windowIndex == 0 &&
-            ClassifyReachOuterRenderCaller(
-                g_reachCamera.base, kReachRetailImageSize, returnAddress) ==
-                ReachOuterRenderCaller::NormalPlayer &&
-            ReachAddressFromRva(g_reachCamera.base, kReachRetailImageSize,
-                                kReachDefaultWorkspaceRva, expectedWorkspace) &&
-            workspace == expectedWorkspace)
+        uintptr_t result = 0;
+        g_reachCamera.activeCallbacks.fetch_add(
+            1, std::memory_order_acq_rel);
+        __try
         {
-            g_reachOwnerScope.active = true;
-            g_reachOwnerScope.workspace = workspace;
-            g_reachOwnerScope.playerView = playerView;
+            result = ReachMainRenderViewBody(
+                workspace, playerView, windowIndex, returnAddress);
         }
-        const uintptr_t result =
-            g_reachOrigMainRenderView(workspace, playerView, windowIndex);
-        g_reachOwnerScope = previous;
+        __finally
+        {
+            g_reachCamera.activeCallbacks.fetch_sub(
+                1, std::memory_order_acq_rel);
+        }
         return result;
+    }
+
+    struct ReachDetourCodeRange
+    {
+        DWORD64 begin = 0;
+        DWORD64 end = 0;
+    };
+
+    struct ReachFrozenThread
+    {
+        HANDLE handle = nullptr;
+        DWORD threadId = 0;
+        bool suspended = false;
+    };
+
+    // Worker-only process freeze used after both Reach hooks are disabled. It
+    // closes the small ingress window in which a thread is already inside a
+    // MinHook relay or the detour prologue but has not incremented the counter.
+    class ReachThreadFreeze
+    {
+    public:
+        ~ReachThreadFreeze() { Release(); }
+
+        bool Capture()
+        {
+            if (!m_threads.empty())
+                return false;
+
+            const DWORD processId = GetCurrentProcessId();
+            const DWORD currentThreadId = GetCurrentThreadId();
+            HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+            if (snapshot == INVALID_HANDLE_VALUE)
+                return false;
+
+            bool enumerateOk = true;
+            THREADENTRY32 entry{};
+            entry.dwSize = sizeof(entry);
+            if (!Thread32First(snapshot, &entry))
+                enumerateOk = false;
+            while (enumerateOk)
+            {
+                if (entry.th32OwnerProcessID == processId &&
+                    entry.th32ThreadID != currentThreadId)
+                {
+                    HANDLE thread = OpenThread(
+                        THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT |
+                            THREAD_QUERY_INFORMATION | SYNCHRONIZE,
+                        FALSE, entry.th32ThreadID);
+                    if (!thread)
+                    {
+                        if (GetLastError() != ERROR_INVALID_PARAMETER)
+                            enumerateOk = false;
+                    }
+                    else
+                    {
+                        m_threads.push_back(
+                            {thread, entry.th32ThreadID, false});
+                    }
+                }
+                if (!Thread32Next(snapshot, &entry))
+                {
+                    if (GetLastError() != ERROR_NO_MORE_FILES)
+                        enumerateOk = false;
+                    break;
+                }
+            }
+            CloseHandle(snapshot);
+            if (!enumerateOk)
+            {
+                Release();
+                return false;
+            }
+
+            // Complete every allocation before the first suspension. All
+            // captured threads then remain frozen through the RIP/counter
+            // snapshot, so no observed thread can move between safe ranges.
+            for (ReachFrozenThread& thread : m_threads)
+            {
+                const DWORD previousCount = SuspendThread(thread.handle);
+                if (previousCount == static_cast<DWORD>(-1))
+                {
+                    if (WaitForSingleObject(thread.handle, 0) != WAIT_OBJECT_0)
+                    {
+                        Release();
+                        return false;
+                    }
+                    continue;
+                }
+                thread.suspended = true;
+            }
+
+            if (!FrozenSnapshotIsComplete(processId, currentThreadId))
+            {
+                Release();
+                return false;
+            }
+            return true;
+        }
+
+        bool Release()
+        {
+            bool ok = true;
+            for (size_t i = m_threads.size(); i > 0; --i)
+            {
+                ReachFrozenThread& thread = m_threads[i - 1];
+                if (thread.suspended &&
+                    ResumeThread(thread.handle) == static_cast<DWORD>(-1) &&
+                    WaitForSingleObject(thread.handle, 0) != WAIT_OBJECT_0)
+                {
+                    ok = false;
+                }
+                CloseHandle(thread.handle);
+            }
+            m_threads.clear();
+            return ok;
+        }
+
+        const std::vector<ReachFrozenThread>& Threads() const
+        {
+            return m_threads;
+        }
+
+    private:
+        bool FrozenSnapshotIsComplete(
+            DWORD processId, DWORD currentThreadId) const
+        {
+            HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+            if (snapshot == INVALID_HANDLE_VALUE)
+                return false;
+
+            bool complete = true;
+            THREADENTRY32 entry{};
+            entry.dwSize = sizeof(entry);
+            if (!Thread32First(snapshot, &entry))
+                complete = false;
+            while (complete)
+            {
+                if (entry.th32OwnerProcessID == processId &&
+                    entry.th32ThreadID != currentThreadId)
+                {
+                    bool foundFrozen = false;
+                    for (const ReachFrozenThread& thread : m_threads)
+                    {
+                        if (thread.threadId == entry.th32ThreadID)
+                        {
+                            foundFrozen = thread.suspended ||
+                                WaitForSingleObject(thread.handle, 0) ==
+                                    WAIT_OBJECT_0;
+                            break;
+                        }
+                    }
+                    if (!foundFrozen)
+                        complete = false;
+                }
+                if (!complete || !Thread32Next(snapshot, &entry))
+                {
+                    if (complete && GetLastError() != ERROR_NO_MORE_FILES)
+                        complete = false;
+                    break;
+                }
+            }
+            CloseHandle(snapshot);
+            return complete;
+        }
+
+        std::vector<ReachFrozenThread> m_threads;
+    };
+
+    bool ResolveReachDetourCodeRange(
+        const void* function, ReachDetourCodeRange& range)
+    {
+        DWORD64 imageBase = 0;
+        const PRUNTIME_FUNCTION runtimeFunction = RtlLookupFunctionEntry(
+            reinterpret_cast<DWORD64>(function), &imageBase, nullptr);
+        if (!runtimeFunction ||
+            runtimeFunction->EndAddress <= runtimeFunction->BeginAddress)
+        {
+            return false;
+        }
+        range.begin = imageBase + runtimeFunction->BeginAddress;
+        range.end = imageBase + runtimeFunction->EndAddress;
+        return true;
+    }
+
+    bool ScanForReachDetourIngress(bool& busy)
+    {
+        static bool rangesResolved = false;
+        static ReachDetourCodeRange ranges[2]{};
+        if (!rangesResolved)
+        {
+            const void* functions[] = {
+                reinterpret_cast<const void*>(&ReachMainRenderViewDetour),
+                reinterpret_cast<const void*>(&ReachPlayerViewRenderDetour),
+            };
+            static_assert(_countof(functions) == _countof(ranges));
+            bool resolved = true;
+            for (size_t i = 0; i < _countof(functions); ++i)
+                resolved &= ResolveReachDetourCodeRange(functions[i], ranges[i]);
+            if (!resolved)
+                return false;
+            rangesResolved = true;
+        }
+
+        // Snapshot these worker-owned fields before suspending anything. They
+        // cannot change until this cleanup call either removes or retains them.
+        void* const targets[] = {
+            g_reachCamera.outerTarget,
+            g_reachCamera.innerTarget,
+        };
+        void* const trampolines[] = {
+            reinterpret_cast<void*>(g_reachOrigMainRenderView),
+            reinterpret_cast<void*>(g_reachOrigPlayerViewRender),
+        };
+        static_assert(_countof(targets) == _countof(ranges));
+        static_assert(_countof(trampolines) == _countof(ranges));
+
+        ReachThreadFreeze frozenThreads;
+        if (!frozenThreads.Capture())
+            return false;
+
+        busy = false;
+        bool scanOk = true;
+        for (const ReachFrozenThread& thread : frozenThreads.Threads())
+        {
+            if (!thread.suspended)
+                continue;
+            CONTEXT context{};
+            context.ContextFlags = CONTEXT_CONTROL;
+            if (!GetThreadContext(thread.handle, &context))
+            {
+                if (WaitForSingleObject(thread.handle, 0) != WAIT_OBJECT_0)
+                    scanOk = false;
+                continue;
+            }
+
+            const DWORD64 instruction = context.Rip;
+            for (size_t i = 0; i < _countof(ranges); ++i)
+            {
+                if (!targets[i])
+                    continue;
+                if (instruction >= ranges[i].begin &&
+                    instruction < ranges[i].end)
+                {
+                    busy = true;
+                }
+
+                // MinHook v1.3.4 x64 keeps both trampoline and relay in the
+                // 64-byte slot rooted at ppOriginal. The relay can be entered
+                // before the wrapper increments activeCallbacks.
+                const DWORD64 trampoline =
+                    reinterpret_cast<DWORD64>(trampolines[i]);
+                if (!trampoline)
+                {
+                    scanOk = false;
+                    continue;
+                }
+                if (instruction >= trampoline &&
+                    instruction < trampoline + 64)
+                {
+                    busy = true;
+                }
+            }
+        }
+        if (g_reachCamera.activeCallbacks.load(std::memory_order_acquire) != 0)
+            busy = true;
+
+        // Hooks are disabled and every other live thread remains suspended
+        // through this RIP/counter snapshot, so an all-clear survives resume.
+        const bool resumed = frozenThreads.Release();
+        return scanOk && resumed;
+    }
+
+    bool WaitForReachDetourQuiescence()
+    {
+        for (unsigned waited = 0; waited < 2000; ++waited)
+        {
+            if (g_reachCamera.activeCallbacks.load(
+                    std::memory_order_acquire) == 0)
+            {
+                bool ingressBusy = false;
+                if (!ScanForReachDetourIngress(ingressBusy))
+                {
+                    LOG("Reach camera cleanup: detour ingress scan failed");
+                    return false;
+                }
+                if (!ingressBusy &&
+                    g_reachCamera.activeCallbacks.load(
+                        std::memory_order_acquire) == 0)
+                    return true;
+            }
+            Sleep(1);
+        }
+        LOG("Reach camera cleanup: callbacks did not reach verified quiescence");
+        return false;
+    }
+
+    bool ReachDisableStatusIsSafe(MH_STATUS status)
+    {
+        return status == MH_OK || status == MH_ERROR_DISABLED ||
+            status == MH_ERROR_NOT_CREATED;
+    }
+
+    bool DisableAndRemoveReachHooks()
+    {
+        bool disabledAll = true;
+        void* const targets[] = {
+            g_reachCamera.outerTarget,
+            g_reachCamera.innerTarget,
+        };
+        for (void* target : targets)
+        {
+            if (!target)
+                continue;
+            const MH_STATUS status = MH_DisableHook(target);
+            if (!ReachDisableStatusIsSafe(status))
+            {
+                disabledAll = false;
+                LOG("Reach camera cleanup: disable failed for %p (%d)",
+                    target, static_cast<int>(status));
+            }
+        }
+        if (!disabledAll || !WaitForReachDetourQuiescence())
+            return false;
+
+        bool removedAll = true;
+        if (g_reachCamera.innerTarget)
+        {
+            const MH_STATUS status =
+                MH_RemoveHook(g_reachCamera.innerTarget);
+            if (status == MH_OK || status == MH_ERROR_NOT_CREATED)
+            {
+                g_reachCamera.innerTarget = nullptr;
+                g_reachOrigPlayerViewRender = nullptr;
+            }
+            else
+            {
+                removedAll = false;
+                LOG("Reach camera cleanup: inner remove failed for %p (%d)",
+                    g_reachCamera.innerTarget, static_cast<int>(status));
+            }
+        }
+        if (g_reachCamera.outerTarget)
+        {
+            const MH_STATUS status =
+                MH_RemoveHook(g_reachCamera.outerTarget);
+            if (status == MH_OK || status == MH_ERROR_NOT_CREATED)
+            {
+                g_reachCamera.outerTarget = nullptr;
+                g_reachOrigMainRenderView = nullptr;
+            }
+            else
+            {
+                removedAll = false;
+                LOG("Reach camera cleanup: outer remove failed for %p (%d)",
+                    g_reachCamera.outerTarget, static_cast<int>(status));
+            }
+        }
+        return removedAll;
     }
 
     bool RemoveReachCameraCore()
     {
+        g_reachCamera.teardownRequested.store(
+            true, std::memory_order_release);
         g_reachCamera.armed.store(false, std::memory_order_release);
         for (int eye = 0; eye < 2; ++eye)
         {
@@ -9837,18 +10736,23 @@ namespace
         g_aimSeen.store(false, std::memory_order_release);
         g_camValid.store(false, std::memory_order_release);
         g_baseCamValid.store(false, std::memory_order_release);
-        if (g_reachCamera.outerTarget)
+        if (!DisableAndRemoveReachHooks())
+            return false;
+
+        // A callback admitted before armed was cleared could have published
+        // its final copied eye while teardown waited. Quiescence makes this
+        // second invalidation definitive for the retired title generation.
+        for (int eye = 0; eye < 2; ++eye)
         {
-            MH_DisableHook(g_reachCamera.outerTarget);
-            MH_RemoveHook(g_reachCamera.outerTarget);
+            g_reachRenderFovSerial[eye].store(0, std::memory_order_release);
+            g_reachRenderHalfFovX[eye].store(0.0f, std::memory_order_relaxed);
+            g_reachRenderHalfFovY[eye].store(0.0f, std::memory_order_relaxed);
         }
-        if (g_reachCamera.innerTarget)
-        {
-            MH_DisableHook(g_reachCamera.innerTarget);
-            MH_RemoveHook(g_reachCamera.innerTarget);
-        }
-        if (g_reachCamera.moduleReference)
-            FreeLibrary(g_reachCamera.moduleReference);
+        g_aimSeen.store(false, std::memory_order_release);
+        g_camValid.store(false, std::memory_order_release);
+        g_baseCamValid.store(false, std::memory_order_release);
+
+        HMODULE moduleReference = g_reachCamera.moduleReference;
         g_reachCamera.innerTarget = nullptr;
         g_reachCamera.outerTarget = nullptr;
         g_reachCamera.moduleReference = nullptr;
@@ -9859,6 +10763,10 @@ namespace
         g_reachOrigPlayerViewRender = nullptr;
         g_reachOrigMainRenderView = nullptr;
         g_reachHelpers = {};
+        if (moduleReference)
+            FreeLibrary(moduleReference);
+        g_reachCamera.teardownRequested.store(
+            false, std::memory_order_release);
         g_reachCamera.installed.store(false, std::memory_order_release);
         LOG("Reach camera core removed; stock Reach owns the title");
         return true;
@@ -9890,7 +10798,9 @@ namespace
             !ReachVerifyRel32Call(
                 base, kReachSetupFrustumCallRva, kReachFrustumHelperRva) ||
             !ReachVerifyRel32Call(
-                base, kReachSetupProjectionCallRva, kReachProjectionBuilderRva))
+                base, kReachSetupProjectionCallRva,
+                kReachProjectionBuilderRva) ||
+            !ReachVerifyVisibilityConsumer(base, size))
         {
             LOG("Reach camera install: camera-rebuild helper verification failed; "
                 "stock Reach remains active");
@@ -9911,19 +10821,18 @@ namespace
 
         void* inner = reinterpret_cast<void*>(base + kReachPlayerViewRenderRva);
         void* outer = reinterpret_cast<void*>(base + kReachMainRenderViewRva);
-        if (MH_CreateHook(inner,
+        const bool innerCreated = MH_CreateHook(inner,
                 reinterpret_cast<void*>(&ReachPlayerViewRenderDetour),
-                reinterpret_cast<void**>(&g_reachOrigPlayerViewRender)) != MH_OK ||
-            MH_CreateHook(outer,
+                reinterpret_cast<void**>(&g_reachOrigPlayerViewRender)) == MH_OK;
+        const bool outerCreated = innerCreated && MH_CreateHook(outer,
                 reinterpret_cast<void*>(&ReachMainRenderViewDetour),
-                reinterpret_cast<void**>(&g_reachOrigMainRenderView)) != MH_OK ||
-            MH_EnableHook(inner) != MH_OK ||
-            MH_EnableHook(outer) != MH_OK)
+                reinterpret_cast<void**>(&g_reachOrigMainRenderView)) == MH_OK;
+        if (!innerCreated || !outerCreated)
         {
-            MH_DisableHook(inner);
-            MH_DisableHook(outer);
-            MH_RemoveHook(inner);
-            MH_RemoveHook(outer);
+            if (outerCreated)
+                MH_RemoveHook(outer);
+            if (innerCreated)
+                MH_RemoveHook(inner);
             FreeLibrary(moduleReference);
             g_reachOrigPlayerViewRender = nullptr;
             g_reachOrigMainRenderView = nullptr;
@@ -9956,8 +10865,21 @@ namespace
         g_camValid.store(false, std::memory_order_release);
         g_baseCamValid.store(false, std::memory_order_release);
         g_reachCamera.armed.store(false, std::memory_order_release);
+        g_reachCamera.teardownRequested.store(
+            false, std::memory_order_release);
         g_reachCamera.installed.store(true, std::memory_order_release);
         g_needRecenter.store(true, std::memory_order_release);
+        if (MH_EnableHook(inner) != MH_OK || MH_EnableHook(outer) != MH_OK)
+        {
+            // State was published before the first enable, so even a partial
+            // MinHook failure can use the same disable/quiesce/remove proof as
+            // a title transition. A failed proof retains every dependency and
+            // teardownRequested makes the worker retry instead of re-arming.
+            LOG("Reach camera install: MinHook enable failed; requesting "
+                "verified teardown");
+            RemoveReachCameraCore();
+            return false;
+        }
         LOG("Reach camera core installed: inner player_view_render + outer "
             "main_render_view hooked; waiting one-second fresh-camera interval "
             "before arming per-eye stereo");
@@ -9971,6 +10893,12 @@ namespace
     {
         const bool installed =
             g_reachCamera.installed.load(std::memory_order_acquire);
+        if (installed && g_reachCamera.teardownRequested.load(
+                std::memory_order_acquire))
+        {
+            RemoveReachCameraCore();
+            return;
+        }
         if (!soleReachTitle || !base || size != kReachRetailImageSize)
         {
             if (installed)

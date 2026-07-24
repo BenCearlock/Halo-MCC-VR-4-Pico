@@ -1,60 +1,75 @@
 # Halo: Reach signature evidence
 
-Status: **armed candidate, headset-pending**. The proven signatures below are now
-wired into a permanent, fail-open Reach per-eye camera core (`InstallReachCameraCore`
-in `src/dll/game.cpp`; see `BUILDING.md`). It installs the inner
-`player_view_render` and outer `main_render_view` hooks only after the loaded-image
-preflight and display proof pass, arms after the one-second fresh-camera safety
-interval, and falls open to a single stock render on any unmet precondition, an
-invalid camera, or a fault -- Halo 3 and ODST are never touched. The
-camera-injection mapping is a headset-tuning result; the accepted product pointer
-stays at `MCC_VR_ALPHA_0.2.2` until a headset pass confirms it.
+Status: **armed forward candidate, headset-pending**. The proven signatures below
+are wired into a permanent, fail-open Reach per-eye camera core
+(`InstallReachCameraCore` in `src/dll/game.cpp`; see `BUILDING.md`). It installs
+the inner `player_view_render` and outer `main_render_view` hooks only after the
+loaded-image preflight and display proof pass, arms after the one-second
+fresh-camera safety interval, and falls open on any unmet precondition, invalid
+camera, or fault. Halo 3 and ODST are not modified. The accepted product pointer
+does not move until an exact candidate passes in the headset.
 
-The first armed candidate mutated only the compact camera and called
-`player_view_render` directly. In the headset that rendered a narrow "cone" with
-no stereo depth or 6DOF, because `player_view_render` reads the view/projection
-matrices the engine's setup already built into `player_view+0x490` from the stock
-centre camera -- it never re-reads the compact camera. Source `0f7b6321` then
-re-ran the stock pre-scope rebuild per eye and produced distinct stereo plus
-headset translation, but its exact deployed DLL
-`C5A33D3994695334CBB2F8DD0F108A42B1A86DF6BB3B2A2F646EF6A89EE01C40`
-failed the 2026-07-24 headset test: head turns warped the world and exposed black
-borders, while stock right-stick look and the render-only HMD camera competed.
-The failed log and manifest are preserved under
+The first armed candidate changed only the compact camera, so the already-built
+player-view matrices stayed stock and the headset showed a narrow flat cone.
+Source `0f7b6321` reran the proven camera rebuild per eye and produced distinct
+stereo plus translation, but its exact headset test exposed a raster/OpenXR FOV
+mismatch and competing stock/HMD look. That failure is preserved under
 `out/test-runs/0f7b632-reach-3d-warp-input-fail-20260724-094945Z`.
 
-That log proves the mismatch rather than a missing stereo hook. Reach rastered
-`2912x2100` with an approximately 61.5-degree horizontal and 53-degree vertical
-half-frustum, while the OpenXR projection layer inherited Halo 3's approximately
-47.5/48.1-degree defaults. The compositor therefore interpreted a wider raster
-through a narrower projection, exactly producing head-motion warp and uncovered
-outer edges. The forward candidate now:
+Source `f953bbe3` then bound the actual Reach projections and both eye copies to
+the prepared OpenXR frame and gave the HMD exclusive visual look-stick ownership.
+Its exact DLL
+`2B492F23ECF7CBB158B5EE4072B01CDE1F4BF7439C8BFF8886649547269AC980`
+armed at approximately 100 FPS with zero frame-order failures. The user reported
+that the Reach 3D looked great, but world culling still followed the gun/stock
+aim camera instead of the headset. The log, manifest, build identity, and result
+are preserved under
+`out/test-runs/f953bbe-reach-stereo-pass-culling-fail-20260724-102643Z`.
 
-- selects the smallest symmetric Reach vertical FOV covering each eye's exact
-  OpenXR angles at the compact camera's validated render bounds;
-- decodes the projection scales that Reach actually built, rejects an
-  under-covering matrix, and publishes each eye only after render and copy;
-- binds both raster FOVs, eye copies, and a successful OpenXR view locate to the
-  exact prepared-frame serial, with no legacy Halo 3/ODST eye-cache fallback;
-- consumes OpenXR snap/smooth turn once at the Reach centre camera and suppresses
-  stock RX/RY while that armed tracked camera owns look.
+The remaining defect is now pinned to an exact pre-inner stage. Retail
+`main_render_view` performs its visibility work before calling
+`player_view_render`; its cluster lookup at `0x0C3320 -> 0x273458` explicitly
+queries `workspace+0x154`, and the visibility build at `0x0C335C -> 0x27F408`
+receives the secondary compact/derived pair `+0x154/+0x1E4`. The pinned HREK
+homolog names this work `player_view_compute_visibility` and repeats the same
+secondary-camera inputs. Installing HMD eyes only in the later inner hook can
+therefore draw correct stereo from a visibility set collected in another
+direction.
+
+The forward candidate now:
+
+- reads one lock-free, exact-prepared-serial head/pad/two-eye snapshot at the
+  exact normal outer boundary;
+- converts each asymmetric OpenXR eye to the symmetric fixed-aspect projection
+  Reach actually rasterizes, rotates all eight widened corner rays into
+  head-centre space, and selects a symmetric binocular angular-union FOV;
+- applies shared turn plus HMD orientation/translation once to a local centre
+  camera, runs only the proven pre-scope frustum/projection helpers, validates
+  the built projection, then mirrors that centre into both workspace pairs;
+- lets stock visibility run exactly once from that head-centred secondary camera;
+- rebuilds the bounded player-view camera/matrices to the same centre so any
+  withheld/failed inner stereo transaction has a coherent one-render fallback;
+- derives both exact raster eyes from the same saved centre in the inner hook,
+  without applying turn, head pose, or room-scale lean twice; and
+- restores the bounded player-view state and only the proven `0x2A8` camera-pair
+  bytes after the outer call, leaving the engine-owned camera-stack callback and
+  final render-owner lifetime untouched.
+
+As in accepted Halo 3/ODST, the visibility camera is head-centred and actual eye
+origin translation is applied only in the two eye rasters. The angular union is
+conservative for the exact widened FOVs and eye cant, but this candidate does not
+claim exact finite-distance coverage of translated eye origins. Close doorway
+edges and near peripheral geometry are therefore explicit headset tests rather
+than hidden fixed-IPD or guessed-near-plane padding.
 
 Reach controller-aim capability remains withheld because no Reach-specific
-simulation aim-forward or weapon/body-heading contract has been proven. This
-candidate fixes visual camera ownership; it does not guess weapon, HUD, or IK
-semantics. It still re-runs the stock pre-scope rebuild per eye (steps 2-6
-below): the frustum helper `0x287F58`, projection builder `0x2884BC`, camera-state updater
-`0x286F9C`, and projection/matrix builder `0x28AF8C`, so the matrices the inner
-render consumes are rebuilt from the per-eye VR camera. The frustum helper and
-projection builder are additionally verified at install by decoding the exact
-`rel32` targets of their proven setup call sites (`0x26C2FF`, `0x26C316`); a
-mismatched image fails open. This mirrors Halo 3's `RenderViewHook`, which
-rebuilds `view+0x98` with the engine's own `build_viewport`/`build_matrices`
-helpers before each eye's render. The per-eye rebuild running inside the active
-render scope, the symmetric-vs-asymmetric FOV mapping, and the secondary
-render-camera policy all remain headset-tuning results. If the exact-FOV headset
-test still exposes peripheral voids, pre-inner visibility timing is the next
-isolated investigation; it is not speculatively changed in this candidate.
+projectile/reticle aim-forward or weapon/body-heading contract has been proven.
+The original pre-head camera direction is kept logically separate from the HMD
+culling camera and is not published as aim. This preserves the Halo 3/ODST
+ownership model for later motion-control evidence without guessing a Reach
+simulation offset. Per-eye rendering still uses the proven frustum helper
+`0x287F58`, projection builder `0x2884BC`, camera-state updater `0x286F9C`, and
+projection/matrix builder `0x28AF8C` before each inner render.
 
 This document records Reach-specific facts for the cumulative Halo 3 + ODST +
 Reach line. Halo 3 and ODST offsets, layouts, bones, markers, and tag meanings
@@ -367,6 +382,45 @@ stay inside the existing scope and account for all transitive player-view and
 global side effects. The observed continuous heartbeat and one-second interval
 must still be enforced by production, and transition/device-loss/thread
 teardown remain open.
+
+### Pre-inner visibility camera consumer
+
+The failed `f953bbe3` headset result required isolating which of the two proven
+workspace cameras drives CPU visibility. Retail `main_render_view` supplies the
+default workspace at its cluster lookup:
+
+- `0x0C3319` loads workspace RVA `0x00C9FAE0` into `RDX`;
+- `0x0C3320` calls `0x273458`;
+- that callee executes `lea rcx,[rdx+0x154]` at `0x273468`; and
+- the subsequent visibility call at `0x0C335C -> 0x27F408` receives the
+  secondary compact camera at `+0x154` and secondary derived block at `+0x1E4`.
+
+The pinned HREK homolog `0x8339B0` is profile-named
+`player_view_compute_visibility`. Its call at `0x833A2E -> 0x839230` repeats the
+same `+0x154` compact-camera query and passes the corresponding secondary
+derived block. This is independent semantic corroboration that visibility is
+camera-derived and consumes the secondary/render pair before
+`player_view_render`.
+
+Production rechecks both live `rel32` call targets, the exact
+`lea rcx,[rdx+0x154]` bytes, and the RIP-relative secondary-derived address at
+install. The normal outer hook may therefore rebuild and mirror one
+head-centred binocular-union camera into the already-proven primary/secondary
+workspace pairs before calling the original exactly once. It must not call the
+whole outer function or visibility builder twice, hook the nine-caller frustum
+helper, write a guessed visibility buffer, or apply a fixed angular pad.
+
+Retail visibility exposes only one admitted projection: `0x27F4A0` sets its
+projection count to one, and pinned HREK does the same at `0x855FB1`. A generic
+lower layer appears multi-projection-capable, but its ABI/layout/lifetime are not
+proven and it is not used. Reach-specific evidence does identify compact-camera
+`+0x64` as the dynamic near plane: retail projection builder `0x2884F4` reads it,
+HREK `0x823553` reads it beside the assertion `camera->z_near>=0.0f`, and the
+retail/HREK visibility projection paths consume it at `0x2A2046`/`0x81E8E8`.
+That gives a future evidence-backed route for exact translated-eye near-corner
+coverage, but stacking it into this direction-ownership candidate would add a
+new untested camera-layout behavior. This candidate preserves the accepted
+Halo 3/ODST head-centre visibility policy instead.
 
 ### Inner stereo candidate and coherent rebuild constraints
 
@@ -687,16 +741,18 @@ Reach path. `proof_complete` and `hook_eligible` remain false.
 ## Evidence still required
 
 The unaccepted camera candidate now implements the exact outer-owner token,
-inner `player_view_render` hook, stock-last-window policy, pre-scope rebuild,
-bounded rollback, and cold-validated group-1 copy behind identity, scope,
-finite/range, specialization-zero, and current-frame gates. Those mechanics are
-not accepted merely because they build or launch.
+head-centred pre-visibility workspace rebuild, binocular angular-union FOV,
+inner `player_view_render` stereo loop, stock-last-window policy, bounded
+rollback, and cold-validated group-1 copy behind identity, scope, finite/range,
+specialization-zero, and current-frame gates. Those mechanics are not accepted
+merely because they build or launch.
 
-The immediate gate is an exact-DLL headset result proving full-frame coverage
-without head-turn warp or black borders, coherent visual snap/smooth turning,
-stereo depth, and positional 6DOF, followed by Halo 3 and ODST regressions for
-the shared input/submission changes. If peripheral geometry still disappears,
-the pre-inner visibility timing must be isolated and proven separately. Broader
+The immediate gate is an exact-DLL headset result proving that geometry
+visibility follows 90/180-degree head yaw, high/low pitch, and doorway lean
+instead of the gun direction while stereo depth, projection coverage,
+positional 6DOF, and visual snap/smooth turning remain coherent. Fast edge
+sweeps must not restore warp or black borders. Halo 3 and ODST regressions are
+then required because shared input/submission code remains cumulative. Broader
 pause/cinematic/split-screen, unload/reload, device-loss, callback quiescence,
 and detour-teardown coverage also remains open. First-person weapon/body aim,
 HUD anchor, skeleton and weapon-marker facts, brightness, and motion blur must

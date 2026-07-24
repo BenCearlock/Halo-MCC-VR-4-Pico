@@ -964,6 +964,9 @@ int main()
               invalidPass.restoreLastWindowAfterPass,
             "Reach last-window policy fails closed for invalid passes and preserves the final result");
         Check(kReachRollbackLayout.workspaceSize == 0x2B0 &&
+              kReachCameraPairDataSize == 0x2A8 &&
+              kReachSecondaryDerivedOffset + kReachDerivedBlockSize ==
+                  kReachCameraPairDataSize &&
               kReachRollbackLayout.cameraStateOffset == 0x3B0 &&
               kReachRollbackLayout.cameraStateSize == 0xC8 &&
               kReachRollbackLayout.currentMatricesOffset == 0x490 &&
@@ -973,6 +976,15 @@ int main()
               kReachRollbackLayout.excludedLastWindowOffset == 0xA30 &&
               kReachRollbackLayout.workspaceSize < kReachPlayerViewStride,
             "Reach rollback policy snapshots bounded regions and excludes the whole player view");
+        Check(kReachVisibilityClusterLookupCallRva == 0x000C3320 &&
+              kReachVisibilityClusterLookupTargetRva == 0x00273458 &&
+              kReachVisibilitySecondaryCompactLeaRva == 0x00273468 &&
+              kReachVisibilityBuildCallRva == 0x000C335C &&
+              kReachVisibilityBuildTargetRva == 0x0027F408 &&
+              kReachVisibilitySecondaryDerivedLeaRva == 0x000C3339 &&
+              kReachVisibilitySecondaryCompactAddressRva == 0x00C9FC34 &&
+              kReachVisibilitySecondaryDerivedAddressRva == 0x00C9FCC4,
+            "Reach visibility evidence identifies the exact secondary camera pair consumer");
 
         constexpr float reachRad = 3.14159265358979323846f / 180.0f;
         const ReachSymmetricFovCover fovCover = SelectReachSymmetricFovCover(
@@ -996,6 +1008,259 @@ int main()
               !ReachProjectionCoversOpenXr(
                    DecodeReachProjectionHalfFovs(2.0f, 2.0f), fovCover),
             "Reach FOV proof rejects invalid and under-covering projections");
+
+        const std::array<ReachEyeCullFrustum, 2> asymmetricEyes{{
+            {-61.5f * reachRad, 43.4f * reachRad,
+             53.0f * reachRad, -48.0f * reachRad,
+             {0.0f, 0.0f, 0.0f, 1.0f}},
+            {-43.4f * reachRad, 61.5f * reachRad,
+             49.0f * reachRad, -53.0f * reachRad,
+             {0.0f, 0.0f, 0.0f, 1.0f}},
+        }};
+        const ReachSymmetricFovCover stereoIdentityCover =
+            SelectReachStereoCullFovCover(asymmetricEyes, 2912, 2100);
+        const float stereoIdentityHalfV =
+            stereoIdentityCover.verticalFov * 0.5f;
+        const float stereoIdentityHalfH = std::atan(
+            std::tan(stereoIdentityHalfV) * (2912.0f / 2100.0f));
+        Check(stereoIdentityCover.valid &&
+              std::fabs(stereoIdentityCover.requiredHalfHorizontal -
+                        61.5f * reachRad) < 0.0001f &&
+              std::fabs(stereoIdentityCover.requiredHalfVertical -
+                        53.0f * reachRad) < 0.0001f &&
+              stereoIdentityHalfH + 0.0001f >=
+                  stereoIdentityCover.requiredHalfHorizontal &&
+              stereoIdentityHalfV + 0.0001f >=
+                  stereoIdentityCover.requiredHalfVertical,
+            "Reach stereo cull FOV encloses all eight asymmetric identity-eye corners");
+
+        const auto yawQuaternion = [](float yaw, float scale = 1.0f)
+        {
+            return std::array<float, 4>{
+                0.0f, std::sin(yaw * 0.5f) * scale, 0.0f,
+                std::cos(yaw * 0.5f) * scale};
+        };
+
+        // Adversarial headset geometry: each raw OpenXR eye is much wider on
+        // its nasal side, while opposed cant rotates the originally narrow
+        // temporal side outward. Reach rasterizes a symmetric per-eye FOV, so
+        // the outer cull must contain those widened raster corners rather than
+        // only the raw asymmetric angles.
+        const std::array<ReachEyeCullFrustum, 2> adversarialRawEyes{{
+            {-20.0f * reachRad, 70.0f * reachRad,
+             45.0f * reachRad, -35.0f * reachRad,
+             yawQuaternion(10.0f * reachRad)},
+            {-70.0f * reachRad, 20.0f * reachRad,
+             42.0f * reachRad, -38.0f * reachRad,
+             yawQuaternion(-10.0f * reachRad)},
+        }};
+        const std::array<ReachSymmetricFovCover, 2> adversarialRasterCovers{{
+            SelectReachSymmetricFovCover(
+                adversarialRawEyes[0].angleLeft,
+                adversarialRawEyes[0].angleRight,
+                adversarialRawEyes[0].angleUp,
+                adversarialRawEyes[0].angleDown, 2912, 2100),
+            SelectReachSymmetricFovCover(
+                adversarialRawEyes[1].angleLeft,
+                adversarialRawEyes[1].angleRight,
+                adversarialRawEyes[1].angleUp,
+                adversarialRawEyes[1].angleDown, 2912, 2100),
+        }};
+        std::array<ReachEyeCullFrustum, 2> adversarialRasterEyes{};
+        const bool builtAdversarialLeft =
+            BuildReachSymmetricRasterCullFrustum(
+                adversarialRasterCovers[0],
+                adversarialRawEyes[0].relativeOrientation,
+                2912, 2100, adversarialRasterEyes[0]);
+        const bool builtAdversarialRight =
+            BuildReachSymmetricRasterCullFrustum(
+                adversarialRasterCovers[1],
+                adversarialRawEyes[1].relativeOrientation,
+                2912, 2100, adversarialRasterEyes[1]);
+        const float adversarialRasterHalfV =
+            adversarialRasterCovers[0].verticalFov * 0.5f;
+        const float adversarialRasterHalfH = std::atan(
+            std::tan(adversarialRasterHalfV) * (2912.0f / 2100.0f));
+        Check(builtAdversarialLeft && builtAdversarialRight &&
+              std::fabs(adversarialRasterEyes[0].angleLeft +
+                        adversarialRasterHalfH) < 0.000001f &&
+              std::fabs(adversarialRasterEyes[0].angleRight -
+                        adversarialRasterHalfH) < 0.000001f &&
+              std::fabs(adversarialRasterEyes[0].angleUp -
+                        adversarialRasterHalfV) < 0.000001f &&
+              std::fabs(adversarialRasterEyes[0].angleDown +
+                        adversarialRasterHalfV) < 0.000001f &&
+              adversarialRasterEyes[0].angleLeft <
+                  adversarialRawEyes[0].angleLeft - 40.0f * reachRad &&
+              adversarialRasterEyes[1].angleRight >
+                  adversarialRawEyes[1].angleRight + 40.0f * reachRad &&
+              adversarialRasterEyes[0].relativeOrientation ==
+                  adversarialRawEyes[0].relativeOrientation &&
+              adversarialRasterEyes[1].relativeOrientation ==
+                  adversarialRawEyes[1].relativeOrientation,
+            "Reach cull inputs describe the actual widened symmetric eye rasters");
+
+        const ReachSymmetricFovCover adversarialRawCull =
+            SelectReachStereoCullFovCover(
+                adversarialRawEyes, 2912, 2100);
+        const ReachSymmetricFovCover adversarialRasterCull =
+            SelectReachStereoCullFovCover(
+                adversarialRasterEyes, 2912, 2100);
+        const float adversarialCullHalfV =
+            adversarialRasterCull.verticalFov * 0.5f;
+        const float adversarialCullHalfH = std::atan(
+            std::tan(adversarialCullHalfV) * (2912.0f / 2100.0f));
+        Check(adversarialRawCull.valid && adversarialRasterCull.valid &&
+              std::fabs(adversarialRasterCull.requiredHalfHorizontal -
+                        80.0f * reachRad) < 0.0001f &&
+              adversarialRasterCull.requiredHalfHorizontal >
+                  adversarialRawCull.requiredHalfHorizontal +
+                      15.0f * reachRad &&
+              adversarialRasterCull.requiredHalfVertical >
+                  adversarialRawCull.requiredHalfVertical +
+                      15.0f * reachRad &&
+              adversarialCullHalfH + 0.0001f >=
+                  adversarialRasterCull.requiredHalfHorizontal &&
+              adversarialCullHalfV + 0.0001f >=
+                  adversarialRasterCull.requiredHalfVertical,
+            "Reach binocular cull encloses widened asymmetric-and-canted raster corners");
+
+        ReachEyeCullFrustum rejectedRasterFrustum{
+            -0.5f, 0.5f, 0.5f, -0.5f, {0.0f, 0.0f, 0.0f, 1.0f}};
+        ReachSymmetricFovCover invalidRasterCover =
+            adversarialRasterCovers[0];
+        invalidRasterCover.valid = false;
+        const bool rejectsInvalidRasterCover =
+            !BuildReachSymmetricRasterCullFrustum(
+                invalidRasterCover,
+                adversarialRawEyes[0].relativeOrientation,
+                2912, 2100, rejectedRasterFrustum);
+        const bool clearsRejectedRasterFrustum =
+            rejectedRasterFrustum.angleLeft == 0.0f &&
+            rejectedRasterFrustum.angleRight == 0.0f &&
+            rejectedRasterFrustum.angleUp == 0.0f &&
+            rejectedRasterFrustum.angleDown == 0.0f;
+        Check(rejectsInvalidRasterCover && clearsRejectedRasterFrustum &&
+              !BuildReachSymmetricRasterCullFrustum(
+                  adversarialRasterCovers[0],
+                  {0.0f, 0.0f, 0.0f, 0.0f},
+                  2912, 2100, rejectedRasterFrustum) &&
+              !BuildReachSymmetricRasterCullFrustum(
+                  adversarialRasterCovers[0],
+                  adversarialRawEyes[0].relativeOrientation,
+                  2912, 0, rejectedRasterFrustum),
+            "Reach symmetric raster cull conversion fails closed on invalid input");
+
+        const std::array<ReachEyeCullFrustum, 2> cantedEyes{{
+            {-40.0f * reachRad, 40.0f * reachRad,
+             35.0f * reachRad, -35.0f * reachRad,
+             yawQuaternion(10.0f * reachRad)},
+            {-40.0f * reachRad, 40.0f * reachRad,
+             35.0f * reachRad, -35.0f * reachRad,
+             yawQuaternion(-10.0f * reachRad)},
+        }};
+        const ReachSymmetricFovCover cantedCover =
+            SelectReachStereoCullFovCover(cantedEyes, 2912, 2100);
+        std::array<ReachEyeCullFrustum, 2> scaledCantedEyes = cantedEyes;
+        for (ReachEyeCullFrustum& eye : scaledCantedEyes)
+            for (float& component : eye.relativeOrientation)
+                component *= -3.25f;
+        const ReachSymmetricFovCover scaledCantedCover =
+            SelectReachStereoCullFovCover(scaledCantedEyes, 2912, 2100);
+        const std::array<ReachEyeCullFrustum, 2> swappedCantedEyes{{
+            cantedEyes[1], cantedEyes[0]}};
+        const ReachSymmetricFovCover swappedCantedCover =
+            SelectReachStereoCullFovCover(swappedCantedEyes, 2912, 2100);
+        Check(cantedCover.valid && scaledCantedCover.valid &&
+              swappedCantedCover.valid &&
+              std::fabs(cantedCover.requiredHalfHorizontal -
+                        50.0f * reachRad) < 0.0001f &&
+              cantedCover.requiredHalfVertical > 35.0f * reachRad &&
+              std::fabs(cantedCover.verticalFov -
+                        scaledCantedCover.verticalFov) < 0.000001f &&
+              std::fabs(cantedCover.requiredHalfHorizontal -
+                        swappedCantedCover.requiredHalfHorizontal) < 0.000001f &&
+              std::fabs(cantedCover.requiredHalfVertical -
+                        swappedCantedCover.requiredHalfVertical) < 0.000001f,
+            "Reach stereo cull FOV normalizes quaternion scale and is invariant to eye order");
+
+        bool yawEnvelopeProperty = true;
+        constexpr std::array<float, 5> yawDegrees{
+            0.0f, 2.5f, 6.0f, 10.0f, 15.0f};
+        constexpr std::array<float, 4> quaternionScales{
+            0.25f, 1.0f, 3.0f, -2.0f};
+        for (float yawDegreesValue : yawDegrees)
+        {
+            const float yaw = yawDegreesValue * reachRad;
+            ReachSymmetricFovCover reference{};
+            for (size_t scaleIndex = 0;
+                 scaleIndex < quaternionScales.size(); ++scaleIndex)
+            {
+                const float scale = quaternionScales[scaleIndex];
+                const std::array<ReachEyeCullFrustum, 2> propertyEyes{{
+                    {-30.0f * reachRad, 30.0f * reachRad,
+                     25.0f * reachRad, -25.0f * reachRad,
+                     yawQuaternion(yaw, scale)},
+                    {-30.0f * reachRad, 30.0f * reachRad,
+                     25.0f * reachRad, -25.0f * reachRad,
+                     yawQuaternion(-yaw, scale)},
+                }};
+                const ReachSymmetricFovCover candidate =
+                    SelectReachStereoCullFovCover(
+                        propertyEyes, 2912, 2100);
+                yawEnvelopeProperty = yawEnvelopeProperty && candidate.valid &&
+                    std::fabs(candidate.requiredHalfHorizontal -
+                              (30.0f + yawDegreesValue) * reachRad) < 0.0001f;
+                if (scaleIndex == 0)
+                    reference = candidate;
+                else
+                    yawEnvelopeProperty = yawEnvelopeProperty &&
+                        std::fabs(candidate.verticalFov -
+                                  reference.verticalFov) < 0.000001f &&
+                        std::fabs(candidate.requiredHalfVertical -
+                                  reference.requiredHalfVertical) < 0.000001f;
+            }
+        }
+        Check(yawEnvelopeProperty,
+            "Reach stereo cull FOV encloses deterministic opposed-yaw properties");
+
+        std::array<ReachEyeCullFrustum, 2> invalidStereoEyes = asymmetricEyes;
+        invalidStereoEyes[0].relativeOrientation = {0.0f, 0.0f, 0.0f, 0.0f};
+        const bool rejectsZeroQuaternion =
+            !SelectReachStereoCullFovCover(
+                invalidStereoEyes, 2912, 2100).valid;
+        invalidStereoEyes = asymmetricEyes;
+        invalidStereoEyes[1].relativeOrientation[2] =
+            std::numeric_limits<float>::quiet_NaN();
+        const bool rejectsNonFiniteQuaternion =
+            !SelectReachStereoCullFovCover(
+                invalidStereoEyes, 2912, 2100).valid;
+        invalidStereoEyes = asymmetricEyes;
+        invalidStereoEyes[0].angleLeft =
+            -std::numeric_limits<float>::infinity();
+        const bool rejectsNonFiniteFov =
+            !SelectReachStereoCullFovCover(
+                invalidStereoEyes, 2912, 2100).valid;
+        invalidStereoEyes = asymmetricEyes;
+        invalidStereoEyes[0].angleRight = 1.57079632679489661923f;
+        const bool rejectsRearHemisphereFov =
+            !SelectReachStereoCullFovCover(
+                invalidStereoEyes, 2912, 2100).valid;
+        const std::array<ReachEyeCullFrustum, 2> behindCenterEyes{{
+            {-20.0f * reachRad, 20.0f * reachRad,
+             20.0f * reachRad, -20.0f * reachRad,
+             yawQuaternion(80.0f * reachRad)},
+            {-20.0f * reachRad, 20.0f * reachRad,
+             20.0f * reachRad, -20.0f * reachRad,
+             yawQuaternion(-80.0f * reachRad)},
+        }};
+        Check(rejectsZeroQuaternion && rejectsNonFiniteQuaternion &&
+              rejectsNonFiniteFov && rejectsRearHemisphereFov &&
+              !SelectReachStereoCullFovCover(
+                  behindCenterEyes, 2912, 2100).valid &&
+              !SelectReachStereoCullFovCover(
+                  asymmetricEyes, 0, 2100).valid,
+            "Reach stereo cull FOV rejects degenerate, non-finite, and behind-centre inputs");
     }
 
     {

@@ -518,4 +518,5 @@ Write-Host 'Reach evidence preflight passed.'
 Write-Host "Module SHA-256: $actualHash"
 Write-Host "HREK build:       $actualHrekBuild"
 Write-Host "HREK camera SHA:  $actualCameraEvidenceHash"
-Write-Host 'Runtime hooks:    forbidden (hook_eligible=false)'
+Write-Host 'Helper hooks:     forbidden (top-level hook_eligible=false)'
+Write-Host 'Camera runtime:   permanent transaction audited separately; headset acceptance pending'

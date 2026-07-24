@@ -1,7 +1,8 @@
 {
   "schema_version": 1,
-  "status": "PRELIMINARY_EVIDENCE_ONLY",
+  "status": "PRELIMINARY_HELPER_EVIDENCE_PLUS_ARMED_UNACCEPTED_TRANSACTION",
   "hook_eligible": false,
+  "hook_eligibility_scope": "PRELIMINARY_HELPER_CANDIDATES_ONLY; permanent main_render_view/player_view_render transaction is described separately below",
   "accepted_baseline": {
     "release": "MCC_VR_ALPHA_0.2.2",
     "runtime_source_commit": "3a2a11bfc66b36e70f60282e91c9d5436f2e18d1"
@@ -36,7 +37,7 @@
     "consumed_layout_fields"
   ],
   "player_view_transaction": {
-    "status": "STATIC_BOUNDARY_PROVEN_RUNTIME_INCOMPLETE",
+    "status": "ARMED_FORWARD_CAMERA_TRANSACTION_HEADSET_PENDING",
     "retail": {
       "main_render_game": {
         "function_rva": "0x000C33F8",
@@ -170,6 +171,42 @@
           "last_window_flag_excluded": true
         }
       },
+      "pre_inner_visibility": {
+        "ordering": "AFTER_NORMAL_SETUP_BEFORE_PLAYER_VIEW_RENDER",
+        "cluster_lookup_call_rva": "0x000C3320",
+        "cluster_lookup_target_rva": "0x00273458",
+        "cluster_lookup_secondary_compact_lea_rva": "0x00273468",
+        "cluster_lookup_secondary_compact_offset": "0x0154",
+        "visibility_build_call_rva": "0x000C335C",
+        "visibility_build_target_rva": "0x0027F408",
+        "secondary_compact_workspace_offset": "0x0154",
+        "secondary_derived_workspace_offset": "0x01E4",
+        "hrek_profile_name": "player_view_compute_visibility",
+        "hrek_cluster_lookup_call_rva": "0x00833A2E",
+        "hrek_cluster_lookup_target_rva": "0x00839230",
+        "production_live_edge_verification": true,
+        "production_policy": "ONE_HEAD_CENTER_BINOCULAR_UNION_BEFORE_ONE_STOCK_VISIBILITY_PASS",
+        "per_eye_cull_input": "ACTUAL_SYMMETRIC_FIXED_ASPECT_RASTER_CORNERS_ROTATED_BY_RUNTIME_EYE_ORIENTATION",
+        "eye_origin_policy": "HEAD_CENTER_VISIBILITY_WITH_RUNTIME_TRANSLATION_APPLIED_PER_RASTER_MATCHES_ACCEPTED_HALO3_ODST",
+        "exact_finite_distance_translated_eye_coverage_claimed": false,
+        "native_visibility_projection_count": 1,
+        "dynamic_near_plane_evidence": {
+          "compact_camera_offset": "0x64",
+          "retail_projection_read_rva": "0x002884F4",
+          "hrek_projection_read_rva": "0x00823553",
+          "hrek_assertion": "camera->z_near>=0.0f",
+          "retail_visibility_copy_rva": "0x002A2046",
+          "hrek_visibility_copy_rva": "0x0081E8E8",
+          "production_policy": "EVIDENCE_FOR_FUTURE_TRANSLATED_NEAR_CORNER_COVERAGE_NOT_CONSUMED_BY_THIS_CANDIDATE"
+        },
+        "tracking_snapshot": "TWO_FIXED_SLOTS_WRITER_CLAIM_READER_PIN_EXACT_PREPARED_SERIAL_NO_RENDER_HOOK_LOCKS",
+        "outer_workspace_rollback_size": "0x02A8",
+        "outer_player_view_rollback": "bounded 0x3B0 through 0xA30 inclusive; preserve final last-window byte",
+        "coherent_inner_fallback": "head-center player-view camera and matrices rebuilt before visibility",
+        "camera_stack_callback_excluded_from_outer_rollback": true,
+        "whole_outer_or_visibility_double_call_forbidden": true,
+        "teardown": "disable both hooks; prove callback plus wrapper/trampoline relay RIP quiescence; remove/free only after proof; retained cleanup cannot rearm"
+      },
       "late_chud_call_sites": [
         "0x0026CE28",
         "0x0026CEC9"
@@ -265,10 +302,10 @@
       "final_eye_actual_post_call_flag_must_persist": true,
       "wait_for_gpu_final_eye_policy_runtime_validated": false
     },
-    "disabled_render_candidate": {
-      "status": "COLD_PREFLIGHT_AND_RESOURCE_READINESS_COMPILED_HOOKS_OFF",
+    "armed_render_candidate": {
+      "status": "PERMANENT_FAIL_OPEN_RUNTIME_HOOKS_ON_UNACCEPTED_HEADSET_CANDIDATE",
       "build_option": "HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE",
-      "build_option_requires_controller_bringup": true,
+      "build_option_requires_controller_bringup": false,
       "implementation": [
         "src/common/reach_render_logic.h",
         "src/dll/reach_render_candidate.h",
@@ -280,7 +317,7 @@
         "src/dll/vr.h",
         "src/dll/vr.cpp"
       ],
-      "implemented_pure_gates": [
+      "implemented_gates_and_runtime_paths": [
         "canonical_main_inner_and_frustum_signature_bytes",
         "full_frustum_match_count_expected_rva_and_executable_range_gate",
         "exact_normal_screenshot_unknown_outer_return_classification",
@@ -296,40 +333,48 @@
         "strict_one_second_freshness_advanced_only_by_valid_transactions",
         "halo3_compatible_configurable_eye_pass_order",
         "checked_first_pass_false_final_pass_original_last_window_policy",
-        "bounded_workspace_camera_state_and_matrix_rollback_layout_and_owner_coupled_cleanup_tokens"
+        "bounded_workspace_camera_state_and_matrix_rollback_layout_and_owner_coupled_cleanup_tokens",
+        "outer_main_render_view_and_inner_player_view_render_detours",
+        "exact_prepared_serial_lock_free_head_pad_and_two_eye_snapshot",
+        "pre_visibility_head_center_binocular_angular_union_camera_commit",
+        "coherent_head_center_player_view_fallback",
+        "two_eye_engine_camera_rebuild_copyresource_and_projection_fov_publication",
+        "callback_wrapper_and_minhook_relay_rip_quiescent_teardown"
       ],
-      "not_implemented": [
-        "outer_or_inner_detour_installation",
-        "inside_scope_camera_rebuild_or_any_engine_write",
-        "reach_copyresource_or_completed_eye_content",
-        "live_inner_scope_display_continuity_observation",
-        "reach_lifecycle_heartbeat_or_runtime_capability_publication",
-        "callback_quiescence_or_detour_teardown"
+      "withheld_or_headset_pending": [
+        "reach_controller_projectile_reticle_and_weapon_body_aim",
+        "reach_native_hud_and_arm_ik",
+        "exact_finite_distance_cull_coverage_for_translated_eye_origins",
+        "current_forward_head_owned_visibility_headset_result",
+        "halo3_and_odst_regression_for_this_exact_shared_binary"
       ],
       "loaded_image_preflight_compiled": true,
       "display_copy_readiness_compiled": true,
-      "runtime_result": "UNTESTED",
-      "title_hook_plan": "NONE",
-      "runtime_capabilities": "NONE",
-      "runtime_hooks_permitted": false,
-      "engine_memory_mutation_reachable": false,
-      "copyresource_reachable": false,
-      "stereo_action_reachable": false
+      "runtime_result": "f953bbe exact headset test passed 3D/projection but failed pre-inner culling ownership; current forward fix is untested",
+      "title_hook_plan": "REACH_CAMERA_CORE",
+      "runtime_capabilities": [
+        "STEREO",
+        "RUNTIME_MODES",
+        "ROOM_SCALE",
+        "CONTROLLER_INPUT",
+        "HAPTICS"
+      ],
+      "runtime_hooks_permitted": true,
+      "engine_memory_mutation_reachable": true,
+      "copyresource_reachable": true,
+      "stereo_action_reachable": true,
+      "headset_accepted": false,
+      "accepted_pointer_advanced": false
     },
     "remaining_runtime_proof": [
-      "live_result_from_production_loaded_image_preflight",
-      "production_exact_normal_return_and_stock_only_alternate_unknown_routing",
-      "production_runtime_enforces_camera_freshness_and_one_second_safety_interval",
-      "production_outer_owner_token_inner_serial_reuse_and_transitive_side_effect_safety",
-      "inside_scope_eye_rebuild_openxr_mapping_and_byte_exact_rollback",
-      "live_cold_buffer0_identity_inner_specialization0_continuity_and_copyresource_success",
-      "pause_cinematic_split_screen_and_transition_observation",
-      "device_loss_title_unload_and_callback_quiescence",
-      "runtime_finite_range_index_and_count_guards",
-      "exact_dll_headset_validation_and_halo3_regression"
+      "current_forward_visibility_follows_90_180_head_yaw_high_low_pitch_and_doorway_lean",
+      "close_peripheral_geometry_result_under_head_center_visibility_policy",
+      "stick_turn_and_off_axis_head_motion_remain_one_coherent_camera",
+      "pause_cinematic_split_screen_device_loss_and_title_transition_observation",
+      "exact_dll_headset_validation_then_halo3_and_odst_regression"
     ],
-    "proof_complete": false,
-    "hook_eligible": false
+    "headset_acceptance_complete": false,
+    "accepted_release_eligible": false
   },
   "runtime_observer": {
     "status": "OBSERVATIONS_REVIEWED_INCOMPLETE",

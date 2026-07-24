@@ -42,30 +42,53 @@ the exact swapchain buffer 0 and builds two private per-eye caches. Only after
 that proof and a one-second fresh-camera safety interval does the worker install
 two hooks -- the inner `player_view_render` and outer `main_render_view` -- and
 arm the per-eye stereo transaction. Any unmet precondition, an invalid camera,
-or a fault falls open to a single stock render, and Halo 3 and ODST are never
-touched. When Reach is armed the log reports `Reach camera core armed` and
+or a fault falls open to one original renderer call, and Halo 3 and ODST are
+never touched. If visibility ownership was already committed, that fallback
+uses the same bounded head-centre camera/matrices rather than mixing head culling
+with stock aim matrices. When Reach is armed the log reports `Reach camera core armed` and
 `Reach camera bring-up: head tracking, stereo, and 6DOF ON`.
 
-Each eye uses the runtime's exact view offset and FOV. Reach's single vertical
-FOV is widened only enough to cover that eye at the compact camera's validated
-render aspect; the built projection matrix is decoded and coverage-checked
-before rendering. The eye texture and decoded raster FOV are published only
-after a successful copy, and both must match the exact prepared OpenXR frame
-serial before a projection layer can be submitted. Active Reach never falls
-back to a Halo 3/ODST eye cache.
+Before Reach computes CPU visibility, the exact normal outer hook reads one
+lock-free snapshot containing the matching prepared frame's head, pad, and both
+OpenXR views. It applies shared turn and HMD pose once to a local head-centre
+camera, widens each asymmetric eye to the symmetric fixed-aspect image Reach
+actually rasterizes, then rotates all eight widened corners through their
+relative-eye orientations to select a binocular angular-union FOV. The proven stock
+frustum/projection helpers rebuild that centre and mirror it to the secondary
+render camera that `player_view_compute_visibility` consumes. The original outer
+function still runs exactly once. Its bounded player-view camera/matrix state is
+rebuilt to the same centre for coherent fallback, then that state and only the
+proven `0x2A8` workspace camera-pair bytes are restored afterward; the
+engine-owned callback remains untouched.
 
-The centre camera consumes shared snap/smooth turning once per admitted stereo
-transaction. While that tracked camera is armed, XInput suppresses stock RX/RY
-so the game cannot create a competing look transform under the HMD view. Reach
-controller aim, weapon/body-heading integration, native HUD, and arm IK remain
-withheld until their title-specific contracts are proven; this camera candidate
-must not claim those behaviors.
+Each eye then derives from that same head centre using the runtime's exact view
+offset, cant, and FOV. Reach's single vertical FOV is widened only enough to
+cover that eye at the compact camera's validated render aspect; the built
+projection matrix is decoded and coverage-checked before rendering. The eye
+texture and decoded raster FOV are published only after a successful copy, and
+both must match the exact prepared OpenXR frame serial before a projection layer
+can be submitted. Active Reach never falls back to a Halo 3/ODST eye cache.
+Like accepted Halo 3/ODST, CPU visibility is head-centred and actual eye-origin
+translation is applied only to the two rasters. The angular union is conservative
+for orientation/FOV but is not claimed to exactly enclose translated near-plane
+corners; close doorway/peripheral geometry remains an explicit headset test.
 
-Signature scanning, file hashing, resource allocation, and candidate logging
-stay off Present and all engine render callbacks. Present performs only the
+While the tracked camera is armed, XInput suppresses stock RX/RY so the game
+cannot create a competing look transform under the HMD view. The original
+pre-head camera direction is not reused as culling or claimed as projectile aim.
+Reach controller aim, weapon/body-heading integration, native HUD, and arm IK
+remain withheld until their title-specific contracts are proven; this camera
+candidate must not claim those behaviors.
+
+Signature scanning, file hashing, resource allocation, critical sections, and
+candidate logging stay out of both Reach engine render callbacks. Exact tracking
+is published with two fixed slots and lock-free pin/claim atomics; a changing or
+stale serial fails immediately. Present performs only the
 bounded identity/field snapshot plus `GetBuffer(0)`, device/descriptor capture,
 and COM retention described above; eye allocation and proof publication remain
-on the worker.
+on the worker. Title teardown disables both Reach hooks, verifies callback and
+MinHook relay/wrapper RIP quiescence, then removes trampolines and releases the
+retained title module; a failed proof retains state and retries without rearming.
 
 ## Verify local Reach evidence
 

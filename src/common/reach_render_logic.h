@@ -81,6 +81,26 @@ inline constexpr uintptr_t kReachPrimaryDerivedOffset = 0x0090;
 inline constexpr size_t kReachDerivedBlockSize = 0x00C4;
 inline constexpr uintptr_t kReachSecondaryCompactOffset = 0x0154;
 inline constexpr uintptr_t kReachSecondaryDerivedOffset = 0x01E4;
+// The four camera blocks end immediately before the engine-owned camera-stack
+// callback at +0x2A8. This is the exact bounded unit an outer camera owner may
+// snapshot without including that callback.
+inline constexpr size_t kReachCameraPairDataSize = 0x02A8;
+static_assert(
+    kReachSecondaryDerivedOffset + kReachDerivedBlockSize ==
+    kReachCameraPairDataSize);
+// Exact retail evidence for the pre-inner visibility consumer. The first call
+// resolves the camera cluster from workspace+0x154; the second builds the
+// visibility collection from workspace+0x154 and workspace+0x1E4.
+inline constexpr uintptr_t kReachVisibilityClusterLookupCallRva = 0x000C3320;
+inline constexpr uintptr_t kReachVisibilityClusterLookupTargetRva = 0x00273458;
+inline constexpr uintptr_t kReachVisibilitySecondaryCompactLeaRva = 0x00273468;
+inline constexpr uintptr_t kReachVisibilityBuildCallRva = 0x000C335C;
+inline constexpr uintptr_t kReachVisibilityBuildTargetRva = 0x0027F408;
+inline constexpr uintptr_t kReachVisibilitySecondaryDerivedLeaRva = 0x000C3339;
+inline constexpr uintptr_t kReachVisibilitySecondaryCompactAddressRva =
+    kReachDefaultWorkspaceRva + kReachSecondaryCompactOffset;
+inline constexpr uintptr_t kReachVisibilitySecondaryDerivedAddressRva =
+    kReachDefaultWorkspaceRva + kReachSecondaryDerivedOffset;
 // Fields the projection/matrix builder consumes: the derived projection matrix
 // at derived+0x78 and the compact render bounds at compact+0x4C.
 inline constexpr uintptr_t kReachDerivedProjectionOffset = 0x0078;
@@ -95,6 +115,79 @@ struct ReachSymmetricFovCover
     float requiredHalfHorizontal = 0.0f;
     float requiredHalfVertical = 0.0f;
 };
+
+struct ReachEyeCullFrustum
+{
+    float angleLeft = 0.0f;
+    float angleRight = 0.0f;
+    float angleUp = 0.0f;
+    float angleDown = 0.0f;
+    // OpenXR x/y/z/w orientation of this eye relative to the stereo midpoint.
+    std::array<float, 4> relativeOrientation{0.0f, 0.0f, 0.0f, 1.0f};
+};
+
+// Converts the symmetric projection Reach actually rasterizes into the eye
+// frustum used by the outer binocular cull. The raw asymmetric OpenXR FOV is
+// intentionally not reused here: widening either axis for Reach's fixed-aspect
+// projection widens the real raster corners that visibility must retain.
+inline bool BuildReachSymmetricRasterCullFrustum(
+    const ReachSymmetricFovCover& rasterCover,
+    const std::array<float, 4>& relativeOrientation,
+    uint32_t renderWidth, uint32_t renderHeight,
+    ReachEyeCullFrustum& result) noexcept
+{
+    result = {};
+    constexpr double kPi = 3.14159265358979323846;
+    constexpr double kMinimumQuaternionLengthSquared = 1.0e-12;
+    if (!rasterCover.valid ||
+        !std::isfinite(rasterCover.verticalFov) ||
+        !std::isfinite(rasterCover.requiredHalfHorizontal) ||
+        !std::isfinite(rasterCover.requiredHalfVertical) ||
+        rasterCover.verticalFov <= 0.0001f ||
+        rasterCover.verticalFov >= kPi ||
+        rasterCover.requiredHalfHorizontal <= 0.0f ||
+        rasterCover.requiredHalfVertical <= 0.0f ||
+        !renderWidth || !renderHeight)
+    {
+        return false;
+    }
+
+    double quaternionLengthSquared = 0.0;
+    for (float component : relativeOrientation)
+    {
+        if (!std::isfinite(component))
+            return false;
+        quaternionLengthSquared +=
+            static_cast<double>(component) * component;
+    }
+    if (!std::isfinite(quaternionLengthSquared) ||
+        quaternionLengthSquared <= kMinimumQuaternionLengthSquared)
+    {
+        return false;
+    }
+
+    const double aspect =
+        static_cast<double>(renderWidth) / static_cast<double>(renderHeight);
+    const double halfVertical =
+        static_cast<double>(rasterCover.verticalFov) * 0.5;
+    const double verticalTangent = std::tan(halfVertical);
+    const double halfHorizontal =
+        std::atan(verticalTangent * aspect);
+    if (!std::isfinite(aspect) || aspect <= 0.0 ||
+        !std::isfinite(verticalTangent) || verticalTangent <= 0.0 ||
+        !std::isfinite(halfHorizontal) || halfHorizontal <= 0.0 ||
+        halfHorizontal >= kPi * 0.5)
+    {
+        return false;
+    }
+
+    result.angleLeft = -static_cast<float>(halfHorizontal);
+    result.angleRight = static_cast<float>(halfHorizontal);
+    result.angleUp = static_cast<float>(halfVertical);
+    result.angleDown = -static_cast<float>(halfVertical);
+    result.relativeOrientation = relativeOrientation;
+    return true;
+}
 
 // Reach's compact camera stores one vertical FOV and derives its horizontal
 // scale from render_pixel_bounds. Choose the smallest symmetric frustum that
@@ -145,6 +238,158 @@ inline ReachSymmetricFovCover SelectReachSymmetricFovCover(
     result.verticalFov = verticalFov;
     result.requiredHalfHorizontal = requiredHalfHorizontal;
     result.requiredHalfVertical = requiredHalfVertical;
+    return result;
+}
+
+// Builds one head-centre symmetric frustum that contains both complete OpenXR
+// eye frusta. Every eye corner is rotated into midpoint space by its normalized
+// relative-eye quaternion before the angular envelope is measured, so canted
+// and asymmetric views cannot be clipped by an identity-orientation shortcut.
+inline ReachSymmetricFovCover SelectReachStereoCullFovCover(
+    const std::array<ReachEyeCullFrustum, 2>& eyes,
+    uint32_t renderWidth, uint32_t renderHeight) noexcept
+{
+    ReachSymmetricFovCover result{};
+    if (!renderWidth || !renderHeight)
+        return result;
+
+    const double aspect =
+        static_cast<double>(renderWidth) / static_cast<double>(renderHeight);
+    if (!std::isfinite(aspect) || aspect <= 0.0)
+        return result;
+
+    constexpr double kHalfPi = 1.57079632679489661923;
+    constexpr double kMinimumQuaternionLengthSquared = 1.0e-12;
+    double maximumHorizontalTangent = 0.0;
+    double maximumVerticalTangent = 0.0;
+
+    for (const ReachEyeCullFrustum& eye : eyes)
+    {
+        if (!std::isfinite(eye.angleLeft) ||
+            !std::isfinite(eye.angleRight) ||
+            !std::isfinite(eye.angleUp) ||
+            !std::isfinite(eye.angleDown) ||
+            eye.angleLeft >= 0.0f || eye.angleRight <= 0.0f ||
+            eye.angleUp <= 0.0f || eye.angleDown >= 0.0f ||
+            eye.angleLeft <= -kHalfPi || eye.angleRight >= kHalfPi ||
+            eye.angleUp >= kHalfPi || eye.angleDown <= -kHalfPi)
+        {
+            return result;
+        }
+
+        double quaternion[4]{};
+        double quaternionLengthSquared = 0.0;
+        for (size_t component = 0; component < 4; ++component)
+        {
+            if (!std::isfinite(eye.relativeOrientation[component]))
+                return result;
+            quaternion[component] = eye.relativeOrientation[component];
+            quaternionLengthSquared +=
+                quaternion[component] * quaternion[component];
+        }
+        if (!std::isfinite(quaternionLengthSquared) ||
+            quaternionLengthSquared <= kMinimumQuaternionLengthSquared)
+        {
+            return result;
+        }
+        const double inverseQuaternionLength =
+            1.0 / std::sqrt(quaternionLengthSquared);
+        for (double& component : quaternion)
+            component *= inverseQuaternionLength;
+
+        const double horizontalAngles[2]{
+            eye.angleLeft, eye.angleRight};
+        const double verticalAngles[2]{
+            eye.angleDown, eye.angleUp};
+        for (double horizontalAngle : horizontalAngles)
+        {
+            const double sourceX = std::tan(horizontalAngle);
+            if (!std::isfinite(sourceX))
+                return result;
+            for (double verticalAngle : verticalAngles)
+            {
+                const double sourceY = std::tan(verticalAngle);
+                if (!std::isfinite(sourceY))
+                    return result;
+
+                // Rotate (sourceX, sourceY, -1) using
+                // v' = v + 2*w*cross(q.xyz,v) +
+                //      2*cross(q.xyz,cross(q.xyz,v)).
+                const double crossX =
+                    quaternion[1] * -1.0 - quaternion[2] * sourceY;
+                const double crossY =
+                    quaternion[2] * sourceX + quaternion[0];
+                const double crossZ =
+                    quaternion[0] * sourceY -
+                    quaternion[1] * sourceX;
+                const double twiceCrossX = 2.0 * crossX;
+                const double twiceCrossY = 2.0 * crossY;
+                const double twiceCrossZ = 2.0 * crossZ;
+                const double rotatedX = sourceX +
+                    quaternion[3] * twiceCrossX +
+                    quaternion[1] * twiceCrossZ -
+                    quaternion[2] * twiceCrossY;
+                const double rotatedY = sourceY +
+                    quaternion[3] * twiceCrossY +
+                    quaternion[2] * twiceCrossX -
+                    quaternion[0] * twiceCrossZ;
+                const double rotatedZ = -1.0 +
+                    quaternion[3] * twiceCrossZ +
+                    quaternion[0] * twiceCrossY -
+                    quaternion[1] * twiceCrossX;
+                const double forwardDepth = -rotatedZ;
+                if (!std::isfinite(rotatedX) ||
+                    !std::isfinite(rotatedY) ||
+                    !std::isfinite(forwardDepth) ||
+                    forwardDepth <= 0.0)
+                {
+                    return result;
+                }
+
+                const double horizontalTangent =
+                    std::fabs(rotatedX) / forwardDepth;
+                const double verticalTangent =
+                    std::fabs(rotatedY) / forwardDepth;
+                if (!std::isfinite(horizontalTangent) ||
+                    !std::isfinite(verticalTangent))
+                {
+                    return result;
+                }
+                if (horizontalTangent > maximumHorizontalTangent)
+                    maximumHorizontalTangent = horizontalTangent;
+                if (verticalTangent > maximumVerticalTangent)
+                    maximumVerticalTangent = verticalTangent;
+            }
+        }
+    }
+
+    const double selectedVerticalTangent =
+        maximumVerticalTangent >
+                maximumHorizontalTangent / aspect
+            ? maximumVerticalTangent
+            : maximumHorizontalTangent / aspect;
+    const double requiredHalfHorizontal =
+        std::atan(maximumHorizontalTangent);
+    const double requiredHalfVertical =
+        std::atan(maximumVerticalTangent);
+    const double verticalFov = 2.0 * std::atan(selectedVerticalTangent);
+    if (!std::isfinite(requiredHalfHorizontal) ||
+        !std::isfinite(requiredHalfVertical) ||
+        !std::isfinite(verticalFov) ||
+        requiredHalfHorizontal <= 0.0 ||
+        requiredHalfVertical <= 0.0 ||
+        verticalFov <= 0.0001 ||
+        verticalFov >= 3.1414928436)
+    {
+        return result;
+    }
+
+    result.valid = true;
+    result.verticalFov = static_cast<float>(verticalFov);
+    result.requiredHalfHorizontal =
+        static_cast<float>(requiredHalfHorizontal);
+    result.requiredHalfVertical =
+        static_cast<float>(requiredHalfVertical);
     return result;
 }
 

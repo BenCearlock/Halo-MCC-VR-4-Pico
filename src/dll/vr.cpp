@@ -15,6 +15,7 @@
 #include <cstdio>
 #include <cstring>
 #include <limits>
+#include <type_traits>
 #include "vr.h"
 #include "menu.h"
 #include "game.h"
@@ -370,6 +371,21 @@ namespace
     std::atomic<uint64_t> g_prepareQpcPublished{0};
     std::atomic<uint64_t> g_cameraSerialObserved{0};
     std::atomic<uint64_t> g_firstCameraDelayUs{0};
+#if HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE
+    // Two fixed publication slots carry a coherent head/pad/eye sample from
+    // PrepareNextFrame into Reach's later render transaction. The high state
+    // bit is an exclusive writer claim; the remaining bits count pinned
+    // readers. This closes the stale-reader-before-pin race that a bare
+    // two-slot reader counter would leave.
+    constexpr uint32_t kReachRenderSnapshotWriter = 0x80000000u;
+    constexpr uint32_t kReachRenderSnapshotInvalid = 0xFFFFFFFFu;
+    ReachVrRenderSnapshot g_reachRenderSnapshots[2]{};
+    std::atomic<uint32_t> g_reachRenderSnapshotStates[2]{};
+    std::atomic<uint32_t> g_reachRenderSnapshotIndex{
+        kReachRenderSnapshotInvalid};
+    static_assert(std::atomic<uint32_t>::is_always_lock_free);
+    static_assert(std::is_trivially_copyable_v<ReachVrRenderSnapshot>);
+#endif
 
     // ---------------------------------------------------------------- utils
 
@@ -2615,17 +2631,17 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
     // Store the head pose for the game camera hook to read. Called once near
     // the end of Present with the NEXT frame's predicted display time, so Halo
     // renders the upcoming image from its matching pose instead of a stale one.
-    void CaptureHeadPose(XrTime time)
+    bool CaptureHeadPose(XrTime time)
     {
         XrSpaceLocation loc{XR_TYPE_SPACE_LOCATION};
         if (XR_FAILED(xrLocateSpace(g_viewSpace, g_localSpace, time, &loc)))
-            return;
+            return false;
         constexpr XrSpaceLocationFlags need =
             XR_SPACE_LOCATION_ORIENTATION_VALID_BIT | XR_SPACE_LOCATION_POSITION_VALID_BIT;
         if ((loc.locationFlags & need) != need)
-            return;
+            return false;
         if (!NormalizeTrackedPose(loc.pose))
-            return;
+            return false;
         EnterCriticalSection(&g_headCs);
         // Filter exactly once per OpenXR frame. CamCopyHook can run several
         // times inside that frame, so smoothing there would compound and vary
@@ -2652,6 +2668,7 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
             samples = 0;
             rateStartMs = now;
         }
+        return true;
     }
 
     // Create the crosshair swapchain on first use (lazily, once the session is
@@ -3419,17 +3436,17 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
         lastApplyMs = now;
     }
 
-    void CaptureRightControllerPose(XrTime time)
+    bool CaptureRightControllerPose(XrTime time)
     {
         if (g_gameplayActions == XR_NULL_HANDLE || g_rightAimAction == XR_NULL_HANDLE ||
             g_rightAimSpace == XR_NULL_HANDLE)
-            return;
+            return false;
         XrActiveActionSet active{g_gameplayActions, XR_NULL_PATH};
         XrActionsSyncInfo sync{XR_TYPE_ACTIONS_SYNC_INFO};
         sync.countActiveActionSets = 1;
         sync.activeActionSets = &active;
         if (XR_FAILED(xrSyncActions(g_session, &sync)))
-            return;
+            return false;
         XrActionStateGetInfo get{XR_TYPE_ACTION_STATE_GET_INFO};
         get.action = g_rightAimAction;
         get.subactionPath = g_rightHandPath;
@@ -3550,6 +3567,7 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
             LOG("M3: controller inputs active (sticks/buttons feeding the virtual gamepad)");
             padLogged = true;
         }
+        return true;
     }
 
     void UpdateMenuPointer(bool headLocked)
@@ -3769,6 +3787,59 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
 
     bool LocateViewsForUpcomingRender(XrTime displayTime);
 
+#if HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE
+    bool PublishReachRenderSnapshot(
+        uint64_t preparedSerial, bool padFresh) noexcept
+    {
+        if (!preparedSerial || !g_headPoseValid || g_views.size() != 2)
+            return false;
+
+        ReachVrRenderSnapshot next{};
+        next.preparedSerial = preparedSerial;
+        next.headOrientation[0] = g_headPose.orientation.x;
+        next.headOrientation[1] = g_headPose.orientation.y;
+        next.headOrientation[2] = g_headPose.orientation.z;
+        next.headOrientation[3] = g_headPose.orientation.w;
+        next.headPosition[0] = g_headPose.position.x;
+        next.headPosition[1] = g_headPose.position.y;
+        next.headPosition[2] = g_headPose.position.z;
+        if (padFresh)
+            next.pad = g_padState;
+
+        for (int eye = 0; eye < 2; ++eye)
+        {
+            if (!VR_GetEyeViewOffset(
+                    eye, next.eyes[eye].position,
+                    next.eyes[eye].orientation) ||
+                !VR_GetEyeFov(eye, next.eyes[eye].fov))
+            {
+                return false;
+            }
+        }
+
+        const uint32_t current =
+            g_reachRenderSnapshotIndex.load(std::memory_order_seq_cst);
+        const uint32_t target = current < 2 ? 1u - current : 0u;
+        uint32_t expectedState = 0;
+        if (!g_reachRenderSnapshotStates[target].compare_exchange_strong(
+                expectedState, kReachRenderSnapshotWriter,
+                std::memory_order_seq_cst,
+                std::memory_order_seq_cst))
+        {
+            // A reader still owns the old non-current slot. Skipping this
+            // publication is safer than waiting in the OpenXR frame path; the
+            // exact-serial Reach reader will fall open for this frame.
+            return false;
+        }
+
+        g_reachRenderSnapshots[target] = next;
+        g_reachRenderSnapshotIndex.store(target, std::memory_order_seq_cst);
+        g_reachRenderSnapshotStates[target].store(
+            0, std::memory_order_seq_cst);
+        return true;
+    }
+#endif
+
     void PrepareNextFrame()
     {
         if (g_preparedFrame.begun)
@@ -3826,7 +3897,8 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
 
         // Input first, then views/head as late as possible. Every locate uses
         // the exact predicted time associated with this begun frame.
-        CaptureRightControllerPose(frameState.predictedDisplayTime);
+        const bool upcomingPadFresh =
+            CaptureRightControllerPose(frameState.predictedDisplayTime);
         const bool upcomingViewsValid =
             LocateViewsForUpcomingRender(frameState.predictedDisplayTime);
         g_preparedFrame.viewsValid = upcomingViewsValid;
@@ -3835,7 +3907,13 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
         g_preparedViewSerialPublished.store(
             upcomingViewsValid ? g_preparedFrame.serial : 0,
             std::memory_order_release);
-        CaptureHeadPose(frameState.predictedDisplayTime);
+        const bool upcomingHeadValid =
+            CaptureHeadPose(frameState.predictedDisplayTime);
+#if HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE
+        if (upcomingViewsValid && upcomingHeadValid)
+            PublishReachRenderSnapshot(
+                g_preparedFrame.serial, upcomingPadFresh);
+#endif
 
         LARGE_INTEGER preparedAt{};
         QueryPerformanceCounter(&preparedAt);
@@ -4316,12 +4394,66 @@ ReachPreparedFrameToken VR_ReachPreparedFrame(
         g_preparedShouldRender.load(std::memory_order_acquire));
 }
 
+bool VR_ReachGetRenderSnapshot(
+    const ReachPreparedFrameToken& prepared,
+    ReachVrRenderSnapshot& snapshot)
+{
+    snapshot = {};
+    if (!prepared.Ready() || !prepared.Serial())
+        return false;
+
+    const uint32_t index =
+        g_reachRenderSnapshotIndex.load(std::memory_order_seq_cst);
+    if (index >= 2)
+        return false;
+
+    uint32_t state =
+        g_reachRenderSnapshotStates[index].load(std::memory_order_seq_cst);
+    if ((state & kReachRenderSnapshotWriter) != 0 ||
+        state >= kReachRenderSnapshotWriter - 1)
+    {
+        return false;
+    }
+    if (!g_reachRenderSnapshotStates[index].compare_exchange_strong(
+            state, state + 1,
+            std::memory_order_seq_cst,
+            std::memory_order_seq_cst))
+    {
+        return false;
+    }
+
+    // A publication can switch slots between our index load and reader pin.
+    // Revalidate before touching plain snapshot storage. A writer cannot claim
+    // this slot while the reader count is nonzero.
+    if (g_reachRenderSnapshotIndex.load(std::memory_order_seq_cst) != index)
+    {
+        g_reachRenderSnapshotStates[index].fetch_sub(
+            1, std::memory_order_seq_cst);
+        return false;
+    }
+
+    const ReachVrRenderSnapshot local = g_reachRenderSnapshots[index];
+    g_reachRenderSnapshotStates[index].fetch_sub(
+        1, std::memory_order_seq_cst);
+    if (local.preparedSerial != prepared.Serial())
+        return false;
+    snapshot = local;
+    return true;
+}
+
 bool VR_ReachDisplayReady(const ReachModuleEpoch& epoch)
 {
-    return g_reachCaptureEnabled.load(std::memory_order_seq_cst) &&
+    // Pin the plain proof fields exactly like BeginRenderAccess. The worker
+    // disables publication and waits for this reader count before releasing or
+    // zeroing them, so readiness cannot race resource invalidation.
+    g_reachCaptureUsers.fetch_add(1, std::memory_order_seq_cst);
+    const bool ready =
+        g_reachCaptureEnabled.load(std::memory_order_seq_cst) &&
         ReachSameModuleEpoch(g_reachCaptureProof.continuity.epoch, epoch) &&
         ReachRenderCandidate_IsPreflightCurrent(
             g_reachCaptureProof.preflight);
+    g_reachCaptureUsers.fetch_sub(1, std::memory_order_seq_cst);
+    return ready;
 }
 
 bool VR_ReachBeginRenderAccess(
