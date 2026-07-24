@@ -8,6 +8,17 @@ param()
 # labels rebuilt bytes as an accepted release.
 
 $ErrorActionPreference = 'Stop'
+
+# Native build tools (cmake, ctest) write progress and deprecation notices to
+# stderr. Under ErrorActionPreference=Stop, PowerShell 5.1 turns any native
+# stderr line into a terminating error, so run tool invocations with stderr
+# tolerated and rely on the explicit $LASTEXITCODE checks that follow each call.
+function Invoke-Tool([scriptblock]$Block) {
+    $saved = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try { & $Block } finally { $ErrorActionPreference = $saved }
+}
+
 $repoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $candidateRoot = [IO.Path]::GetFullPath(
     (Join-Path $repoRoot 'out\candidates'))
@@ -44,7 +55,7 @@ try {
         throw "Refusing to package: HEAD does not descend from accepted source $acceptedSource."
     }
 
-    & cmake --preset $packagePreset
+    Invoke-Tool { & cmake --preset $packagePreset }
     if ($LASTEXITCODE -ne 0) {
         throw "CMake configure failed for preset $packagePreset."
     }
@@ -56,12 +67,12 @@ try {
         throw 'Refusing to package: ODST is not ON in the cumulative build.'
     }
 
-    & cmake --build --preset $packagePreset --clean-first
+    Invoke-Tool { & cmake --build --preset $packagePreset --clean-first }
     if ($LASTEXITCODE -ne 0) {
         throw 'Release build failed.'
     }
 
-    & ctest --preset $packagePreset
+    Invoke-Tool { & ctest --preset $packagePreset }
     if ($LASTEXITCODE -ne 0) {
         throw 'Core tests failed.'
     }
@@ -82,8 +93,8 @@ try {
         throw "Refusing to reuse candidate directory: $packageDir"
     }
 
-    & cmake --install $packageBuildDir --config Release `
-        --prefix $packageDir --component dist
+    Invoke-Tool { & cmake --install $packageBuildDir --config Release `
+        --prefix $packageDir --component dist }
     if ($LASTEXITCODE -ne 0) {
         throw 'Candidate staging failed.'
     }
