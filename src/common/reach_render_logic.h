@@ -2,6 +2,7 @@
 
 #include <array>
 #include <atomic>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -86,6 +87,114 @@ inline constexpr uintptr_t kReachDerivedProjectionOffset = 0x0078;
 inline constexpr uintptr_t kReachCompactRenderBoundsOffset = 0x004C;
 inline constexpr uint64_t kReachRenderFreshnessMaxGapMs = 500;
 inline constexpr uint64_t kReachRenderSafetyIntervalMs = 1000;
+
+struct ReachSymmetricFovCover
+{
+    bool valid = false;
+    float verticalFov = 0.0f;
+    float requiredHalfHorizontal = 0.0f;
+    float requiredHalfVertical = 0.0f;
+};
+
+// Reach's compact camera stores one vertical FOV and derives its horizontal
+// scale from render_pixel_bounds. Choose the smallest symmetric frustum that
+// covers all four OpenXR angles at that exact render aspect. This is the same
+// conservative cover used by Halo 3/ODST, expressed in Reach's proven layout.
+inline ReachSymmetricFovCover SelectReachSymmetricFovCover(
+    float angleLeft, float angleRight, float angleUp, float angleDown,
+    uint32_t renderWidth, uint32_t renderHeight) noexcept
+{
+    ReachSymmetricFovCover result{};
+    if (!std::isfinite(angleLeft) || !std::isfinite(angleRight) ||
+        !std::isfinite(angleUp) || !std::isfinite(angleDown) ||
+        angleLeft >= 0.0f || angleRight <= 0.0f ||
+        angleUp <= 0.0f || angleDown >= 0.0f ||
+        !renderWidth || !renderHeight)
+    {
+        return result;
+    }
+
+    const float requiredHalfHorizontal =
+        -angleLeft > angleRight ? -angleLeft : angleRight;
+    const float requiredHalfVertical =
+        angleUp > -angleDown ? angleUp : -angleDown;
+    const float horizontalTangent = std::tan(requiredHalfHorizontal);
+    const float verticalTangent = std::tan(requiredHalfVertical);
+    const float aspect =
+        static_cast<float>(renderWidth) / static_cast<float>(renderHeight);
+    if (!std::isfinite(horizontalTangent) ||
+        !std::isfinite(verticalTangent) || !std::isfinite(aspect) ||
+        horizontalTangent <= 0.0f || verticalTangent <= 0.0f ||
+        aspect <= 0.0f)
+    {
+        return result;
+    }
+
+    const float horizontalCoverageTangent = horizontalTangent / aspect;
+    const float selectedVerticalTangent =
+        verticalTangent > horizontalCoverageTangent
+            ? verticalTangent : horizontalCoverageTangent;
+    const float verticalFov = 2.0f * std::atan(selectedVerticalTangent);
+    if (!std::isfinite(verticalFov) ||
+        verticalFov <= 0.0001f || verticalFov >= 3.1414928436f)
+    {
+        return result;
+    }
+
+    result.valid = true;
+    result.verticalFov = verticalFov;
+    result.requiredHalfHorizontal = requiredHalfHorizontal;
+    result.requiredHalfVertical = requiredHalfVertical;
+    return result;
+}
+
+struct ReachProjectionHalfFovs
+{
+    bool valid = false;
+    float horizontal = 0.0f;
+    float vertical = 0.0f;
+};
+
+// The proven Reach derived block holds its projection matrix at +0x78. Decode
+// the actual symmetric raster scales rather than telling OpenXR what we hoped
+// the engine built. Invalid or under-covering matrices fail the eye transaction.
+inline ReachProjectionHalfFovs DecodeReachProjectionHalfFovs(
+    float projection00, float projection11) noexcept
+{
+    ReachProjectionHalfFovs result{};
+    const float horizontalScale = std::fabs(projection00);
+    const float verticalScale = std::fabs(projection11);
+    if (!std::isfinite(horizontalScale) || !std::isfinite(verticalScale) ||
+        horizontalScale <= 0.0001f || verticalScale <= 0.0001f)
+    {
+        return result;
+    }
+
+    const float horizontal = std::atan(1.0f / horizontalScale);
+    const float vertical = std::atan(1.0f / verticalScale);
+    if (!std::isfinite(horizontal) || !std::isfinite(vertical) ||
+        horizontal <= 0.0f || vertical <= 0.0f)
+    {
+        return result;
+    }
+    result.valid = true;
+    result.horizontal = horizontal;
+    result.vertical = vertical;
+    return result;
+}
+
+inline bool ReachProjectionCoversOpenXr(
+    const ReachProjectionHalfFovs& projection,
+    const ReachSymmetricFovCover& requested,
+    float toleranceRadians = 0.001f) noexcept
+{
+    return projection.valid && requested.valid &&
+        std::isfinite(toleranceRadians) && toleranceRadians >= 0.0f &&
+        projection.horizontal + toleranceRadians >=
+            requested.requiredHalfHorizontal &&
+        projection.vertical + toleranceRadians >=
+            requested.requiredHalfVertical;
+}
 
 inline constexpr size_t kReachMainRenderViewBodySize = 515;
 inline constexpr char kReachMainRenderViewBodySha256[] =

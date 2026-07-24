@@ -14,9 +14,36 @@ The first armed candidate mutated only the compact camera and called
 `player_view_render` directly. In the headset that rendered a narrow "cone" with
 no stereo depth or 6DOF, because `player_view_render` reads the view/projection
 matrices the engine's setup already built into `player_view+0x490` from the stock
-centre camera -- it never re-reads the compact camera. The current candidate
-therefore re-runs the stock pre-scope rebuild per eye (steps 2-6 below): the
-frustum helper `0x287F58`, projection builder `0x2884BC`, camera-state updater
+centre camera -- it never re-reads the compact camera. Source `0f7b6321` then
+re-ran the stock pre-scope rebuild per eye and produced distinct stereo plus
+headset translation, but its exact deployed DLL
+`C5A33D3994695334CBB2F8DD0F108A42B1A86DF6BB3B2A2F646EF6A89EE01C40`
+failed the 2026-07-24 headset test: head turns warped the world and exposed black
+borders, while stock right-stick look and the render-only HMD camera competed.
+The failed log and manifest are preserved under
+`out/test-runs/0f7b632-reach-3d-warp-input-fail-20260724-094945Z`.
+
+That log proves the mismatch rather than a missing stereo hook. Reach rastered
+`2912x2100` with an approximately 61.5-degree horizontal and 53-degree vertical
+half-frustum, while the OpenXR projection layer inherited Halo 3's approximately
+47.5/48.1-degree defaults. The compositor therefore interpreted a wider raster
+through a narrower projection, exactly producing head-motion warp and uncovered
+outer edges. The forward candidate now:
+
+- selects the smallest symmetric Reach vertical FOV covering each eye's exact
+  OpenXR angles at the compact camera's validated render bounds;
+- decodes the projection scales that Reach actually built, rejects an
+  under-covering matrix, and publishes each eye only after render and copy;
+- binds both raster FOVs, eye copies, and a successful OpenXR view locate to the
+  exact prepared-frame serial, with no legacy Halo 3/ODST eye-cache fallback;
+- consumes OpenXR snap/smooth turn once at the Reach centre camera and suppresses
+  stock RX/RY while that armed tracked camera owns look.
+
+Reach controller-aim capability remains withheld because no Reach-specific
+simulation aim-forward or weapon/body-heading contract has been proven. This
+candidate fixes visual camera ownership; it does not guess weapon, HUD, or IK
+semantics. It still re-runs the stock pre-scope rebuild per eye (steps 2-6
+below): the frustum helper `0x287F58`, projection builder `0x2884BC`, camera-state updater
 `0x286F9C`, and projection/matrix builder `0x28AF8C`, so the matrices the inner
 render consumes are rebuilt from the per-eye VR camera. The frustum helper and
 projection builder are additionally verified at install by decoding the exact
@@ -25,7 +52,9 @@ mismatched image fails open. This mirrors Halo 3's `RenderViewHook`, which
 rebuilds `view+0x98` with the engine's own `build_viewport`/`build_matrices`
 helpers before each eye's render. The per-eye rebuild running inside the active
 render scope, the symmetric-vs-asymmetric FOV mapping, and the secondary
-render-camera policy all remain headset-tuning results.
+render-camera policy all remain headset-tuning results. If the exact-FOV headset
+test still exposes peripheral voids, pre-inner visibility timing is the next
+isolated investigation; it is not speculatively changed in this candidate.
 
 This document records Reach-specific facts for the cumulative Halo 3 + ODST +
 Reach line. Halo 3 and ODST offsets, layouts, bones, markers, and tag meanings
@@ -183,8 +212,10 @@ The stock player-view owner, object stride, same-call freshness, exact normal
 and screenshot caller scopes, camera-workspace lifetime, final display target,
 late native-CHUD order, and transaction-scoped active-view clear are now
 statically identified. This closes the corresponding static questions only.
-Stock Reach has output-user/player-view transactions, not VR-eye transactions,
-and no Reach hook or eye capture exists yet.
+Stock Reach has output-user/player-view transactions, not VR-eye transactions.
+At this stage of the historical static proof no Reach hook or eye capture existed;
+the unaccepted candidate described at the top now supplies both behind the
+runtime gates derived below.
 
 ### Retail owner and boundary
 
@@ -551,10 +582,11 @@ eligible, the remaining runtime-evidence and implementation gates are:
 - finite-value, range, index, count, and failure-to-stock guards;
 - exact-DLL headset validation plus Halo 3 regression.
 
-Accordingly, all Reach `proof_complete` and `hook_eligible` fields remain
-false.
+Accordingly, the evidence-manifest `proof_complete` and `hook_eligible` fields
+remain false even though an unaccepted runtime candidate exercises the bounded
+implementation behind fail-open gates.
 
-## Controller-input-only candidate behavior
+## Historical controller-input-only candidate behavior
 
 `HALOMCCVR_EXPERIMENTAL_REACH_BRINGUP=ON` now compiles a
 controller-input-only adapter. When module resolution identifies explicit
@@ -654,17 +686,20 @@ Reach path. `proof_complete` and `hook_eligible` remain false.
 
 ## Evidence still required
 
-The next render gate is a fail-open implementation of the exact outer-owner
-token, proven inner `player_view_render` candidate, proposed runtime-unvalidated
-`stock_last_window && final_eye` wait policy (stock false stays false),
-stock-observed pre-scope camera rebuild, complete rollback, and cold-validated
-group-1 buffer copy. The final eye's actual post-call wait byte must persist.
-It must refuse stereo unless every identity, scope, finite/range,
-specialization-zero, and copy precondition holds. Production must also enforce
-freshness, reentrancy, pause/cinematic/split-screen behavior, unload/reload and
-device-loss handling, callback quiescence, and complete detour teardown. Still
-independently derive observer effects, first-person weapon behavior, HUD
-anchor, skeleton and weapon-marker facts, brightness, and motion blur before
-enabling the corresponding player-visible behavior. Xbox 360 map symbols may
-supply names or call-graph hints only; every fact must be re-proven against
-HREK and the pinned MCC x64 module.
+The unaccepted camera candidate now implements the exact outer-owner token,
+inner `player_view_render` hook, stock-last-window policy, pre-scope rebuild,
+bounded rollback, and cold-validated group-1 copy behind identity, scope,
+finite/range, specialization-zero, and current-frame gates. Those mechanics are
+not accepted merely because they build or launch.
+
+The immediate gate is an exact-DLL headset result proving full-frame coverage
+without head-turn warp or black borders, coherent visual snap/smooth turning,
+stereo depth, and positional 6DOF, followed by Halo 3 and ODST regressions for
+the shared input/submission changes. If peripheral geometry still disappears,
+the pre-inner visibility timing must be isolated and proven separately. Broader
+pause/cinematic/split-screen, unload/reload, device-loss, callback quiescence,
+and detour-teardown coverage also remains open. First-person weapon/body aim,
+HUD anchor, skeleton and weapon-marker facts, brightness, and motion blur must
+be independently derived before enabling those player-visible behaviors. Xbox
+360 map symbols may supply names or call-graph hints only; every fact must be
+re-proven against HREK and the pinned MCC x64 module.

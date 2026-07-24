@@ -46,18 +46,26 @@ or a fault falls open to a single stock render, and Halo 3 and ODST are never
 touched. When Reach is armed the log reports `Reach camera core armed` and
 `Reach camera bring-up: head tracking, stereo, and 6DOF ON`.
 
-The camera-injection correctness (how the OpenXR head/eye pose maps into Reach's
-camera) is a headset-tuning result, exactly as it was for the first ODST
-camera-core milestone.
+Each eye uses the runtime's exact view offset and FOV. Reach's single vertical
+FOV is widened only enough to cover that eye at the compact camera's validated
+render aspect; the built projection matrix is decoded and coverage-checked
+before rendering. The eye texture and decoded raster FOV are published only
+after a successful copy, and both must match the exact prepared OpenXR frame
+serial before a projection layer can be submitted. Active Reach never falls
+back to a Halo 3/ODST eye cache.
 
-`TitleHookPlan::None`, zero Reach runtime capabilities, and the hard runtime-
-hook gate remain unchanged. The candidate installs no Reach detour, writes no
-engine memory, changes no camera, issues no Reach `CopyResource`, and cannot
-select the stereo transaction. Signature scanning, file hashing, resource
-allocation, and candidate logging stay off Present and all engine render
-callbacks. Present performs only the bounded identity/field snapshot plus
-`GetBuffer(0)`, device/descriptor capture, and COM retention described above;
-eye allocation and proof publication remain on the worker.
+The centre camera consumes shared snap/smooth turning once per admitted stereo
+transaction. While that tracked camera is armed, XInput suppresses stock RX/RY
+so the game cannot create a competing look transform under the HMD view. Reach
+controller aim, weapon/body-heading integration, native HUD, and arm IK remain
+withheld until their title-specific contracts are proven; this camera candidate
+must not claim those behaviors.
+
+Signature scanning, file hashing, resource allocation, and candidate logging
+stay off Present and all engine render callbacks. Present performs only the
+bounded identity/field snapshot plus `GetBuffer(0)`, device/descriptor capture,
+and COM retention described above; eye allocation and proof publication remain
+on the worker.
 
 ## Verify local Reach evidence
 
@@ -151,29 +159,10 @@ Commit the intended source first, then run:
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\package-candidate.ps1
 ```
 
-For an explicitly private Reach candidate, use:
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File `
-  .\tools\package-candidate.ps1 -ReachPrivate
-```
-
-For the hard-off Reach cold-proof/resource-readiness candidate, use:
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File `
-  .\tools\package-candidate.ps1 -ReachRenderDisabled
-```
-
-That mode additionally runs the offline Reach evidence preflight and records
-separate compiled, cold loaded-image-preflight, display-copy-readiness,
-`CopyResource`, engine-write, stereo-candidate, and runtime-hook fields. Only
-the two cold readiness fields are true; copy, engine writes, stereo selection,
-and Reach runtime hooks remain false.
-
-Each command rebuilds and tests its selected Release preset before staging it.
-The two Reach switches select controller-only or cold-proof/hooks-off candidates;
-the default command retains the cumulative Reach-OFF regression gate.
+There are no title switches or alternate candidate presets. The command always
+performs a clean rebuild and tests the one cumulative Release configuration,
+then records the permanent Reach preflight, capture, engine-write, camera-core,
+and runtime-hook fields in the candidate manifest.
 
 The command refuses a dirty worktree, reconfigures, rebuilds, reruns tests, and
 creates a new directory such as:

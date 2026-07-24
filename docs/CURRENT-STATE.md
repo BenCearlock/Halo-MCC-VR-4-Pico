@@ -1,6 +1,6 @@
 # Current state
 
-Authoritative as of 2026-07-23. This file is the only active accepted-build
+Authoritative as of 2026-07-24. This file is the only active accepted-build
 pointer. Detailed pre-cleanup experiments remain available in Git history; they
 are evidence, not instructions.
 
@@ -39,6 +39,27 @@ milestone, not a public release or tag. The public known-good product remains
   and safely returned ownership before Reach regained controller transport.
 - This result does not authorize or claim Reach camera, stereo, 6DOF, aim,
   movement, HUD, IK, haptics, or lifecycle hooks.
+
+### Unaccepted Reach camera headset result - 2026-07-24
+
+This result is evidence only and does not advance the accepted pointer above.
+
+| Identity | Value |
+| --- | --- |
+| Tested runtime source | `0f7b6321ddc1830ad8a95c2bca8e472e3d837fff` |
+| Candidate package | `out/candidates/0f7b632-reach-camera-20260724-093221973Z` |
+| `halo3xr.dll` SHA-256 | `C5A33D3994695334CBB2F8DD0F108A42B1A86DF6BB3B2A2F646EF6A89EE01C40` |
+| Preserved failure evidence | `out/test-runs/0f7b632-reach-3d-warp-input-fail-20260724-094945Z` |
+| Headset result | Distinct 3D and translation reached the headset; projection warped on head turns, black outer borders remained, and stock look competed with HMD look |
+
+The installed artifact matched its manifest and the runtime log proved both
+Reach eye copies were current. The failure was traced to a concrete view
+contract mismatch: Reach rastered approximately 61.5/53-degree horizontal/
+vertical half-FOV at `2912x2100`, but OpenXR received Halo 3's approximately
+47.5/48.1-degree defaults. The next forward candidate binds the actual Reach
+projection and eye copies to the same prepared frame and gives the armed tracked
+camera exclusive visual look-stick ownership. It remains headset-pending and
+does not claim Reach weapon/body aim, HUD, or arm IK.
 
 ### Reach stock runtime observation - 2026-07-23
 
@@ -268,8 +289,8 @@ ODST on the accepted build:
 - `docs/REACH-EVIDENCE-MANIFEST.json`: pinned Reach retail/HREK identities and
   preliminary evidence-only RVAs; not an accepted runtime pointer.
 - `docs/REACH-SIGNATURE-EVIDENCE.md`: Reach proof ledger; controller transport
-  is headset-accepted while all Reach runtime hooks remain unauthorized and
-  disabled.
+  is headset-accepted, while camera-core candidates and their exact headset
+  results remain unaccepted until this pointer advances explicitly.
 - `docs/TITLE-RUNTIME-OWNERSHIP.md`: accepted shared heartbeat/generation
   ownership contract and its cross-title regression evidence.
 - `docs/HISTORY.md`: how to retrieve the full pre-cleanup ledger.

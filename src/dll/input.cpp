@@ -226,13 +226,12 @@ namespace
             if (!g_overrideLogged.exchange(true))
                 LOG("M3: VR aim override active (right stick steered by the controller)");
         }
-        else if (OdstVrOwnsLookStick(
-                     Game_IsCameraOnlyBringup(), Game_IsHeadTracking()))
+        else if (Game_VrOwnsLookStick())
         {
-            // Match Halo 3 camera ownership during the private ODST bring-up:
+            // Match Halo 3 camera ownership in every armed camera-core title:
             // ApplyVrTurn consumes turnX directly from the OpenXR pad, while
             // the tracked HMD exclusively owns pitch. Do not also feed either
-            // axis into ODST's stock camera/aim integrator.
+            // axis into the stock camera/aim integrator.
             state->Gamepad.sThumbRX = 0;
             state->Gamepad.sThumbRY = 0;
         }

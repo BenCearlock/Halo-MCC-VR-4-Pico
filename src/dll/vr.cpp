@@ -337,6 +337,7 @@ namespace
     PreparedFrame g_preparedFrame{};
     uint64_t g_nextPreparedSerial = 0;
     std::atomic<bool> g_preparedShouldRender{false};
+    std::atomic<uint64_t> g_preparedViewSerialPublished{0};
 
     template <size_t N>
     struct TimingRing
@@ -2363,7 +2364,8 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
                     LOG("Reach display worker proof PASS: exact Present "
                         "buffer0, specialization0 structural continuity, "
                         "same device/context identity, and two private exact "
-                        "eye caches; no Reach copy or runtime hook is enabled");
+                        "eye caches; camera core remains gated by armed state "
+                        "and exact current-frame render access");
                 }
                 return;
             }
@@ -2461,6 +2463,7 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
     void ResetPreparedFrame()
     {
         g_preparedShouldRender.store(false, std::memory_order_release);
+        g_preparedViewSerialPublished.store(0, std::memory_order_release);
         g_preparedFrame.begun = false;
         g_preparedFrame.viewsValid = false;
         g_preparedFrame.viewCount = 0;
@@ -3764,7 +3767,7 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
             LOG("frame %d: %s", g_frameNo, step);
     }
 
-    void LocateViewsForUpcomingRender(XrTime displayTime);
+    bool LocateViewsForUpcomingRender(XrTime displayTime);
 
     void PrepareNextFrame()
     {
@@ -3824,7 +3827,14 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
         // Input first, then views/head as late as possible. Every locate uses
         // the exact predicted time associated with this begun frame.
         CaptureRightControllerPose(frameState.predictedDisplayTime);
-        LocateViewsForUpcomingRender(frameState.predictedDisplayTime);
+        const bool upcomingViewsValid =
+            LocateViewsForUpcomingRender(frameState.predictedDisplayTime);
+        g_preparedFrame.viewsValid = upcomingViewsValid;
+        g_preparedFrame.viewCount = upcomingViewsValid
+            ? static_cast<uint32_t>(g_views.size()) : 0;
+        g_preparedViewSerialPublished.store(
+            upcomingViewsValid ? g_preparedFrame.serial : 0,
+            std::memory_order_release);
         CaptureHeadPose(frameState.predictedDisplayTime);
 
         LARGE_INTEGER preparedAt{};
@@ -3838,18 +3848,22 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
                 std::clamp(g_config.headset_smoothing, 0.0f, 0.10f) * 100.0f);
     }
 
-    void LocateViewsForUpcomingRender(XrTime displayTime)
+    bool LocateViewsForUpcomingRender(XrTime displayTime)
     {
         if (g_views.empty())
-            return;
+            return false;
         XrViewLocateInfo info{XR_TYPE_VIEW_LOCATE_INFO};
         info.viewConfigurationType = XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO;
         info.displayTime = displayTime;
         info.space = g_localSpace;
         XrViewState state{XR_TYPE_VIEW_STATE};
         uint32_t count = 0;
-        xrLocateViews(g_session, &info, &state, static_cast<uint32_t>(g_views.size()),
-                      &count, g_views.data());
+        const XrResult result = xrLocateViews(
+            g_session, &info, &state, static_cast<uint32_t>(g_views.size()),
+            &count, g_views.data());
+        return XR_SUCCEEDED(result) && count == g_views.size() &&
+            (state.viewStateFlags & XR_VIEW_STATE_POSITION_VALID_BIT) &&
+            (state.viewStateFlags & XR_VIEW_STATE_ORIENTATION_VALID_BIT);
     }
 
     void SubmitPreparedFrame(IDXGISwapChain* sc)
@@ -3923,8 +3937,9 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
             // whenever Halo's internal projection produces different scales.
             float haloHalfX[2] = {atanf(1.091595f), atanf(1.091595f)};
             float haloHalfY[2] = {atanf(1.114286f), atanf(1.114286f)};
-            Game_GetRenderHalfFovs(haloHalfX, haloHalfY);
-            for (uint32_t i = 0; i < locatedViewCount; ++i)
+            const bool renderFovsValid = Game_GetRenderHalfFovs(
+                g_preparedFrame.serial, haloHalfX, haloHalfY);
+            for (uint32_t i = 0; renderFovsValid && i < locatedViewCount; ++i)
             {
                 projectionViews[i].pose = g_views[i].pose;
                 projectionViews[i].fov = {
@@ -3934,8 +3949,11 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
                     {0, 0}, {(int32_t)g_stereoW, (int32_t)g_stereoH}};
                 projectionViews[i].subImage.imageArrayIndex = i;
             }
-            projection.viewCount = locatedViewCount;
-            projection.views = projectionViews.data();
+            if (renderFovsValid)
+            {
+                projection.viewCount = locatedViewCount;
+                projection.views = projectionViews.data();
+            }
         }
 
         if (fs.shouldRender)
@@ -3968,7 +3986,9 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
 #if HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE
                     ReachVrRenderAccess reachAccess{};
                     bool reachImages = false;
-                    if (TitleAdapter_GetActiveTitle() == GameTitle::HaloReach)
+                    const bool reachTitle =
+                        TitleAdapter_GetActiveTitle() == GameTitle::HaloReach;
+                    if (reachTitle)
                     {
                         constexpr size_t reachSlot =
                             TitleRuntimeSlotIndex(GameTitle::HaloReach);
@@ -3992,9 +4012,10 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
                             VR_ReachEndRenderAccess(reachAccess);
                     }
 #else
+                    const bool reachTitle = false;
                     const bool reachImages = false;
 #endif
-                    if (!reachImages)
+                    if (!reachTitle)
                         ValidateStereoImagesOnce();
                     uint32_t idx = 0;
                     XrSwapchainImageAcquireInfo ai{XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
@@ -4007,9 +4028,10 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
                         for (uint32_t eye = 0; eye < 2; ++eye)
                         {
                             const bool haveImage = reachImages ||
-                                g_eyeHasImage[eye];
+                                (!reachTitle && g_eyeHasImage[eye]);
                             ID3D11Texture2D* source = reachImages
-                                ? reachAccess.eyes[eye] : g_eyeCache[eye];
+                                ? reachAccess.eyes[eye]
+                                : (reachTitle ? nullptr : g_eyeCache[eye]);
                             const D3D11_TEXTURE2D_DESC& sourceDesc = reachImages
                                 ? g_reachCaptureDesc : g_eyeCacheDesc;
                             if (haveImage && source)
@@ -4020,8 +4042,8 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
                         xrReleaseSwapchainImage(g_stereoChain, &ri);
                     }
 
-                    if ((reachImages ||
-                         (g_eyeHasImage[0] && g_eyeHasImage[1])) &&
+                    if ((reachImages || (!reachTitle &&
+                         g_eyeHasImage[0] && g_eyeHasImage[1])) &&
                         projection.viewCount == 2)
                     {
                         layers.push_back(reinterpret_cast<XrCompositionLayerBaseHeader*>(&projection));
@@ -4285,9 +4307,12 @@ ReachPreparedFrameToken VR_ReachPreparedFrame(
 {
     const uint64_t serial =
         g_preparedSerialPublished.load(std::memory_order_acquire);
+    const uint64_t viewSerial =
+        g_preparedViewSerialPublished.load(std::memory_order_acquire);
     return ReachPreparedFrameToken::Create(
         epoch, serial,
         serial != 0 &&
+        viewSerial == serial &&
         g_preparedShouldRender.load(std::memory_order_acquire));
 }
 

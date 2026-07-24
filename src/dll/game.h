@@ -53,6 +53,10 @@ void Game_MapMoveStick(float& mx, float& my);
 // death and the shell, where the same stick navigates the game's own menus and
 // must pass through as a plain analog stick (see input.cpp / GitHub #9).
 bool Game_MoveStickIsLocomotion();
+// True while an armed tracked camera consumes the OpenXR turn action. The
+// XInput hook must then suppress stock RX/RY so the game cannot create a second
+// camera motion underneath the HMD-owned view.
+bool Game_VrOwnsLookStick();
 // Hooks XInputGetState in every loaded xinput DLL; returns how many are
 // hooked. Safe to call repeatedly until it succeeds.
 int Input_InstallXInputHook();
@@ -78,4 +82,8 @@ float Game_GetZoomFactor();
 // flash, reticle and bullets stay on one ray as the user trims the mount.
 // Symmetric half-frustum tangents from Halo's active world camera.
 void Game_GetProjectionTangents(float& tanX, float& tanY);
-void Game_GetRenderHalfFovs(float halfX[2], float halfY[2]);
+// Returns the exact symmetric raster FOV for the frame being submitted. Reach
+// fails closed when its two eye projections are absent or belong to another
+// prepared frame, so OpenXR never receives stale Halo 3 projection metadata.
+bool Game_GetRenderHalfFovs(
+    uint64_t preparedFrameSerial, float halfX[2], float halfY[2]);

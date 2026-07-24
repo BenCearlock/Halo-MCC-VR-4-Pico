@@ -973,6 +973,29 @@ int main()
               kReachRollbackLayout.excludedLastWindowOffset == 0xA30 &&
               kReachRollbackLayout.workspaceSize < kReachPlayerViewStride,
             "Reach rollback policy snapshots bounded regions and excludes the whole player view");
+
+        constexpr float reachRad = 3.14159265358979323846f / 180.0f;
+        const ReachSymmetricFovCover fovCover = SelectReachSymmetricFovCover(
+            -61.5f * reachRad, 43.4f * reachRad,
+            53.0f * reachRad, -53.0f * reachRad, 2912, 2100);
+        const float halfV = fovCover.verticalFov * 0.5f;
+        const float halfH = std::atan(
+            std::tan(halfV) * (2912.0f / 2100.0f));
+        const ReachProjectionHalfFovs decodedFov =
+            DecodeReachProjectionHalfFovs(
+                1.0f / std::tan(halfH), 1.0f / std::tan(halfV));
+        Check(fovCover.valid && decodedFov.valid &&
+              std::fabs(decodedFov.horizontal - 61.5f * reachRad) < 0.0001f &&
+              ReachProjectionCoversOpenXr(decodedFov, fovCover),
+            "Reach raster and OpenXR FOVs cover the same headset view");
+        Check(!SelectReachSymmetricFovCover(
+                   0.1f, 0.2f, 0.3f, -0.3f, 2912, 2100).valid &&
+              !SelectReachSymmetricFovCover(
+                   -0.8f, 0.8f, 0.8f, -0.8f, 0, 2100).valid &&
+              !DecodeReachProjectionHalfFovs(0.0f, 1.0f).valid &&
+              !ReachProjectionCoversOpenXr(
+                   DecodeReachProjectionHalfFovs(2.0f, 2.0f), fovCover),
+            "Reach FOV proof rejects invalid and under-covering projections");
     }
 
     {
@@ -2148,13 +2171,14 @@ int main()
     Check(reach && reach->runtimeSupported,
         "Reach is a permanent runtime-supported title");
     Check(reach && reach->capabilities ==
-              (TitleCapability_Stereo | TitleCapability_ControllerAim |
-               TitleCapability_RuntimeModes | TitleCapability_RoomScale |
+              (TitleCapability_Stereo | TitleCapability_RuntimeModes |
+               TitleCapability_RoomScale |
                TitleCapability_ControllerInput | TitleCapability_Haptics),
         "Reach advertises the 3D + motion core capabilities");
     Check(reach && (reach->capabilities &
-              (TitleCapability_Hud | TitleCapability_ArmIk)) == 0u,
-        "Reach withholds HUD and arm IK until Reach-specific offsets are proven");
+              (TitleCapability_ControllerAim | TitleCapability_Hud |
+               TitleCapability_ArmIk)) == 0u,
+        "Reach withholds aim, HUD, and arm IK until title-specific evidence exists");
     Check(TitleRegistry_HookPlan(GameTitle::HaloReach) ==
               TitleHookPlan::ReachCameraCore,
         "Reach receives its permanent camera-core hook plan");

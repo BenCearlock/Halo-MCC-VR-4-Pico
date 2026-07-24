@@ -27,14 +27,12 @@ namespace
         TitleCapability_Haptics;
     constexpr uint32_t kHalo3AdmissionCapabilities =
         TitleCapability_ControllerInput;
-    // Reach 3D + motion core: stereo, head tracking, controller aim,
-    // head-relative movement, and haptics all ride the title-agnostic path once
-    // Reach's proven camera hook owns the frame. HUD and arm IK are deliberately
-    // withheld until Reach-specific HUD-anchor and skeleton offsets are proven,
-    // exactly as ODST's first camera-core milestone withheld them.
+    // Reach camera + motion core: stereo, tracked look/turn, locomotion input,
+    // room-scale translation, and haptics ride shared paths once Reach's proven
+    // camera owns the frame. Controller aim, HUD, and arm IK stay withheld until
+    // Reach-specific aim-forward, HUD-anchor, and skeleton evidence exists.
     constexpr uint32_t kReachCapabilities =
         TitleCapability_Stereo |
-        TitleCapability_ControllerAim |
         TitleCapability_RuntimeModes |
         TitleCapability_RoomScale |
         TitleCapability_ControllerInput |

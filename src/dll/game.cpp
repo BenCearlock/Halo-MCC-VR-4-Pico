@@ -9389,6 +9389,13 @@ namespace
         uint64_t installedAtMs = 0;
     } g_reachCamera;
 
+    // Published only after the matching eye was rendered and copied. The
+    // release/acquire serial binds each pair of projection scales to the exact
+    // OpenXR prepared frame that will submit those Reach eye textures.
+    std::atomic<float> g_reachRenderHalfFovX[2]{};
+    std::atomic<float> g_reachRenderHalfFovY[2]{};
+    std::atomic<uint64_t> g_reachRenderFovSerial[2]{};
+
     ReachPlayerViewRenderFn g_reachOrigPlayerViewRender = nullptr;
     ReachMainRenderViewFn g_reachOrigMainRenderView = nullptr;
 
@@ -9407,11 +9414,11 @@ namespace
     // onto Reach's compact-camera offsets (pos +0x00, fwd +0x0C, up +0x18). It
     // shares the universal recenter/turn references so F-key recenter and stick
     // turn behave for Reach exactly as for Halo 3 and ODST.
-    void ReachApplyHeadLook(unsigned char* cam)
+    bool ReachApplyHeadLook(unsigned char* cam)
     {
         float q[4], hpos[3];
         if (!VR_GetHeadPose(q, hpos))
-            return;
+            return false;
         const float x = q[0], y = q[1], z = q[2], w = q[3];
         const float hfx = -2.0f * (w * y + x * z);
         const float hfy =  2.0f * (w * x - y * z);
@@ -9480,13 +9487,42 @@ namespace
             oz = Clamp(oz, -1.5f, 1.5f);
             pos[0] += ox; pos[1] += oy; pos[2] += oz;
         }
+        return true;
     }
 
-    // Adds this eye's stereo separation, lens cant, and per-eye vertical FOV to
-    // a head-tracked centre camera, mirroring the accepted Halo 3 per-eye split
-    // onto Reach's compact-camera layout.
-    void ReachApplyEyeOffset(unsigned char* cam, int eye)
+    // Adds this eye's exact OpenXR separation/cant and selects the smallest
+    // symmetric Reach vertical FOV that covers all four headset angles at the
+    // compact camera's proven render bounds. Missing eye data fails the whole
+    // transaction instead of falling back to a mismatched fixed headset pose.
+    bool ReachApplyEyeOffset(
+        unsigned char* cam, int eye,
+        const ReachObservedRect& renderBounds,
+        ReachSymmetricFovCover& fovCover)
     {
+        if (!cam || eye < 0 || eye > 1)
+            return false;
+        const int renderWidth =
+            static_cast<int>(renderBounds.x1) - renderBounds.x0;
+        const int renderHeight =
+            static_cast<int>(renderBounds.y1) - renderBounds.y0;
+        if (renderWidth <= 0 || renderHeight <= 0)
+            return false;
+
+        float eyePosition[3]{};
+        float eyeOrientation[4]{};
+        float eyeFov[4]{};
+        if (!VR_GetEyeViewOffset(eye, eyePosition, eyeOrientation) ||
+            !VR_GetEyeFov(eye, eyeFov))
+        {
+            return false;
+        }
+        fovCover = SelectReachSymmetricFovCover(
+            eyeFov[0], eyeFov[1], eyeFov[2], eyeFov[3],
+            static_cast<uint32_t>(renderWidth),
+            static_cast<uint32_t>(renderHeight));
+        if (!fovCover.valid)
+            return false;
+
         float* pos = reinterpret_cast<float*>(cam + 0x00);
         float* fwd = reinterpret_cast<float*>(cam + 0x0C);
         float* up = reinterpret_cast<float*>(cam + 0x18);
@@ -9494,43 +9530,31 @@ namespace
             fwd[1] * up[2] - fwd[2] * up[1],
             fwd[2] * up[0] - fwd[0] * up[2],
             fwd[0] * up[1] - fwd[1] * up[0]};
-        const float sign = eye == 0 ? -1.0f : 1.0f;
-        float eyePosition[3] = {sign * 0.5f * 0.0675f, 0.0f, 0.0f};
-        float eyeOrientation[4]{};
-        const bool haveEyeView =
-            VR_GetEyeViewOffset(eye, eyePosition, eyeOrientation);
         const float s = g_worldScale.load();
         for (int axis = 0; axis < 3; ++axis)
             pos[axis] += (right[axis] * eyePosition[0] +
                           up[axis] * eyePosition[1] -
                           fwd[axis] * eyePosition[2]) * s;
-        if (haveEyeView)
+        const float sinHalf = sqrtf(eyeOrientation[0] * eyeOrientation[0] +
+                                    eyeOrientation[1] * eyeOrientation[1] +
+                                    eyeOrientation[2] * eyeOrientation[2]);
+        if (sinHalf > 1e-5f)
         {
-            const float sinHalf = sqrtf(eyeOrientation[0] * eyeOrientation[0] +
-                                        eyeOrientation[1] * eyeOrientation[1] +
-                                        eyeOrientation[2] * eyeOrientation[2]);
-            if (sinHalf > 1e-5f)
-            {
-                float angle = 2.0f * atan2f(sinHalf, eyeOrientation[3]);
-                if (angle > 3.14159265f) angle -= 6.2831853f;
-                const float ax = eyeOrientation[0] / sinHalf;
-                const float ay = eyeOrientation[1] / sinHalf;
-                const float az = eyeOrientation[2] / sinHalf;
-                const float axisVec[3] = {
-                    ax * right[0] + ay * up[0] - az * fwd[0],
-                    ax * right[1] + ay * up[1] - az * fwd[1],
-                    ax * right[2] + ay * up[2] - az * fwd[2]};
-                const float cosA = cosf(angle), sinA = sinf(angle);
-                RotateAboutAxis(fwd, axisVec, cosA, sinA);
-                RotateAboutAxis(up, axisVec, cosA, sinA);
-            }
+            float angle = 2.0f * atan2f(sinHalf, eyeOrientation[3]);
+            if (angle > 3.14159265f) angle -= 6.2831853f;
+            const float ax = eyeOrientation[0] / sinHalf;
+            const float ay = eyeOrientation[1] / sinHalf;
+            const float az = eyeOrientation[2] / sinHalf;
+            const float axisVec[3] = {
+                ax * right[0] + ay * up[0] - az * fwd[0],
+                ax * right[1] + ay * up[1] - az * fwd[1],
+                ax * right[2] + ay * up[2] - az * fwd[2]};
+            const float cosA = cosf(angle), sinA = sinf(angle);
+            RotateAboutAxis(fwd, axisVec, cosA, sinA);
+            RotateAboutAxis(up, axisVec, cosA, sinA);
         }
-        float eyeFov[4];
-        if (VR_GetEyeFov(eye, eyeFov))
-        {
-            const float halfY = fmaxf(eyeFov[2], -eyeFov[3]);
-            *reinterpret_cast<float*>(cam + 0x28) = Clamp(2.0f * halfY, 0.01f, 3.14f);
-        }
+        *reinterpret_cast<float*>(cam + 0x28) = fovCover.verticalFov;
+        return true;
     }
 
     // Byte-exact rollback of everything the per-eye transaction can touch,
@@ -9579,6 +9603,12 @@ namespace
         if (entryOwner != playerView + kReachPlayerViewCameraStateOffset)
             return false;
 
+        // A prepared serial can encounter more than one qualifying outer call.
+        // Invalidate the whole pair before each admitted attempt so a partial
+        // retry cannot combine one newly rendered eye with its prior pair.
+        g_reachRenderFovSerial[0].store(0, std::memory_order_release);
+        g_reachRenderFovSerial[1].store(0, std::memory_order_release);
+
         alignas(16) unsigned char savedWorkspace[kReachRenderScopeSnapshotSize];
         alignas(16) unsigned char savedPv[kReachPvSnapshotBytes];
         alignas(16) unsigned char center[kReachCompactCameraBytes];
@@ -9588,15 +9618,21 @@ namespace
                reinterpret_cast<void*>(playerView + kReachPvSnapshotBegin),
                kReachPvSnapshotBytes);
 
-        // Head-track the centre camera once per frame (one recenter consume),
-        // then derive both eyes from it.
+        // Consume the OpenXR turn action and head-track the centre camera once
+        // per prepared frame (one recenter consume), then derive both eyes from
+        // that single combined yaw/pose. Stock RX/RY is suppressed while this
+        // armed camera owns the look stick (Game_VrOwnsLookStick).
         memcpy(center, compact, kReachCompactCameraBytes);
-        ReachApplyHeadLook(center);
+        ApplyVrTurn();
+        if (!ReachApplyHeadLook(center))
+            return false;
 
         const uint8_t originalLastWindow =
             *reinterpret_cast<uint8_t*>(playerView + kReachLastWindowFlagOffset);
         const bool rightFirst = g_config.right_eye_first;
         bool completed = false;
+        bool transactionValid = true;
+        uint32_t capturedEyes = 0;
         __try
         {
             for (uint32_t pass = 0; pass < 2; ++pass)
@@ -9604,11 +9640,22 @@ namespace
                 const ReachStereoPassPolicy policy = SelectReachStereoPassPolicy(
                     pass, rightFirst, originalLastWindow);
                 if (!policy.valid)
+                {
+                    transactionValid = false;
                     break;
-                // Head-tracked centre plus this eye's stereo separation, cant,
-                // and vertical FOV, stamped into the primary compact camera.
+                }
+                // Head-tracked centre plus this eye's exact OpenXR separation,
+                // cant, and symmetric covering FOV, stamped into the primary
+                // compact camera.
                 memcpy(compact, center, kReachCompactCameraBytes);
-                ReachApplyEyeOffset(compact, policy.eye);
+                ReachSymmetricFovCover requestedFov{};
+                if (!ReachApplyEyeOffset(
+                        compact, policy.eye, observed.renderBounds,
+                        requestedFov))
+                {
+                    transactionValid = false;
+                    break;
+                }
 
                 // Rebuild this eye exactly as stock setup does, but from the VR
                 // camera, so player_view_render renders from per-eye matrices
@@ -9626,6 +9673,16 @@ namespace
                 g_reachHelpers.frustum(compact, frustumBounds);
                 g_reachHelpers.projection(
                     compact, frustumBounds, primaryDerived, 0.0f);
+                const float* projectionMatrix = reinterpret_cast<const float*>(
+                    primaryDerived + kReachDerivedProjectionOffset);
+                const ReachProjectionHalfFovs rasterFov =
+                    DecodeReachProjectionHalfFovs(
+                        projectionMatrix[0], projectionMatrix[5]);
+                if (!ReachProjectionCoversOpenXr(rasterFov, requestedFov))
+                {
+                    transactionValid = false;
+                    break;
+                }
                 // Mirror the rebuilt primary compact + derived into the secondary
                 // render pair, matching stock normal setup which mirrors both.
                 memcpy(reinterpret_cast<void*>(
@@ -9660,7 +9717,21 @@ namespace
                 // dereferences.
                 *reinterpret_cast<uintptr_t*>(reachOwnerGlobal) = entryOwner;
                 g_reachOrigPlayerViewRender(playerView);
-                VR_ReachCopyEye(access, policy.eye);
+                if (!VR_ReachCopyEye(access, policy.eye))
+                {
+                    transactionValid = false;
+                    break;
+                }
+                // Publish only after this exact raster was rendered and copied.
+                // The release serial makes the values visible to the OpenXR
+                // submit path only for the matching prepared frame.
+                g_reachRenderHalfFovX[policy.eye].store(
+                    rasterFov.horizontal, std::memory_order_relaxed);
+                g_reachRenderHalfFovY[policy.eye].store(
+                    rasterFov.vertical, std::memory_order_relaxed);
+                g_reachRenderFovSerial[policy.eye].store(
+                    access.preparedSerial, std::memory_order_release);
+                ++capturedEyes;
                 if (pass == 0)
                 {
                     memcpy(reinterpret_cast<void*>(workspace), savedWorkspace,
@@ -9670,7 +9741,7 @@ namespace
                            savedPv, kReachPvSnapshotBytes);
                 }
             }
-            completed = true;
+            completed = transactionValid && capturedEyes == 2;
         }
         __finally
         {
@@ -9715,7 +9786,16 @@ namespace
         }
         VR_ReachEndRenderAccess(access);
         if (!handled)
+        {
+            // player_view_render clears this owner on every call. A failed
+            // transaction may already have rendered one eye, so restore the
+            // exact admitted owner before asking stock to render its fallback.
+            // The stock call will clear it again as usual.
+            *reinterpret_cast<uintptr_t*>(
+                epoch.moduleBase + kReachRenderCameraOwnerRva) =
+                playerView + kReachPlayerViewCameraStateOffset;
             g_reachOrigPlayerViewRender(playerView);
+        }
     }
 
     uintptr_t __fastcall ReachMainRenderViewDetour(
@@ -9748,6 +9828,15 @@ namespace
     bool RemoveReachCameraCore()
     {
         g_reachCamera.armed.store(false, std::memory_order_release);
+        for (int eye = 0; eye < 2; ++eye)
+        {
+            g_reachRenderFovSerial[eye].store(0, std::memory_order_release);
+            g_reachRenderHalfFovX[eye].store(0.0f, std::memory_order_relaxed);
+            g_reachRenderHalfFovY[eye].store(0.0f, std::memory_order_relaxed);
+        }
+        g_aimSeen.store(false, std::memory_order_release);
+        g_camValid.store(false, std::memory_order_release);
+        g_baseCamValid.store(false, std::memory_order_release);
         if (g_reachCamera.outerTarget)
         {
             MH_DisableHook(g_reachCamera.outerTarget);
@@ -9857,6 +9946,15 @@ namespace
         g_reachCamera.innerTarget = inner;
         g_reachCamera.outerTarget = outer;
         g_reachCamera.installedAtMs = GetTickCount64();
+        for (int eye = 0; eye < 2; ++eye)
+        {
+            g_reachRenderFovSerial[eye].store(0, std::memory_order_release);
+            g_reachRenderHalfFovX[eye].store(0.0f, std::memory_order_relaxed);
+            g_reachRenderHalfFovY[eye].store(0.0f, std::memory_order_relaxed);
+        }
+        g_aimSeen.store(false, std::memory_order_release);
+        g_camValid.store(false, std::memory_order_release);
+        g_baseCamValid.store(false, std::memory_order_release);
         g_reachCamera.armed.store(false, std::memory_order_release);
         g_reachCamera.installed.store(true, std::memory_order_release);
         g_needRecenter.store(true, std::memory_order_release);
@@ -10297,6 +10395,31 @@ bool Game_IsCameraOnlyBringup()
     return false;
 #endif
 }
+
+bool Game_VrOwnsLookStick()
+{
+#if HALOMCCVR_EXPERIMENTAL_ODST_BRINGUP
+    if (OdstVrOwnsLookStick(
+            OdstCameraOnlyContext(),
+            g_enabled.load(std::memory_order_acquire)))
+    {
+        return true;
+    }
+#endif
+#if HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE
+    // Reach has no separate simulation-camera integration yet. Once its proven
+    // stereo camera is armed, ApplyVrTurn owns yaw and the HMD owns pitch; raw
+    // stock RX/RY would otherwise create a second, conflicting look transform.
+    return TitleAdapter_GetActiveTitle() == GameTitle::HaloReach &&
+        g_reachCamera.armed.load(std::memory_order_acquire) &&
+        g_enabled.load(std::memory_order_acquire) &&
+        g_vrAim.load(std::memory_order_acquire) &&
+        VR_IsStereoEnabled();
+#else
+    return false;
+#endif
+}
+
 bool Game_ProcessPresentationDetachRequest()
 {
 #if HALOMCCVR_EXPERIMENTAL_ODST_BRINGUP
@@ -10732,7 +10855,7 @@ void Game_AutoVrTick()
         // Reach owns head tracking + stereo whenever its per-eye camera core is
         // armed. Enabling them lets the present path composite the two eye
         // caches the inner detour captured, and publishing Gameplay drives the
-        // shared head-relative movement and haptics. Disarm mirrors ODST: drop
+        // shared locomotion and haptics paths. Disarm mirrors ODST: drop
         // head tracking and detach so nothing composites stale eyes.
         if (g_reachCamera.armed.load(std::memory_order_acquire))
         {
@@ -11223,14 +11346,50 @@ void Game_GetProjectionTangents(float& tanX, float& tanY)
     tanY = g_projectionTanY.load();
 }
 
-void Game_GetRenderHalfFovs(float halfX[2], float halfY[2])
+bool Game_GetRenderHalfFovs(
+    uint64_t preparedFrameSerial, float halfX[2], float halfY[2])
 {
+    if (!halfX || !halfY)
+        return false;
     const float fallbackX = g_renderHalfFovX.load();
     const float fallbackY = g_renderHalfFovY.load();
     halfX[0] = fallbackX;
     halfX[1] = fallbackX;
     halfY[0] = fallbackY;
     halfY[1] = fallbackY;
+#if HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE
+    if (TitleAdapter_GetActiveTitle() == GameTitle::HaloReach)
+    {
+        if (!g_reachCamera.armed.load(std::memory_order_acquire) ||
+            !preparedFrameSerial)
+        {
+            return false;
+        }
+        const uint64_t leftSerial =
+            g_reachRenderFovSerial[0].load(std::memory_order_acquire);
+        const uint64_t rightSerial =
+            g_reachRenderFovSerial[1].load(std::memory_order_acquire);
+        if (leftSerial != preparedFrameSerial ||
+            rightSerial != preparedFrameSerial)
+        {
+            return false;
+        }
+        for (int eye = 0; eye < 2; ++eye)
+        {
+            halfX[eye] =
+                g_reachRenderHalfFovX[eye].load(std::memory_order_relaxed);
+            halfY[eye] =
+                g_reachRenderHalfFovY[eye].load(std::memory_order_relaxed);
+            if (!isfinite(halfX[eye]) || !isfinite(halfY[eye]) ||
+                halfX[eye] <= 0.0f || halfX[eye] >= 1.5707f ||
+                halfY[eye] <= 0.0f || halfY[eye] >= 1.5707f)
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+#endif
 #if HALOMCCVR_EXPERIMENTAL_ODST_BRINGUP
     const uint32_t generation =
         g_odstRuntimeGeneration.load(std::memory_order_acquire);
@@ -11250,6 +11409,7 @@ void Game_GetRenderHalfFovs(float halfX[2], float halfY[2])
         halfY[1] = g_odstRenderHalfFovY[1].load(std::memory_order_relaxed);
     }
 #endif
+    return true;
 }
 
 
