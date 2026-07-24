@@ -9976,6 +9976,20 @@ namespace
                 g_reachStockHeadingYaw.store(atan2f(sfy, sfx),
                                              std::memory_order_relaxed);
                 g_reachMoveHeadingValid.store(true, std::memory_order_release);
+                // Publish the pristine game aim forward — the same vector Halo 3
+                // exposes at CamCopyHook (g_aimFwd*/g_aimSeen) — so the shared
+                // closed-loop aim steering in Game_ComputeAimStick can drive
+                // Reach's frozen sim aim onto the controller ray. Read-only:
+                // stockCompact is never modified (headCenter is the writable
+                // copy). Raw forward, matching Halo 3's publication; the yaw uses
+                // the same atan2(y,x) convention as the heading above.
+                if (isfinite(stockFwd[2]))
+                {
+                    g_aimFwdX.store(stockFwd[0]);
+                    g_aimFwdY.store(stockFwd[1]);
+                    g_aimFwdZ.store(stockFwd[2]);
+                    g_aimSeen.store(true, std::memory_order_release);
+                }
             }
         }
         memcpy(headCenter, stockCompact, kReachCompactCameraBytes);
@@ -12456,9 +12470,29 @@ void Game_ToggleVrAim()
     LOG("VR aim (right controller steers weapon) %s", on ? "ON" : "OFF");
 }
 
+// Reach reuses the shared closed-loop aim steering, but publishes no runtime
+// capability set (no Reach lifecycle), so TitleCapability_ControllerAim is
+// never enabled for it. Mirror the Reach-scoped predicate used by
+// Game_VrOwnsLookStick / Game_MoveStickIsLocomotion: while Reach's proven
+// stereo camera is armed and head tracking + VR aim are on, its aim may be
+// steered exactly like Halo 3's. Halo 3 / ODST are unaffected (title-gated).
+#if HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE
+static bool ReachControllerAimActive()
+{
+    return TitleAdapter_GetActiveTitle() == GameTitle::HaloReach &&
+        g_reachCamera.armed.load(std::memory_order_acquire) &&
+        g_enabled.load(std::memory_order_acquire) &&
+        g_vrAim.load(std::memory_order_acquire) &&
+        VR_IsStereoEnabled();
+}
+#else
+static bool ReachControllerAimActive() { return false; }
+#endif
+
 bool Game_ComputeAimStick(float& outRx, float& outRy)
 {
-    if (!Game_HasTitleCapability(TitleCapability_ControllerAim))
+    if (!Game_HasTitleCapability(TitleCapability_ControllerAim) &&
+        !ReachControllerAimActive())
         return false;
     // Closed-loop aim: emit a right-stick deflection proportional to the
     // angular error between the game's aim and the controller ray. The game
