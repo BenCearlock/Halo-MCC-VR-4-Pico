@@ -14,9 +14,13 @@ inline constexpr int kNativeRenderWidth = 2912;
 inline constexpr int kNativeRenderHeight = 2100;
 inline constexpr float kResolutionScaleMin = 0.35f;
 inline constexpr float kResolutionScaleMax = 2.00f;
-// Draw-distance trim: fraction of the engine's stock render far-clip distance.
-// 1.00 = full stock draw distance; the floor still keeps distant landmarks.
-inline constexpr float kDrawDistanceMin = 0.25f;
+// Draw-distance trim: fraction of the engine's stock render far-clip distance
+// (stock 10240 world units). 1.00 = full stock draw distance. The floor reaches
+// deep enough to pull the far plane INTO the playable scene (~512 units), so low
+// settings cull real terrain/objects, not just the distant skybox. Most levels
+// only start visibly culling below ~0.25 because nearby geometry is closer than
+// the far plane; the lowest settings clip near geometry (hard pop-in) for frames.
+inline constexpr float kDrawDistanceMin = 0.05f;
 inline constexpr float kDrawDistanceMax = 1.00f;
 inline constexpr float kHudCurvatureMin = 0.00f;
 inline constexpr float kHudCurvatureMax = 1.00f;

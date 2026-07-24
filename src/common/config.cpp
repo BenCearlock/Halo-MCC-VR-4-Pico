@@ -493,11 +493,14 @@ void ConfigSave()
     fprintf(f, "# (default %.2f, range %.2f to %.2f)\n",
             d.resolution_scale, kResolutionScaleMin, kResolutionScaleMax);
     fprintf(f, "resolution_scale = %.2f\n\n", g_config.resolution_scale);
-    fprintf(f, "# Draw distance: how far the game renders geometry, as a fraction of\n");
-    fprintf(f, "# stock. Applies live to all three games (Halo 3, ODST, Reach). 1.00 =\n");
-    fprintf(f, "# full stock draw distance; lower culls distant scenery earlier to free\n");
-    fprintf(f, "# CPU and smooth stereo judder on weaker machines. VR is usually CPU-\n");
-    fprintf(f, "# limited, not GPU, so the picture stays sharp. No restart needed.\n");
+    fprintf(f, "# Draw distance: how far the game renders the whole scene, as a\n");
+    fprintf(f, "# fraction of stock. Applies live to all three games (Halo 3, ODST,\n");
+    fprintf(f, "# Reach). 1.00 = full stock draw distance. Lower brings the far plane\n");
+    fprintf(f, "# in toward you, culling distant terrain and objects (the skybox goes\n");
+    fprintf(f, "# first). Most levels only start visibly culling below ~0.25, since\n");
+    fprintf(f, "# nearby geometry is closer than that; the lowest settings clip near\n");
+    fprintf(f, "# geometry (hard pop-in) in exchange for the most frames. Helps weaker\n");
+    fprintf(f, "# machines; VR is usually CPU-limited, not GPU. No restart needed.\n");
     fprintf(f, "# (default %.2f, range %.2f to %.2f)\n",
             d.draw_distance, kDrawDistanceMin, kDrawDistanceMax);
     fprintf(f, "draw_distance = %.2f\n\n", g_config.draw_distance);
