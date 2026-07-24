@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -10,12 +11,23 @@
 // rollback rules can be exhaustively tested before any detour is authorized.
 
 inline constexpr size_t kReachRetailImageSize = 0x04EDA000;
+inline constexpr uint32_t kReachRetailPeTimestamp = 0x68A0EFE1;
+inline constexpr char kReachRetailModuleSha256[] =
+    "738DD2D24EA3AEA12E1EE9AA4A61094BF116027D42004C35A19E5048608B0894";
 inline constexpr uintptr_t kReachMainRenderViewRva = 0x000C31F4;
+inline constexpr uintptr_t kReachNormalSetupCallRva = 0x000C36D6;
+inline constexpr uintptr_t kReachNormalSetupTargetRva = 0x0026C204;
+inline constexpr uintptr_t kReachNormalOuterCallRva = 0x000C3730;
 inline constexpr uintptr_t kReachNormalOuterReturnRva = 0x000C3735;
+inline constexpr uintptr_t kReachScreenshotOuterCallRva = 0x001D3864;
 inline constexpr uintptr_t kReachScreenshotOuterReturnRva = 0x001D3869;
 inline constexpr uintptr_t kReachPlayerViewRenderRva = 0x0026C6DC;
 inline constexpr uintptr_t kReachPlayerViewRenderCallerRva = 0x000C33C4;
 inline constexpr uintptr_t kReachPlayerViewRenderReturnRva = 0x000C33C9;
+inline constexpr uintptr_t kReachOuterMainRenderCallRva = 0x000C2FAA;
+inline constexpr uintptr_t kReachOuterMainRenderTargetRva = 0x000C33F8;
+inline constexpr uintptr_t kReachOuterPresentCallRva = 0x000C3000;
+inline constexpr uintptr_t kReachOuterPresentTargetRva = 0x0025113C;
 inline constexpr uintptr_t kReachFrustumHelperRva = 0x00287F58;
 inline constexpr uintptr_t kReachPlayerViewArrayRva = 0x029F2B90;
 inline constexpr size_t kReachPlayerViewStride = 0x0A40;
@@ -23,8 +35,21 @@ inline constexpr uint32_t kReachPlayerViewCount = 4;
 inline constexpr uintptr_t kReachDefaultWorkspaceRva = 0x00C9FAE0;
 inline constexpr size_t kReachRenderScopeSnapshotSize = 0x02B0;
 inline constexpr uintptr_t kReachCameraStackCallbackRva = 0x0026BFD4;
+inline constexpr uintptr_t kReachActiveViewRva = 0x04E389A8;
+inline constexpr uintptr_t kReachCameraStackDepthRva = 0x00B43ABC;
+inline constexpr uintptr_t kReachCameraStackPointersRva = 0x00C878A8;
 inline constexpr uintptr_t kReachRenderCameraOwnerRva = 0x04E38A90;
 inline constexpr uintptr_t kReachSelectedSpecializationRva = 0x04E38A08;
+inline constexpr uintptr_t kReachDisplaySwapchainRva = 0x04E38868;
+inline constexpr uintptr_t kReachDisplayGroupRva = 0x00C8E520;
+inline constexpr uintptr_t kReachDisplaySelectedRtvRva = 0x00CA02E0;
+inline constexpr uintptr_t kReachDisplaySurfaceCountOffset = 0x58;
+inline constexpr uintptr_t kReachDisplaySurfaceArrayOffset = 0x60;
+inline constexpr size_t kReachDisplaySurfaceRecordSize = 0x88;
+inline constexpr uintptr_t kReachDisplaySurfaceRtvOffset = 0x08;
+inline constexpr uintptr_t kReachDisplaySurfaceSrvOffset = 0x18;
+inline constexpr uint32_t kReachDisplaySurfaceCount = 4;
+inline constexpr uint32_t kReachDisplayFormatR8G8B8A8Unorm = 28;
 inline constexpr uintptr_t kReachPlayerViewCameraStateOffset = 0x03B0;
 inline constexpr uintptr_t kReachPlayerViewCurrentMatricesOffset = 0x0490;
 inline constexpr uintptr_t kReachPlayerViewPreviousMatricesOffset = 0x0760;
@@ -153,33 +178,181 @@ inline bool ReachSameModuleEpoch(
         left.generation == right.generation;
 }
 
+class ReachPreflightPublication;
+
 class ReachPreflightToken
 {
 public:
     ReachPreflightToken() noexcept = default;
 
-    static ReachPreflightToken Create(
+    bool Complete() const noexcept { return m_complete; }
+    ReachModuleEpoch Epoch() const noexcept { return m_epoch; }
+    uint64_t PublicationNonce() const noexcept
+    {
+        return m_publicationNonce;
+    }
+    bool IsCurrent() const noexcept;
+
+private:
+    ReachPreflightToken(
+        const ReachPreflightPublication* publication,
+        const ReachModuleEpoch& epoch,
+        uint64_t publicationNonce) noexcept
+        : m_publication(publication),
+          m_epoch(epoch),
+          m_publicationNonce(publicationNonce),
+          m_complete(true)
+    {
+    }
+
+    const ReachPreflightPublication* m_publication = nullptr;
+    ReachModuleEpoch m_epoch{};
+    uint64_t m_publicationNonce = 0;
+    bool m_complete = false;
+
+    friend class ReachPreflightPublication;
+};
+
+// Single-writer, multi-reader publication capability for a completed loaded
+// image preflight. Every successful publication receives a strictly newer
+// nonce. Invalidation clears the live nonce before changing the epoch, so a
+// copied token becomes unusable before the next publication can be observed.
+class ReachPreflightPublication
+{
+public:
+    ReachPreflightPublication() noexcept = default;
+    ReachPreflightPublication(const ReachPreflightPublication&) = delete;
+    ReachPreflightPublication& operator=(
+        const ReachPreflightPublication&) = delete;
+
+    bool Publish(
         const ReachModuleEpoch& epoch,
         const ReachRenderCandidateProof& proof) noexcept
     {
-        return ReachModuleEpochValid(epoch) &&
-                ReachRenderCandidateProofComplete(proof)
-            ? ReachPreflightToken(epoch)
-            : ReachPreflightToken{};
+        Invalidate();
+        if (!ReachModuleEpochValid(epoch) ||
+            !ReachRenderCandidateProofComplete(proof))
+        {
+            return false;
+        }
+
+        const uint64_t nonce = NextNonce();
+        if (!nonce)
+            return false;
+        m_moduleBase.store(epoch.moduleBase, std::memory_order_relaxed);
+        m_generation.store(epoch.generation, std::memory_order_relaxed);
+        m_currentNonce.store(nonce, std::memory_order_release);
+        return true;
     }
 
-    bool Complete() const noexcept { return m_complete; }
-    ReachModuleEpoch Epoch() const noexcept { return m_epoch; }
+    void Invalidate() noexcept
+    {
+        m_currentNonce.store(0, std::memory_order_release);
+        m_moduleBase.store(0, std::memory_order_relaxed);
+        m_generation.store(0, std::memory_order_relaxed);
+    }
+
+    ReachPreflightToken Get(
+        const ReachModuleEpoch& epoch) const noexcept
+    {
+        if (!ReachModuleEpochValid(epoch))
+            return {};
+        for (unsigned attempt = 0; attempt < 4; ++attempt)
+        {
+            const uint64_t before =
+                m_currentNonce.load(std::memory_order_acquire);
+            if (!before)
+                return {};
+            const uintptr_t moduleBase =
+                m_moduleBase.load(std::memory_order_relaxed);
+            const uint32_t generation =
+                m_generation.load(std::memory_order_relaxed);
+            const uint64_t after =
+                m_currentNonce.load(std::memory_order_acquire);
+            if (before != after)
+                continue;
+            if (moduleBase != epoch.moduleBase ||
+                generation != epoch.generation)
+            {
+                return {};
+            }
+            return ReachPreflightToken(this, epoch, before);
+        }
+        return {};
+    }
+
+    bool IsCurrent(const ReachPreflightToken& token) const noexcept
+    {
+        if (!token.Complete() || token.m_publication != this ||
+            !token.m_publicationNonce)
+        {
+            return false;
+        }
+        for (unsigned attempt = 0; attempt < 4; ++attempt)
+        {
+            const uint64_t before =
+                m_currentNonce.load(std::memory_order_acquire);
+            if (!before || before != token.m_publicationNonce)
+                return false;
+            const uintptr_t moduleBase =
+                m_moduleBase.load(std::memory_order_relaxed);
+            const uint32_t generation =
+                m_generation.load(std::memory_order_relaxed);
+            const uint64_t after =
+                m_currentNonce.load(std::memory_order_acquire);
+            if (before != after)
+                continue;
+            return moduleBase == token.m_epoch.moduleBase &&
+                generation == token.m_epoch.generation;
+        }
+        return false;
+    }
+
+    bool HasCurrent() const noexcept
+    {
+        return m_currentNonce.load(std::memory_order_acquire) != 0;
+    }
+
+    uint64_t LastPublicationNonce() const noexcept
+    {
+        return m_nonceCounter.load(std::memory_order_relaxed);
+    }
 
 private:
-    explicit ReachPreflightToken(const ReachModuleEpoch& epoch) noexcept
-        : m_epoch(epoch), m_complete(true)
+    uint64_t NextNonce() noexcept
     {
+        uint64_t previous =
+            m_nonceCounter.load(std::memory_order_relaxed);
+        for (;;)
+        {
+            if (previous == std::numeric_limits<uint64_t>::max())
+                return 0;
+            if (m_nonceCounter.compare_exchange_weak(
+                    previous, previous + 1,
+                    std::memory_order_relaxed,
+                    std::memory_order_relaxed))
+            {
+                return previous + 1;
+            }
+        }
     }
 
-    ReachModuleEpoch m_epoch{};
-    bool m_complete = false;
+    std::atomic<uint64_t> m_nonceCounter{0};
+    std::atomic<uint64_t> m_currentNonce{0};
+    std::atomic<uintptr_t> m_moduleBase{0};
+    std::atomic<uint32_t> m_generation{0};
 };
+
+inline bool ReachPreflightToken::IsCurrent() const noexcept
+{
+    return m_publication && m_publication->IsCurrent(*this);
+}
+
+inline bool IsPreflightCurrent(
+    const ReachPreflightToken& token) noexcept
+{
+    return token.IsCurrent();
+}
 
 class ReachFreshCameraToken
 {
@@ -251,34 +424,304 @@ class ReachDirectCopyToken
 public:
     ReachDirectCopyToken() noexcept = default;
 
-    static ReachDirectCopyToken Create(
-        const ReachModuleEpoch& epoch, uint64_t preparedFrameSerial,
-        bool ready) noexcept
-    {
-        return ReachModuleEpochValid(epoch) && preparedFrameSerial && ready
-            ? ReachDirectCopyToken(epoch, preparedFrameSerial)
-            : ReachDirectCopyToken{};
-    }
-
     bool Ready() const noexcept { return m_ready; }
     ReachModuleEpoch Epoch() const noexcept { return m_epoch; }
     uint64_t PreparedFrameSerial() const noexcept
     {
         return m_preparedFrameSerial;
     }
+    uint64_t ResourceRevision() const noexcept
+    {
+        return m_resourceRevision;
+    }
+    uint64_t Nonce() const noexcept { return m_nonce; }
 
 private:
     ReachDirectCopyToken(
         const ReachModuleEpoch& epoch,
-        uint64_t preparedFrameSerial) noexcept
+        uint64_t preparedFrameSerial, uint64_t resourceRevision,
+        uint64_t nonce) noexcept
         : m_epoch(epoch),
           m_preparedFrameSerial(preparedFrameSerial),
+          m_resourceRevision(resourceRevision),
+          m_nonce(nonce),
           m_ready(true)
     {
     }
 
     ReachModuleEpoch m_epoch{};
     uint64_t m_preparedFrameSerial = 0;
+    uint64_t m_resourceRevision = 0;
+    uint64_t m_nonce = 0;
+    bool m_ready = false;
+
+    friend class ReachDirectCopyGate;
+};
+
+struct ReachCopyShape
+{
+    uint32_t width = 0;
+    uint32_t height = 0;
+    uint32_t mipLevels = 0;
+    uint32_t arraySize = 0;
+    uint32_t format = 0;
+    uint32_t sampleCount = 0;
+    uint32_t sampleQuality = 0;
+};
+
+inline bool ReachSameCopyShape(
+    const ReachCopyShape& left, const ReachCopyShape& right) noexcept
+{
+    return left.width == right.width &&
+        left.height == right.height &&
+        left.mipLevels == right.mipLevels &&
+        left.arraySize == right.arraySize &&
+        left.format == right.format &&
+        left.sampleCount == right.sampleCount &&
+        left.sampleQuality == right.sampleQuality;
+}
+
+inline bool ReachDisplayCopyShapeValid(
+    const ReachCopyShape& shape) noexcept
+{
+    return shape.width != 0 && shape.height != 0 &&
+        shape.mipLevels == 1 && shape.arraySize == 1 &&
+        shape.format == kReachDisplayFormatR8G8B8A8Unorm &&
+        shape.sampleCount == 1 && shape.sampleQuality == 0;
+}
+
+struct ReachDisplayContinuity
+{
+    ReachModuleEpoch epoch{};
+    uint64_t resourceRevision = 0;
+    uint64_t lifecycleSerial = 0;
+    uintptr_t swapchainIdentity = 0;
+    uintptr_t buffer0Identity = 0;
+    uintptr_t surfaceArrayIdentity = 0;
+    uintptr_t record0RtvIdentity = 0;
+    uintptr_t record0SrvIdentity = 0;
+    uintptr_t selectedRtvIdentity = 0;
+    uintptr_t deviceIdentity = 0;
+    uintptr_t immediateContextIdentity = 0;
+    uintptr_t eyeResourceIdentities[2]{};
+    uint32_t specializationCount = 0;
+    uint32_t selectedSpecialization = 0;
+    bool teardownRequested = false;
+};
+
+struct ReachDisplaySurfaceProof
+{
+    ReachDisplayContinuity continuity{};
+    ReachPreflightToken preflight{};
+    uintptr_t immediateContextIdentity = 0;
+    uintptr_t eyeResourceIdentities[2]{};
+    ReachCopyShape source{};
+    ReachCopyShape eyes[2]{};
+    uint32_t readyEyeMask = 0;
+    bool engineSwapchainMatchesPresent = false;
+    bool selectedRtvMatchesRecord0 = false;
+    bool swapchainContract = false;
+    bool sameDevice = false;
+    bool immediateContext = false;
+};
+
+inline bool ReachDisplayContinuityValid(
+    const ReachDisplayContinuity& continuity) noexcept
+{
+    return ReachModuleEpochValid(continuity.epoch) &&
+        continuity.resourceRevision != 0 &&
+        continuity.lifecycleSerial != 0 &&
+        continuity.lifecycleSerial !=
+            std::numeric_limits<uint64_t>::max() &&
+        continuity.swapchainIdentity != 0 &&
+        continuity.buffer0Identity != 0 &&
+        continuity.surfaceArrayIdentity != 0 &&
+        continuity.record0RtvIdentity != 0 &&
+        continuity.record0SrvIdentity != 0 &&
+        continuity.selectedRtvIdentity ==
+            continuity.record0RtvIdentity &&
+        continuity.deviceIdentity != 0 &&
+        continuity.immediateContextIdentity != 0 &&
+        continuity.eyeResourceIdentities[0] != 0 &&
+        continuity.eyeResourceIdentities[1] != 0 &&
+        continuity.eyeResourceIdentities[0] !=
+            continuity.eyeResourceIdentities[1] &&
+        continuity.eyeResourceIdentities[0] !=
+            continuity.buffer0Identity &&
+        continuity.eyeResourceIdentities[1] !=
+            continuity.buffer0Identity &&
+        continuity.specializationCount == kReachDisplaySurfaceCount &&
+        continuity.selectedSpecialization == 0 &&
+        !continuity.teardownRequested;
+}
+
+inline bool ReachSameDisplayContinuity(
+    const ReachDisplayContinuity& left,
+    const ReachDisplayContinuity& right) noexcept
+{
+    return ReachDisplayContinuityValid(left) &&
+        ReachDisplayContinuityValid(right) &&
+        ReachSameModuleEpoch(left.epoch, right.epoch) &&
+        left.resourceRevision == right.resourceRevision &&
+        left.lifecycleSerial == right.lifecycleSerial &&
+        left.swapchainIdentity == right.swapchainIdentity &&
+        left.buffer0Identity == right.buffer0Identity &&
+        left.surfaceArrayIdentity == right.surfaceArrayIdentity &&
+        left.record0RtvIdentity == right.record0RtvIdentity &&
+        left.record0SrvIdentity == right.record0SrvIdentity &&
+        left.selectedRtvIdentity == right.selectedRtvIdentity &&
+        left.deviceIdentity == right.deviceIdentity &&
+        left.immediateContextIdentity ==
+            right.immediateContextIdentity &&
+        left.eyeResourceIdentities[0] ==
+            right.eyeResourceIdentities[0] &&
+        left.eyeResourceIdentities[1] ==
+            right.eyeResourceIdentities[1] &&
+        left.specializationCount == right.specializationCount &&
+        left.selectedSpecialization == right.selectedSpecialization;
+}
+
+inline bool ReachDisplaySurfaceProofComplete(
+    const ReachDisplaySurfaceProof& proof) noexcept
+{
+    return proof.preflight.Complete() &&
+        IsPreflightCurrent(proof.preflight) &&
+        ReachSameModuleEpoch(
+            proof.preflight.Epoch(), proof.continuity.epoch) &&
+        ReachDisplayContinuityValid(proof.continuity) &&
+        proof.immediateContextIdentity ==
+            proof.continuity.immediateContextIdentity &&
+        proof.eyeResourceIdentities[0] ==
+            proof.continuity.eyeResourceIdentities[0] &&
+        proof.eyeResourceIdentities[1] ==
+            proof.continuity.eyeResourceIdentities[1] &&
+        ReachDisplayCopyShapeValid(proof.source) &&
+        ReachSameCopyShape(proof.source, proof.eyes[0]) &&
+        ReachSameCopyShape(proof.source, proof.eyes[1]) &&
+        proof.readyEyeMask == 0x3u &&
+        proof.engineSwapchainMatchesPresent &&
+        proof.selectedRtvMatchesRecord0 &&
+        proof.swapchainContract &&
+        proof.sameDevice &&
+        proof.immediateContext;
+}
+
+// Owns the live display-resource revision. A copied readiness token becomes
+// unusable immediately when the swapchain, buffer, engine views, ResizeBuffers,
+// title epoch, or device/context proof is invalidated.
+class ReachDirectCopyGate
+{
+public:
+    bool AdvanceEpoch(const ReachModuleEpoch& epoch) noexcept
+    {
+        if (ReachModuleEpochValid(m_epoch) ||
+            !ReachModuleEpochValid(epoch) ||
+            epoch.generation <= m_highestGeneration)
+        {
+            return false;
+        }
+        m_epoch = epoch;
+        m_highestGeneration = epoch.generation;
+        m_lastResourceRevision = 0;
+        m_continuity = {};
+        m_preflight = {};
+        m_ready = false;
+        return true;
+    }
+
+    bool Publish(const ReachDisplaySurfaceProof& proof) noexcept
+    {
+        // A refresh attempt replaces the old capability atomically from the
+        // policy's perspective: even a failed replacement revokes prior
+        // readiness and all retained live identities.
+        m_ready = false;
+        m_continuity = {};
+        m_preflight = {};
+        if (!ReachSameModuleEpoch(proof.continuity.epoch, m_epoch) ||
+            !ReachDisplaySurfaceProofComplete(proof) ||
+            proof.continuity.resourceRevision <=
+                m_lastResourceRevision ||
+            m_nonceCounter == std::numeric_limits<uint64_t>::max())
+        {
+            return false;
+        }
+        ++m_nonceCounter;
+        m_lastResourceRevision = proof.continuity.resourceRevision;
+        m_continuity = proof.continuity;
+        m_preflight = proof.preflight;
+        m_nonce = m_nonceCounter;
+        m_ready = true;
+        return Ready();
+    }
+
+    ReachDirectCopyToken Prepare(
+        const ReachPreparedFrameToken& preparedFrame,
+        const ReachDisplayContinuity& live) const noexcept
+    {
+        return Ready() && preparedFrame.Ready() &&
+                ReachSameModuleEpoch(preparedFrame.Epoch(), m_epoch) &&
+                ReachSameDisplayContinuity(live, m_continuity)
+            ? ReachDirectCopyToken(
+                m_epoch, preparedFrame.Serial(),
+                m_continuity.resourceRevision, m_nonce)
+            : ReachDirectCopyToken{};
+    }
+
+    bool IsCurrent(
+        const ReachDirectCopyToken& token,
+        const ReachDisplayContinuity& live) const noexcept
+    {
+        return Ready() && token.Ready() &&
+            ReachSameModuleEpoch(token.Epoch(), m_epoch) &&
+            token.ResourceRevision() ==
+                m_continuity.resourceRevision &&
+            token.Nonce() == m_nonce &&
+            ReachSameDisplayContinuity(live, m_continuity);
+    }
+
+    bool Invalidate(const ReachModuleEpoch& epoch) noexcept
+    {
+        if (!ReachSameModuleEpoch(epoch, m_epoch))
+            return false;
+        m_ready = false;
+        m_continuity = {};
+        m_preflight = {};
+        return true;
+    }
+
+    bool Teardown(const ReachModuleEpoch& epoch) noexcept
+    {
+        if (!ReachSameModuleEpoch(epoch, m_epoch))
+            return false;
+        m_ready = false;
+        m_continuity = {};
+        m_preflight = {};
+        m_epoch = {};
+        m_lastResourceRevision = 0;
+        return true;
+    }
+
+    bool Ready() const noexcept
+    {
+        return m_ready && IsPreflightCurrent(m_preflight);
+    }
+    ReachDisplayContinuity Continuity() const noexcept
+    {
+        return m_continuity;
+    }
+    uint64_t LastResourceRevision() const noexcept
+    {
+        return m_lastResourceRevision;
+    }
+
+private:
+    ReachModuleEpoch m_epoch{};
+    uint32_t m_highestGeneration = 0;
+    uint64_t m_lastResourceRevision = 0;
+    uint64_t m_nonceCounter = 0;
+    uint64_t m_nonce = 0;
+    ReachDisplayContinuity m_continuity{};
+    ReachPreflightToken m_preflight{};
     bool m_ready = false;
 };
 
@@ -546,7 +989,9 @@ inline bool ReachNormalOuterInputMatches(
     const ReachOuterRenderInput& input) noexcept
 {
     const ReachModuleEpoch epoch = input.preflight.Epoch();
-    if (!input.preflight.Complete() || !input.freshCamera.Stable() ||
+    if (!input.preflight.Complete() ||
+        !IsPreflightCurrent(input.preflight) ||
+        !input.freshCamera.Stable() ||
         !input.preparedFrame.Ready() || input.teardownRequested ||
         !input.nowMs ||
         !ReachModuleEpochValid(epoch) ||
@@ -702,12 +1147,14 @@ struct ReachInnerRenderInput
     bool secondaryCameraValid = false;
     ReachPreparedFrameToken preparedFrame{};
     ReachDirectCopyToken directCopy{};
+    ReachDisplayContinuity displayContinuity{};
     bool teardownRequested = false;
 };
 
 inline bool ReachInnerScopeMatches(
     const ReachRenderOwnerGate& owner,
     const ReachRenderOwnerToken& token,
+    const ReachDirectCopyGate& directCopyGate,
     const ReachInnerRenderInput& input) noexcept
 {
     if (!owner.IsCurrent(token) ||
@@ -721,6 +1168,8 @@ inline bool ReachInnerScopeMatches(
         input.preparedFrame.Serial() != token.PreparedFrameSerial() ||
         input.directCopy.PreparedFrameSerial() !=
             token.PreparedFrameSerial() ||
+        !directCopyGate.IsCurrent(
+            input.directCopy, input.displayContinuity) ||
         input.playerView != token.PlayerView() ||
         input.activeView != token.PlayerView() ||
         input.cameraStackDepth != token.CameraStackDepthBefore() + 1 ||
@@ -763,12 +1212,15 @@ inline ReachRenderAction SelectReachRenderAction(
     bool runtimeHooksPermitted, const ReachPreflightToken& preflight,
     const ReachRenderOwnerGate& owner,
     const ReachRenderOwnerToken& token,
+    const ReachDirectCopyGate& directCopyGate,
     const ReachInnerRenderInput& input) noexcept
 {
     return runtimeHooksPermitted && preflight.Complete() &&
+            IsPreflightCurrent(preflight) &&
             owner.IsCurrent(token) &&
             ReachSameModuleEpoch(preflight.Epoch(), token.Epoch()) &&
-            ReachInnerScopeMatches(owner, token, input)
+            ReachInnerScopeMatches(
+                owner, token, directCopyGate, input)
         ? ReachRenderAction::StereoTransaction
         : ReachRenderAction::StockOnce;
 }

@@ -59,15 +59,16 @@ option(HALOMCCVR_EXPERIMENTAL_REACH_BRINGUP
     "Compile private Halo: Reach controller-input admission" OFF)
 
 # Separate from controller admission: this compiles allocation-free routing,
-# ownership, freshness, pass-order, and rollback policy only. It does not add a
-# title hook plan or any reachable MinHook/camera/capture path.
+# ownership, freshness, pass-order, and rollback policy plus worker-only loaded
+# image and display/copy-shape readiness proof. It does not add
+# a title hook plan or any reachable MinHook/camera/write/CopyResource path.
 option(HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE
-    "Compile the disabled Halo: Reach render-candidate scaffold" OFF)
+    "Compile the hard-off Halo: Reach render-candidate foundation" OFF)
 
 if(HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE AND
         NOT HALOMCCVR_EXPERIMENTAL_REACH_BRINGUP)
     message(FATAL_ERROR
-        "The disabled Reach render candidate requires Reach controller bring-up ON")
+        "The hard-off Reach render candidate requires Reach controller bring-up ON")
 endif()
 
 if(HALOMCCVR_EXPERIMENTAL_REACH_BRINGUP)
@@ -79,9 +80,9 @@ else()
     message(STATUS "Halo MCC VR: Reach remains stock")
 endif()
 if(HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE)
-    set(HALOMCCVR_BUILD_REACH_RENDER "COMPILED-DISABLED")
+    set(HALOMCCVR_BUILD_REACH_RENDER "COLD-PREFLIGHT-HOOKS-OFF")
     message(STATUS
-        "Halo MCC VR: Reach render candidate compiled; runtime hooks remain disabled")
+        "Halo MCC VR: Reach cold preflight/resource proof compiled; runtime hooks remain disabled")
 else()
     set(HALOMCCVR_BUILD_REACH_RENDER "OFF")
 endif()
@@ -146,7 +147,9 @@ add_library(halo3xr SHARED
     src/dll/title_adapter.cpp
     src/dll/reach_adapter.cpp)
 if(HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE)
-    target_sources(halo3xr PRIVATE src/dll/reach_render_candidate.cpp)
+    target_sources(halo3xr PRIVATE
+        src/dll/reach_render_candidate.cpp
+        src/dll/reach_render_preflight.cpp)
 endif()
 target_compile_definitions(halo3xr PRIVATE
     UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN
@@ -161,6 +164,9 @@ target_compile_definitions(halo3xr PRIVATE
 target_link_libraries(halo3xr PRIVATE
     openxr_loader minhook imgui_lib
     d3d11 dxgi d3dcompiler)
+if(HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE)
+    target_link_libraries(halo3xr PRIVATE bcrypt)
+endif()
 
 add_executable(halo3xr_launcher WIN32 src/launcher/launcher.cpp)
 target_compile_definitions(halo3xr_launcher PRIVATE
@@ -197,7 +203,9 @@ if(BUILD_TESTING)
         src/dll/reach_adapter.cpp)
     if(HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE)
         target_sources(halomccvr_core_tests PRIVATE
-            src/dll/reach_render_candidate.cpp)
+            src/dll/reach_render_candidate.cpp
+            src/dll/reach_render_preflight.cpp)
+        target_link_libraries(halomccvr_core_tests PRIVATE bcrypt)
     endif()
     target_include_directories(halomccvr_core_tests PRIVATE src/common src/dll)
     target_compile_definitions(halomccvr_core_tests PRIVATE

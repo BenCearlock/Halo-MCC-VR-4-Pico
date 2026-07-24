@@ -110,7 +110,10 @@ static HRESULT STDMETHODCALLTYPE ResizeBuffersHook(IDXGISwapChain* sc, UINT buff
 {
     LOG("game resized its swapchain to %ux%u", width, height);
     VR_OnResizeBuffers(sc); // we must drop any references to the old backbuffer first
-    return g_origResizeBuffers(sc, bufferCount, width, height, format, flags);
+    const HRESULT result =
+        g_origResizeBuffers(sc, bufferCount, width, height, format, flags);
+    VR_AfterResizeBuffers(sc);
+    return result;
 }
 
 bool InstallD3D11Hooks()

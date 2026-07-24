@@ -53,11 +53,28 @@ cmake --build --preset release-reach-render-disabled
 ctest --preset release-reach-render-disabled
 ```
 
-This third preset keeps Halo 3, ODST, and Reach controller transport intact and
-adds only allocation-free Reach routing/ownership/rollback policy. Its build
-identity reports `ReachRender COMPILED-DISABLED`; `TitleHookPlan::None`, zero
-Reach runtime capabilities, and the hard runtime-hook gate remain unchanged.
-It performs no loaded-process scan, detour, camera mutation, or eye capture.
+This third preset keeps Halo 3, ODST, and Reach controller transport intact.
+It adds the allocation-free routing/ownership/rollback policy plus two cold,
+fail-open readiness checks. The 50 ms title worker verifies the exact loaded
+Reach PE/file identity, three unique executable signatures, both function-body
+hashes, six caller edges, and fixed ranges once per sole-title admission epoch.
+Present first rejects unrelated swapchains with one raw identity read. At most
+every 250 ms on the exact Reach swapchain, it publishes a fixed-storage snapshot
+and retains only interfaces obtained from the live Present receiver. Record-0
+RTV/SRV values remain raw structural identities and are never dereferenced by
+the worker. The worker validates retained buffer 0 after a single-threaded-device
+guard and transactionally creates two exact copy-compatible Reach-private eye
+caches. Its build identity reports
+`ReachRender COLD-PREFLIGHT-HOOKS-OFF`.
+
+`TitleHookPlan::None`, zero Reach runtime capabilities, and the hard runtime-
+hook gate remain unchanged. The candidate installs no Reach detour, writes no
+engine memory, changes no camera, issues no Reach `CopyResource`, and cannot
+select the stereo transaction. Signature scanning, file hashing, resource
+allocation, and candidate logging stay off Present and all engine render
+callbacks. Present performs only the bounded identity/field snapshot plus
+`GetBuffer(0)`, device/descriptor capture, and COM retention described above;
+eye allocation and proof publication remain on the worker.
 
 ## Verify local Reach evidence
 
@@ -158,7 +175,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File `
   .\tools\package-candidate.ps1 -ReachPrivate
 ```
 
-For the compiled-but-inert Reach render scaffold, use:
+For the hard-off Reach cold-proof/resource-readiness candidate, use:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File `
@@ -166,11 +183,13 @@ powershell -NoProfile -ExecutionPolicy Bypass -File `
 ```
 
 That mode additionally runs the offline Reach evidence preflight and records
-separate `reach_render_candidate_compiled`, `reach_render_candidate_enabled`,
-and `reach_runtime_hooks_enabled` fields. The latter two fields remain false.
+separate compiled, cold loaded-image-preflight, display-copy-readiness,
+`CopyResource`, engine-write, stereo-candidate, and runtime-hook fields. Only
+the two cold readiness fields are true; copy, engine writes, stereo selection,
+and Reach runtime hooks remain false.
 
 Each command rebuilds and tests its selected Release preset before staging it.
-The two Reach switches select controller-only or compiled-inert candidates;
+The two Reach switches select controller-only or cold-proof/hooks-off candidates;
 the default command retains the cumulative Reach-OFF regression gate.
 
 The command refuses a dirty worktree, reconfigures, rebuilds, reruns tests, and

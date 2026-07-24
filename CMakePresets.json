@@ -41,8 +41,8 @@
     },
     {
       "name": "release-reach-render-disabled",
-      "displayName": "Halo MCC VR disabled Reach render candidate",
-      "description": "x64 Halo 3 + ODST + Reach controller build with inert render scaffold and no Reach runtime hooks",
+      "displayName": "Halo MCC VR hard-off Reach render candidate",
+      "description": "x64 Halo 3 + ODST + Reach controller build with cold proof/readiness and no Reach runtime hooks",
       "generator": "Visual Studio 17 2022",
       "architecture": "x64",
       "binaryDir": "${sourceDir}/out/build/release-reach-render-disabled",

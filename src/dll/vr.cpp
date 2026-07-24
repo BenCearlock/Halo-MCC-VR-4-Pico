@@ -14,12 +14,19 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <limits>
 #include "vr.h"
 #include "menu.h"
 #include "game.h"
 #include "d3d11_hook.h"
 #include "d3d_state.h"
 #include "title_adapter.h"
+#ifndef HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE
+#define HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE 0
+#endif
+#if HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE
+#include "reach_render_candidate.h"
+#endif
 #include "../common/log.h"
 #include "../common/config.h"
 #include "../common/input_logic.h"
@@ -224,6 +231,23 @@ namespace
 #endif
     D3D11_TEXTURE2D_DESC g_gameBackbufferDesc{};
     bool g_gameBackbufferDescValid = false;
+#if HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE
+    ReachDirectCopyGate g_reachDirectCopyGate;
+    ReachModuleEpoch g_reachDisplayEpoch{};
+    uint64_t g_reachDisplayResourceRevision = 0;
+    uint64_t g_reachDisplayNextAttemptMs = 0;
+    uint64_t g_reachDisplayLastFailureLogMs = 0;
+    bool g_reachDisplayReadyLogged = false;
+    SRWLOCK g_reachDisplayResourceLock = SRWLOCK_INIT;
+    std::atomic<bool> g_reachPresentSoleEligible{false};
+    std::atomic<uint64_t> g_reachPresentAvailabilitySetEpochMs{0};
+    std::atomic<uint32_t> g_reachPresentGeneration{0};
+    std::atomic<uintptr_t> g_reachPresentModuleBase{0};
+    std::atomic<uint64_t> g_reachDisplayLifecycleSerial{1};
+    std::atomic<uint64_t> g_reachPresentNextSnapshotMs{0};
+    std::atomic<bool> g_reachResizeActive{false};
+    ID3D11Texture2D* g_reachEyeCache[2]{};
+#endif
     // Retained immediately after Present using the flip chain's current buffer
     // index. ODST can copy it after each death-camera eye draw without COM
     // discovery in the hot render path.
@@ -1160,6 +1184,1117 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
         LOG("M2: persistent eye frame caches created: %ux%u", desc.Width, desc.Height);
         return true;
     }
+
+#if HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE
+    template <typename T>
+    class ReachComRef
+    {
+    public:
+        ReachComRef() = default;
+        ~ReachComRef() { Reset(); }
+        ReachComRef(const ReachComRef&) = delete;
+        ReachComRef& operator=(const ReachComRef&) = delete;
+
+        T* Get() const noexcept { return m_value; }
+        T* Detach() noexcept
+        {
+            T* value = m_value;
+            m_value = nullptr;
+            return value;
+        }
+        T** Put() noexcept
+        {
+            Reset();
+            return &m_value;
+        }
+        void Reset() noexcept
+        {
+            if (m_value)
+            {
+                m_value->Release();
+                m_value = nullptr;
+            }
+        }
+
+    private:
+        T* m_value = nullptr;
+    };
+
+    enum class ReachDisplayFailure : uint8_t
+    {
+        None = 0,
+        StaticPreflight,
+        ModuleReference,
+        EngineFields,
+        SwapchainContract,
+        EyeAllocation,
+        DeviceContext,
+        Publication,
+    };
+
+    const char* ReachDisplayFailureName(ReachDisplayFailure failure)
+    {
+        switch (failure)
+        {
+        case ReachDisplayFailure::None: return "none";
+        case ReachDisplayFailure::StaticPreflight: return "static-preflight";
+        case ReachDisplayFailure::ModuleReference: return "module-reference";
+        case ReachDisplayFailure::EngineFields: return "engine-fields";
+        case ReachDisplayFailure::SwapchainContract: return "swapchain-contract";
+        case ReachDisplayFailure::EyeAllocation: return "eye-allocation";
+        case ReachDisplayFailure::DeviceContext: return "device-context";
+        case ReachDisplayFailure::Publication: return "resource-publication";
+        default: return "unknown";
+        }
+    }
+
+    class ReachModuleReference
+    {
+    public:
+        ~ReachModuleReference()
+        {
+            if (m_module)
+                FreeLibrary(m_module);
+        }
+
+        bool Acquire(uintptr_t moduleBase) noexcept
+        {
+            if (m_module || !moduleBase)
+                return false;
+            HMODULE module = nullptr;
+            if (!GetModuleHandleExW(
+                    GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
+                    reinterpret_cast<LPCWSTR>(moduleBase), &module) ||
+                reinterpret_cast<uintptr_t>(module) != moduleBase)
+            {
+                if (module)
+                    FreeLibrary(module);
+                return false;
+            }
+            m_module = module;
+            return true;
+        }
+
+    private:
+        HMODULE m_module = nullptr;
+    };
+
+    class ReachExclusiveResourceLock
+    {
+    public:
+        explicit ReachExclusiveResourceLock(SRWLOCK& lock) noexcept
+            : m_lock(&lock)
+        {
+            AcquireSRWLockExclusive(m_lock);
+        }
+        ~ReachExclusiveResourceLock()
+        {
+            ReleaseSRWLockExclusive(m_lock);
+        }
+        ReachExclusiveResourceLock(const ReachExclusiveResourceLock&) = delete;
+        ReachExclusiveResourceLock& operator=(
+            const ReachExclusiveResourceLock&) = delete;
+
+    private:
+        PSRWLOCK m_lock;
+    };
+
+    struct ReachDisplayAdmission
+    {
+        TitleRuntimeAvailabilitySnapshot availability{};
+        ReachModuleEpoch epoch{};
+        GameTitle activeTitle = GameTitle::None;
+        bool coherent = false;
+        bool resident = false;
+        bool sole = false;
+    };
+
+    bool SameReachAvailability(
+        const TitleRuntimeAvailabilitySnapshot& left,
+        const TitleRuntimeAvailabilitySnapshot& right) noexcept
+    {
+        return left.stable && right.stable &&
+            left.availabilityMask == right.availabilityMask &&
+            left.availabilitySetEpochMs == right.availabilitySetEpochMs &&
+            left.revision == right.revision &&
+            left.moduleBases == right.moduleBases;
+    }
+
+    bool ReadReachDisplayAdmission(
+        ReachDisplayAdmission& admission) noexcept
+    {
+        admission = {};
+        constexpr GameTitle title = GameTitle::HaloReach;
+        constexpr size_t slot = TitleRuntimeSlotIndex(title);
+        constexpr uint32_t bit = TitleRuntimeAvailabilityBit(title);
+        static_assert(slot < kTitleRuntimeSlotCount);
+        static_assert(bit != 0);
+
+        const TitleRuntimeAvailabilitySnapshot before =
+            TitleAdapter_GetAvailability();
+        const GameTitle activeBefore = TitleAdapter_GetActiveTitle();
+        const uint32_t generationBefore =
+            TitleAdapter_GetGeneration(title);
+        const TitleRuntimeAvailabilitySnapshot after =
+            TitleAdapter_GetAvailability();
+        const GameTitle activeAfter = TitleAdapter_GetActiveTitle();
+        const uint32_t generationAfter =
+            TitleAdapter_GetGeneration(title);
+        if (!SameReachAvailability(before, after) ||
+            activeBefore != activeAfter ||
+            generationBefore != generationAfter)
+        {
+            return false;
+        }
+
+        admission.availability = after;
+        admission.activeTitle = activeAfter;
+        admission.coherent = true;
+        admission.resident =
+            (after.availabilityMask & bit) != 0 &&
+            after.moduleBases[slot] != 0 && generationAfter != 0;
+        if (admission.resident)
+        {
+            admission.epoch = {
+                after.moduleBases[slot], generationAfter};
+        }
+        admission.sole = admission.resident &&
+            after.availabilityMask == bit &&
+            activeAfter == title;
+        return true;
+    }
+
+    bool ReachSameDisplayAdmission(
+        const ReachDisplayAdmission& left,
+        const ReachDisplayAdmission& right) noexcept
+    {
+        return left.coherent && right.coherent && left.resident && right.resident &&
+            left.sole && right.sole &&
+            left.activeTitle == right.activeTitle &&
+            left.availability.availabilityMask ==
+                right.availability.availabilityMask &&
+            left.availability.availabilitySetEpochMs ==
+                right.availability.availabilitySetEpochMs &&
+            ReachSameModuleEpoch(left.epoch, right.epoch);
+    }
+
+    void BumpReachDisplayLifecycleSerial() noexcept
+    {
+        uint64_t current = g_reachDisplayLifecycleSerial.load(
+            std::memory_order_relaxed);
+        while (current != std::numeric_limits<uint64_t>::max() &&
+               !g_reachDisplayLifecycleSerial.compare_exchange_weak(
+                   current, current + 1,
+                   std::memory_order_release,
+                   std::memory_order_relaxed))
+        {
+        }
+    }
+
+    void InvalidateReachPresentAdmission() noexcept
+    {
+        g_reachPresentSoleEligible.store(false, std::memory_order_release);
+        g_reachPresentAvailabilitySetEpochMs.store(0, std::memory_order_release);
+        g_reachPresentGeneration.store(0, std::memory_order_release);
+        g_reachPresentModuleBase.store(0, std::memory_order_release);
+        BumpReachDisplayLifecycleSerial();
+    }
+
+    void CaptureReachDisplaySnapshot(
+        IDXGISwapChain* presentSwapchain,
+        const ReachDisplayAdmission& admission) noexcept;
+
+    // Present contributes only a throttled safe-boundary snapshot with retained
+    // swapchain-owned interfaces and descriptors. Hashing, allocation,
+    // publication, and logging stay on WaitThread.
+    void ObserveReachPresentSwapchain(IDXGISwapChain* presentSwapchain) noexcept
+    {
+        ReachDisplayAdmission admission{};
+        const bool eligible =
+            ReadReachDisplayAdmission(admission) && admission.sole;
+        const uint64_t availabilitySetEpochMs = eligible
+            ? admission.availability.availabilitySetEpochMs : 0;
+        const uint32_t generation = eligible
+            ? admission.epoch.generation : 0;
+        const uintptr_t moduleBase = eligible
+            ? admission.epoch.moduleBase : 0;
+        const bool changed =
+            g_reachPresentSoleEligible.load(
+                std::memory_order_relaxed) != eligible ||
+            g_reachPresentAvailabilitySetEpochMs.load(
+                std::memory_order_relaxed) != availabilitySetEpochMs ||
+            g_reachPresentGeneration.load(
+                std::memory_order_relaxed) != generation ||
+            g_reachPresentModuleBase.load(
+                std::memory_order_relaxed) != moduleBase;
+        if (changed)
+        {
+            g_reachPresentSoleEligible.store(
+                eligible, std::memory_order_release);
+            g_reachPresentAvailabilitySetEpochMs.store(
+                availabilitySetEpochMs, std::memory_order_release);
+            g_reachPresentGeneration.store(
+                generation, std::memory_order_release);
+            g_reachPresentModuleBase.store(
+                moduleBase, std::memory_order_release);
+            BumpReachDisplayLifecycleSerial();
+        }
+        if (!eligible || !presentSwapchain)
+            return;
+        CaptureReachDisplaySnapshot(presentSwapchain, admission);
+    }
+
+    void ReleaseReachEyeCaches() noexcept
+    {
+        for (auto*& cache : g_reachEyeCache)
+        {
+            if (cache)
+                cache->Release();
+            cache = nullptr;
+        }
+    }
+
+    template <typename T>
+    bool ReadReachLocal(uintptr_t address, T& value) noexcept
+    {
+        if (!address || sizeof(T) >
+                std::numeric_limits<uintptr_t>::max() - address)
+            return false;
+        SIZE_T received = 0;
+        return ReadProcessMemory(
+                   GetCurrentProcess(),
+                   reinterpret_cast<const void*>(address),
+                   &value, sizeof(value), &received) &&
+            received == sizeof(value);
+    }
+
+    uintptr_t ReachComIdentity(IUnknown* value) noexcept
+    {
+        if (!value)
+            return 0;
+        IUnknown* identity = nullptr;
+        const HRESULT hr = value->QueryInterface(
+            __uuidof(IUnknown), reinterpret_cast<void**>(&identity));
+        const uintptr_t result = SUCCEEDED(hr) && identity
+            ? reinterpret_cast<uintptr_t>(identity)
+            : 0;
+        if (identity)
+            identity->Release();
+        return result;
+    }
+
+    uintptr_t ReachResourceDeviceIdentity(
+        ID3D11Resource* resource) noexcept
+    {
+        if (!resource)
+            return 0;
+        ReachComRef<ID3D11Device> device;
+        resource->GetDevice(device.Put());
+        return ReachComIdentity(device.Get());
+    }
+
+    ReachCopyShape ReachShape(
+        const D3D11_TEXTURE2D_DESC& desc) noexcept
+    {
+        return {
+            desc.Width,
+            desc.Height,
+            desc.MipLevels,
+            desc.ArraySize,
+            static_cast<uint32_t>(desc.Format),
+            desc.SampleDesc.Count,
+            desc.SampleDesc.Quality,
+        };
+    }
+
+    bool EnsureReachEyeCaches(
+        ID3D11Device* device,
+        const D3D11_TEXTURE2D_DESC& sourceDesc,
+        const ReachCopyShape& sourceShape) noexcept
+    {
+        const uintptr_t deviceIdentity = ReachComIdentity(device);
+        bool reusable = deviceIdentity != 0;
+        uintptr_t existingIdentities[2]{};
+        for (size_t eye = 0; eye < 2 && reusable; ++eye)
+        {
+            if (!g_reachEyeCache[eye])
+            {
+                reusable = false;
+                break;
+            }
+            D3D11_TEXTURE2D_DESC eyeDesc{};
+            g_reachEyeCache[eye]->GetDesc(&eyeDesc);
+            existingIdentities[eye] =
+                ReachComIdentity(g_reachEyeCache[eye]);
+            reusable = existingIdentities[eye] != 0 &&
+                ReachSameCopyShape(sourceShape, ReachShape(eyeDesc)) &&
+                ReachResourceDeviceIdentity(g_reachEyeCache[eye]) ==
+                    deviceIdentity;
+        }
+        if (reusable &&
+            existingIdentities[0] != existingIdentities[1])
+        {
+            return true;
+        }
+
+        D3D11_TEXTURE2D_DESC cacheDesc = sourceDesc;
+        cacheDesc.Usage = D3D11_USAGE_DEFAULT;
+        cacheDesc.BindFlags =
+            D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
+        cacheDesc.CPUAccessFlags = 0;
+        cacheDesc.MiscFlags = 0;
+        cacheDesc.MipLevels = 1;
+        cacheDesc.ArraySize = 1;
+        ReachComRef<ID3D11Texture2D> replacement[2];
+        if (FAILED(device->CreateTexture2D(
+                &cacheDesc, nullptr, replacement[0].Put())) ||
+            FAILED(device->CreateTexture2D(
+                &cacheDesc, nullptr, replacement[1].Put())))
+        {
+            return false;
+        }
+
+        const uintptr_t replacementIdentities[2] = {
+            ReachComIdentity(replacement[0].Get()),
+            ReachComIdentity(replacement[1].Get())};
+        D3D11_TEXTURE2D_DESC replacementDesc[2]{};
+        replacement[0].Get()->GetDesc(&replacementDesc[0]);
+        replacement[1].Get()->GetDesc(&replacementDesc[1]);
+        if (!replacementIdentities[0] || !replacementIdentities[1] ||
+            replacementIdentities[0] == replacementIdentities[1] ||
+            !ReachSameCopyShape(
+                sourceShape, ReachShape(replacementDesc[0])) ||
+            !ReachSameCopyShape(
+                sourceShape, ReachShape(replacementDesc[1])) ||
+            ReachResourceDeviceIdentity(replacement[0].Get()) !=
+                deviceIdentity ||
+            ReachResourceDeviceIdentity(replacement[1].Get()) !=
+                deviceIdentity)
+        {
+            return false;
+        }
+
+        // Commit only after both replacements pass every check. Reach never
+        // releases or mutates Halo 3/ODST's shared g_eyeCache resources.
+        ReleaseReachEyeCaches();
+        g_reachEyeCache[0] = replacement[0].Detach();
+        g_reachEyeCache[1] = replacement[1].Detach();
+        return true;
+    }
+
+    struct ReachDisplayFields
+    {
+        IDXGISwapChain* engineSwapchain = nullptr;
+        uint32_t specializationCount = 0;
+        uintptr_t surfaceArray = 0;
+        ID3D11RenderTargetView* record0Rtv = nullptr;
+        ID3D11ShaderResourceView* record0Srv = nullptr;
+        ID3D11RenderTargetView* selectedRtv = nullptr;
+        uint32_t selectedSpecialization = 0;
+    };
+
+    bool ReadReachDisplayFields(
+        const ReachModuleEpoch& epoch,
+        ReachDisplayFields& fields) noexcept
+    {
+        if (!ReachModuleEpochValid(epoch))
+            return false;
+        const uintptr_t group = epoch.moduleBase + kReachDisplayGroupRva;
+        if (!ReadReachLocal(
+                epoch.moduleBase + kReachDisplaySwapchainRva,
+                fields.engineSwapchain) ||
+            !ReadReachLocal(
+                group + kReachDisplaySurfaceCountOffset,
+                fields.specializationCount) ||
+            !ReadReachLocal(
+                group + kReachDisplaySurfaceArrayOffset,
+                fields.surfaceArray) ||
+            !fields.surfaceArray ||
+            fields.surfaceArray >
+                std::numeric_limits<uintptr_t>::max() -
+                    kReachDisplaySurfaceSrvOffset ||
+            !ReadReachLocal(
+                fields.surfaceArray + kReachDisplaySurfaceRtvOffset,
+                fields.record0Rtv) ||
+            !ReadReachLocal(
+                fields.surfaceArray + kReachDisplaySurfaceSrvOffset,
+                fields.record0Srv) ||
+            !ReadReachLocal(
+                epoch.moduleBase + kReachDisplaySelectedRtvRva,
+                fields.selectedRtv) ||
+            !ReadReachLocal(
+                epoch.moduleBase + kReachSelectedSpecializationRva,
+                fields.selectedSpecialization))
+        {
+            return false;
+        }
+        return fields.engineSwapchain && fields.record0Rtv &&
+            fields.record0Srv && fields.selectedRtv;
+    }
+
+    bool ReachPresentMatchesEngineSwapchain(
+        const ReachModuleEpoch& epoch,
+        IDXGISwapChain* presentSwapchain) noexcept
+    {
+        if (!ReachModuleEpochValid(epoch) || !presentSwapchain)
+            return false;
+        IDXGISwapChain* engineSwapchain = nullptr;
+        return ReadReachLocal(
+                   epoch.moduleBase + kReachDisplaySwapchainRva,
+                   engineSwapchain) &&
+            engineSwapchain == presentSwapchain;
+    }
+
+    enum class ReachDisplaySnapshotState : uint8_t
+    {
+        Free = 0,
+        Writing,
+        Ready,
+        Reading,
+    };
+
+    struct ReachDisplaySnapshot
+    {
+        std::atomic<uint8_t> state{
+            static_cast<uint8_t>(ReachDisplaySnapshotState::Free)};
+        ReachModuleEpoch epoch{};
+        uint64_t availabilitySetEpochMs = 0;
+        uint64_t lifecycleSerial = 0;
+        ReachDisplayFields fields{};
+        ID3D11Texture2D* buffer0 = nullptr;
+        ID3D11Device* device = nullptr;
+        D3D11_TEXTURE2D_DESC buffer0Desc{};
+        DXGI_SWAP_CHAIN_DESC swapchainDesc{};
+        uintptr_t buffer0Identity = 0;
+        uintptr_t deviceIdentity = 0;
+        uintptr_t immediateContextIdentity = 0;
+        uint32_t deviceCreationFlags = 0;
+    };
+
+    constexpr size_t kReachDisplaySnapshotCapacity = 3;
+    std::array<ReachDisplaySnapshot,
+               kReachDisplaySnapshotCapacity> g_reachDisplaySnapshots{};
+
+    bool ReachSameDisplayFields(
+        const ReachDisplayFields& left,
+        const ReachDisplayFields& right) noexcept
+    {
+        return left.engineSwapchain == right.engineSwapchain &&
+            left.specializationCount == right.specializationCount &&
+            left.surfaceArray == right.surfaceArray &&
+            left.record0Rtv == right.record0Rtv &&
+            left.record0Srv == right.record0Srv &&
+            left.selectedRtv == right.selectedRtv &&
+            left.selectedSpecialization == right.selectedSpecialization;
+    }
+
+    void ReleaseReachDisplaySnapshot(
+        ReachDisplaySnapshot& snapshot) noexcept
+    {
+        if (snapshot.device)
+            snapshot.device->Release();
+        if (snapshot.buffer0)
+            snapshot.buffer0->Release();
+        if (snapshot.fields.engineSwapchain)
+            snapshot.fields.engineSwapchain->Release();
+        snapshot.epoch = {};
+        snapshot.availabilitySetEpochMs = 0;
+        snapshot.lifecycleSerial = 0;
+        snapshot.fields = {};
+        snapshot.buffer0 = nullptr;
+        snapshot.device = nullptr;
+        snapshot.buffer0Desc = {};
+        snapshot.swapchainDesc = {};
+        snapshot.buffer0Identity = 0;
+        snapshot.deviceIdentity = 0;
+        snapshot.immediateContextIdentity = 0;
+        snapshot.deviceCreationFlags = 0;
+        snapshot.state.store(
+            static_cast<uint8_t>(ReachDisplaySnapshotState::Free),
+            std::memory_order_release);
+    }
+
+    class ReachDisplaySnapshotLease
+    {
+    public:
+        ~ReachDisplaySnapshotLease()
+        {
+            if (m_snapshot)
+                ReleaseReachDisplaySnapshot(*m_snapshot);
+        }
+
+        bool Acquire() noexcept
+        {
+            if (m_snapshot)
+                return false;
+            for (auto& snapshot : g_reachDisplaySnapshots)
+            {
+                uint8_t expected =
+                    static_cast<uint8_t>(ReachDisplaySnapshotState::Ready);
+                if (snapshot.state.compare_exchange_strong(
+                        expected,
+                        static_cast<uint8_t>(
+                            ReachDisplaySnapshotState::Reading),
+                        std::memory_order_acquire,
+                        std::memory_order_relaxed))
+                {
+                    m_snapshot = &snapshot;
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        const ReachDisplaySnapshot* Get() const noexcept
+        {
+            return m_snapshot;
+        }
+
+    private:
+        ReachDisplaySnapshot* m_snapshot = nullptr;
+    };
+
+    void DiscardReachDisplaySnapshots(bool waitForWriters) noexcept
+    {
+        for (auto& snapshot : g_reachDisplaySnapshots)
+        {
+            uint8_t state = snapshot.state.load(std::memory_order_acquire);
+            if (waitForWriters)
+            {
+                unsigned spins = 0;
+                while (state == static_cast<uint8_t>(
+                                    ReachDisplaySnapshotState::Writing))
+                {
+                    if (++spins < 1024)
+                        YieldProcessor();
+                    else
+                        SwitchToThread();
+                    state = snapshot.state.load(std::memory_order_acquire);
+                }
+            }
+            uint8_t expected =
+                static_cast<uint8_t>(ReachDisplaySnapshotState::Ready);
+            if (snapshot.state.compare_exchange_strong(
+                    expected,
+                    static_cast<uint8_t>(
+                        ReachDisplaySnapshotState::Reading),
+                    std::memory_order_acquire,
+                    std::memory_order_relaxed))
+            {
+                ReleaseReachDisplaySnapshot(snapshot);
+            }
+        }
+    }
+
+    void CaptureReachDisplaySnapshot(
+        IDXGISwapChain* presentSwapchain,
+        const ReachDisplayAdmission& admission) noexcept
+    {
+        if (!presentSwapchain || !admission.sole ||
+            g_reachResizeActive.load(std::memory_order_acquire))
+        {
+            return;
+        }
+
+        // An overlay/video Present must never consume the Reach snapshot
+        // throttle. This is a raw identity read only; the full stable-boundary
+        // snapshot and COM retention still happen after the exact match.
+        if (!ReachPresentMatchesEngineSwapchain(
+                admission.epoch, presentSwapchain))
+        {
+            return;
+        }
+
+        const uint64_t now = GetTickCount64();
+        uint64_t next = g_reachPresentNextSnapshotMs.load(
+            std::memory_order_relaxed);
+        if (now < next ||
+            !g_reachPresentNextSnapshotMs.compare_exchange_strong(
+                next, now + 250,
+                std::memory_order_relaxed,
+                std::memory_order_relaxed))
+        {
+            return;
+        }
+
+        ReachDisplaySnapshot* destination = nullptr;
+        for (auto& snapshot : g_reachDisplaySnapshots)
+        {
+            uint8_t expected =
+                static_cast<uint8_t>(ReachDisplaySnapshotState::Free);
+            if (snapshot.state.compare_exchange_strong(
+                    expected,
+                    static_cast<uint8_t>(
+                        ReachDisplaySnapshotState::Writing),
+                    std::memory_order_acquire,
+                    std::memory_order_relaxed))
+            {
+                destination = &snapshot;
+                break;
+            }
+        }
+        if (!destination)
+            return;
+        if (g_reachResizeActive.load(std::memory_order_acquire))
+        {
+            destination->state.store(
+                static_cast<uint8_t>(ReachDisplaySnapshotState::Free),
+                std::memory_order_release);
+            return;
+        }
+
+        const uint64_t lifecycleSerial =
+            g_reachDisplayLifecycleSerial.load(
+                std::memory_order_acquire);
+        ReachDisplayFields initial{};
+        const bool initialReady =
+            lifecycleSerial != 0 &&
+            lifecycleSerial != std::numeric_limits<uint64_t>::max() &&
+            ReadReachDisplayFields(admission.epoch, initial) &&
+            initial.engineSwapchain == presentSwapchain &&
+            initial.specializationCount == kReachDisplaySurfaceCount &&
+            initial.selectedSpecialization == 0 &&
+            initial.selectedRtv == initial.record0Rtv;
+        if (!initialReady)
+        {
+            destination->state.store(
+                static_cast<uint8_t>(ReachDisplaySnapshotState::Free),
+                std::memory_order_release);
+            return;
+        }
+
+        // Capture only interfaces whose lifetime is owned by this live Present
+        // receiver. Raw engine RTV/SRV values remain structural identities and
+        // are never dereferenced across whole-rasterizer recovery.
+        ReachComRef<ID3D11Texture2D> buffer0;
+        ReachComRef<ID3D11Device> device;
+        ReachComRef<ID3D11DeviceContext> immediateContext;
+        DXGI_SWAP_CHAIN_DESC swapchainDesc{};
+        D3D11_TEXTURE2D_DESC buffer0Desc{};
+        const bool d3dReady =
+            SUCCEEDED(presentSwapchain->GetBuffer(
+                0, __uuidof(ID3D11Texture2D),
+                reinterpret_cast<void**>(buffer0.Put()))) &&
+            buffer0.Get() &&
+            SUCCEEDED(presentSwapchain->GetDevice(
+                __uuidof(ID3D11Device),
+                reinterpret_cast<void**>(device.Put()))) &&
+            device.Get() &&
+            SUCCEEDED(presentSwapchain->GetDesc(&swapchainDesc));
+        if (!d3dReady)
+        {
+            destination->state.store(
+                static_cast<uint8_t>(ReachDisplaySnapshotState::Free),
+                std::memory_order_release);
+            return;
+        }
+        const uint32_t deviceCreationFlags = device.Get()->GetCreationFlags();
+        if (deviceCreationFlags & D3D11_CREATE_DEVICE_SINGLETHREADED)
+        {
+            destination->state.store(
+                static_cast<uint8_t>(ReachDisplaySnapshotState::Free),
+                std::memory_order_release);
+            return;
+        }
+        buffer0.Get()->GetDesc(&buffer0Desc);
+        device.Get()->GetImmediateContext(immediateContext.Put());
+        const uintptr_t buffer0Identity = ReachComIdentity(buffer0.Get());
+        const uintptr_t deviceIdentity = ReachComIdentity(device.Get());
+        const uintptr_t immediateContextIdentity =
+            ReachComIdentity(immediateContext.Get());
+        if (!buffer0Identity || !deviceIdentity ||
+            !immediateContextIdentity)
+        {
+            destination->state.store(
+                static_cast<uint8_t>(ReachDisplaySnapshotState::Free),
+                std::memory_order_release);
+            return;
+        }
+
+        ReachDisplayFields final{};
+        const bool finalReady =
+            !g_reachResizeActive.load(std::memory_order_acquire) &&
+            ReadReachDisplayFields(admission.epoch, final) &&
+            ReachSameDisplayFields(initial, final) &&
+            g_reachDisplayLifecycleSerial.load(
+                std::memory_order_acquire) == lifecycleSerial &&
+            g_reachPresentSoleEligible.load(
+                std::memory_order_acquire) &&
+            g_reachPresentAvailabilitySetEpochMs.load(
+                std::memory_order_acquire) ==
+                admission.availability.availabilitySetEpochMs &&
+            g_reachPresentGeneration.load(
+                std::memory_order_acquire) == admission.epoch.generation &&
+            g_reachPresentModuleBase.load(
+                std::memory_order_acquire) == admission.epoch.moduleBase;
+        if (!finalReady)
+        {
+            destination->state.store(
+                static_cast<uint8_t>(ReachDisplaySnapshotState::Free),
+                std::memory_order_release);
+            return;
+        }
+
+        destination->epoch = admission.epoch;
+        destination->availabilitySetEpochMs =
+            admission.availability.availabilitySetEpochMs;
+        destination->lifecycleSerial = lifecycleSerial;
+        destination->fields = initial;
+        presentSwapchain->AddRef();
+        destination->buffer0 = buffer0.Detach();
+        destination->device = device.Detach();
+        destination->buffer0Desc = buffer0Desc;
+        destination->swapchainDesc = swapchainDesc;
+        destination->buffer0Identity = buffer0Identity;
+        destination->deviceIdentity = deviceIdentity;
+        destination->immediateContextIdentity = immediateContextIdentity;
+        destination->deviceCreationFlags = deviceCreationFlags;
+        destination->state.store(
+            static_cast<uint8_t>(ReachDisplaySnapshotState::Ready),
+            std::memory_order_release);
+    }
+
+    ReachDisplayContinuity MakeReachDisplayContinuity(
+        const ReachModuleEpoch& epoch, uint64_t revision,
+        uintptr_t buffer0Identity,
+        const ReachDisplayFields& fields) noexcept
+    {
+        ReachDisplayContinuity continuity{};
+        continuity.epoch = epoch;
+        continuity.resourceRevision = revision;
+        continuity.swapchainIdentity =
+            reinterpret_cast<uintptr_t>(fields.engineSwapchain);
+        continuity.buffer0Identity = buffer0Identity;
+        continuity.surfaceArrayIdentity = fields.surfaceArray;
+        continuity.record0RtvIdentity =
+            reinterpret_cast<uintptr_t>(fields.record0Rtv);
+        continuity.record0SrvIdentity =
+            reinterpret_cast<uintptr_t>(fields.record0Srv);
+        continuity.selectedRtvIdentity =
+            reinterpret_cast<uintptr_t>(fields.selectedRtv);
+        continuity.specializationCount = fields.specializationCount;
+        continuity.selectedSpecialization =
+            fields.selectedSpecialization;
+        return continuity;
+    }
+
+    void ResetReachDisplayCandidateLocked(
+        bool teardown, bool releaseResources) noexcept
+    {
+        if (ReachModuleEpochValid(g_reachDisplayEpoch))
+        {
+            if (teardown)
+                g_reachDirectCopyGate.Teardown(g_reachDisplayEpoch);
+            else
+                g_reachDirectCopyGate.Invalidate(g_reachDisplayEpoch);
+        }
+        if (teardown)
+        {
+            g_reachDisplayEpoch = {};
+            g_reachDisplayResourceRevision = 0;
+        }
+        if (releaseResources)
+        {
+            ReleaseReachEyeCaches();
+            DiscardReachDisplaySnapshots(false);
+        }
+        g_reachDisplayNextAttemptMs = 0;
+        g_reachDisplayReadyLogged = false;
+    }
+
+    bool BuildReachDisplayProof(
+        const ReachDisplaySnapshot& snapshot,
+        const ReachModuleEpoch& epoch,
+        const ReachPreflightToken& preflight,
+        ReachDisplaySurfaceProof& proof,
+        ReachDisplayFailure& failure)
+    {
+        const ReachDisplayFields& initialFields = snapshot.fields;
+        const uint64_t lifecycleSerial = snapshot.lifecycleSerial;
+        failure = ReachDisplayFailure::EngineFields;
+        if (!initialFields.engineSwapchain || !snapshot.buffer0 ||
+            !snapshot.device || !snapshot.buffer0Identity ||
+            !snapshot.deviceIdentity ||
+            !snapshot.immediateContextIdentity ||
+            (snapshot.deviceCreationFlags &
+             D3D11_CREATE_DEVICE_SINGLETHREADED) != 0 ||
+            initialFields.specializationCount !=
+                kReachDisplaySurfaceCount ||
+            initialFields.selectedSpecialization != 0 ||
+            initialFields.selectedRtv != initialFields.record0Rtv)
+            return false;
+
+        const uintptr_t bufferIdentity = snapshot.buffer0Identity;
+        const DXGI_SWAP_CHAIN_DESC& swapchainDesc = snapshot.swapchainDesc;
+        const D3D11_TEXTURE2D_DESC& sourceDesc = snapshot.buffer0Desc;
+        const bool swapchainContract =
+            swapchainDesc.BufferCount == 1 &&
+            swapchainDesc.SwapEffect == DXGI_SWAP_EFFECT_DISCARD &&
+            swapchainDesc.BufferDesc.Format ==
+                DXGI_FORMAT_R8G8B8A8_UNORM &&
+            swapchainDesc.SampleDesc.Count == 1 &&
+            swapchainDesc.SampleDesc.Quality == 0 &&
+            (swapchainDesc.BufferUsage &
+             (DXGI_USAGE_SHADER_INPUT |
+              DXGI_USAGE_RENDER_TARGET_OUTPUT)) ==
+                (DXGI_USAGE_SHADER_INPUT |
+                 DXGI_USAGE_RENDER_TARGET_OUTPUT);
+        const ReachCopyShape sourceShape = ReachShape(sourceDesc);
+        const bool sourceContract =
+            ReachDisplayCopyShapeValid(sourceShape) &&
+            sourceDesc.Usage == D3D11_USAGE_DEFAULT &&
+            sourceDesc.CPUAccessFlags == 0 &&
+            (sourceDesc.BindFlags &
+             (D3D11_BIND_RENDER_TARGET |
+              D3D11_BIND_SHADER_RESOURCE)) ==
+                (D3D11_BIND_RENDER_TARGET |
+                 D3D11_BIND_SHADER_RESOURCE);
+        if (!swapchainContract || !sourceContract)
+        {
+            failure = ReachDisplayFailure::SwapchainContract;
+            return false;
+        }
+
+        if (!EnsureReachEyeCaches(
+                snapshot.device, sourceDesc, sourceShape) ||
+            !g_reachEyeCache[0] || !g_reachEyeCache[1])
+        {
+            failure = ReachDisplayFailure::EyeAllocation;
+            return false;
+        }
+
+        D3D11_TEXTURE2D_DESC eyeDesc[2]{};
+        g_reachEyeCache[0]->GetDesc(&eyeDesc[0]);
+        g_reachEyeCache[1]->GetDesc(&eyeDesc[1]);
+        const ReachCopyShape eyeShape[2] = {
+            ReachShape(eyeDesc[0]), ReachShape(eyeDesc[1])};
+        const uintptr_t eyeIdentity[2] = {
+            ReachComIdentity(g_reachEyeCache[0]),
+            ReachComIdentity(g_reachEyeCache[1])};
+        if (!eyeIdentity[0] || !eyeIdentity[1] ||
+            eyeIdentity[0] == eyeIdentity[1] ||
+            eyeIdentity[0] == bufferIdentity ||
+            eyeIdentity[1] == bufferIdentity ||
+            !ReachSameCopyShape(sourceShape, eyeShape[0]) ||
+            !ReachSameCopyShape(sourceShape, eyeShape[1]))
+        {
+            failure = ReachDisplayFailure::EyeAllocation;
+            return false;
+        }
+
+        const uintptr_t deviceIdentity = snapshot.deviceIdentity;
+        const uintptr_t contextIdentity =
+            snapshot.immediateContextIdentity;
+        const bool sameDevice = deviceIdentity && contextIdentity &&
+            ReachResourceDeviceIdentity(snapshot.buffer0) == deviceIdentity &&
+            ReachResourceDeviceIdentity(g_reachEyeCache[0]) == deviceIdentity &&
+            ReachResourceDeviceIdentity(g_reachEyeCache[1]) == deviceIdentity;
+        const bool immediate = contextIdentity != 0;
+        if (!sameDevice || !immediate)
+        {
+            failure = ReachDisplayFailure::DeviceContext;
+            return false;
+        }
+
+        ReachDisplayFields finalFields{};
+        if (!ReadReachDisplayFields(epoch, finalFields) ||
+            finalFields.engineSwapchain != initialFields.engineSwapchain ||
+            finalFields.specializationCount !=
+                initialFields.specializationCount ||
+            finalFields.surfaceArray != initialFields.surfaceArray ||
+            finalFields.record0Rtv != initialFields.record0Rtv ||
+            finalFields.record0Srv != initialFields.record0Srv ||
+            finalFields.selectedRtv != initialFields.selectedRtv ||
+            finalFields.selectedSpecialization !=
+                initialFields.selectedSpecialization)
+        {
+            failure = ReachDisplayFailure::EngineFields;
+            return false;
+        }
+        if (g_reachDisplayResourceRevision ==
+            std::numeric_limits<uint64_t>::max())
+        {
+            failure = ReachDisplayFailure::Publication;
+            return false;
+        }
+        ++g_reachDisplayResourceRevision;
+        proof = {};
+        proof.continuity = MakeReachDisplayContinuity(
+            epoch, g_reachDisplayResourceRevision,
+            bufferIdentity, finalFields);
+        proof.continuity.lifecycleSerial = lifecycleSerial;
+        proof.continuity.deviceIdentity = deviceIdentity;
+        proof.continuity.immediateContextIdentity = contextIdentity;
+        proof.continuity.eyeResourceIdentities[0] = eyeIdentity[0];
+        proof.continuity.eyeResourceIdentities[1] = eyeIdentity[1];
+        proof.preflight = preflight;
+        proof.immediateContextIdentity = contextIdentity;
+        proof.eyeResourceIdentities[0] = eyeIdentity[0];
+        proof.eyeResourceIdentities[1] = eyeIdentity[1];
+        proof.source = sourceShape;
+        proof.eyes[0] = eyeShape[0];
+        proof.eyes[1] = eyeShape[1];
+        proof.readyEyeMask = 0x3u;
+        proof.engineSwapchainMatchesPresent = true;
+        proof.selectedRtvMatchesRecord0 = true;
+        proof.swapchainContract = true;
+        proof.sameDevice = true;
+        proof.immediateContext = true;
+        failure = ReachDisplayFailure::None;
+        return ReachDisplaySurfaceProofComplete(proof);
+    }
+
+    void PollReachDisplayCandidate()
+    {
+        ReachExclusiveResourceLock lock(g_reachDisplayResourceLock);
+        ReachDisplayAdmission admission{};
+        if (!ReadReachDisplayAdmission(admission))
+        {
+            if (ReachModuleEpochValid(g_reachDisplayEpoch))
+                g_reachDirectCopyGate.Invalidate(g_reachDisplayEpoch);
+            g_reachDisplayReadyLogged = false;
+            return;
+        }
+
+        if (!admission.resident)
+        {
+            ResetReachDisplayCandidateLocked(true, true);
+            return;
+        }
+        if (!admission.sole)
+        {
+            if (ReachSameModuleEpoch(
+                    admission.epoch, g_reachDisplayEpoch))
+            {
+                // H3/Reach overlap is normal during MCC title transitions.
+                // Preserve the resident Reach epoch and its revision high-water
+                // so the same generation can safely re-arm after ambiguity.
+                ResetReachDisplayCandidateLocked(false, true);
+            }
+            else
+            {
+                ResetReachDisplayCandidateLocked(true, true);
+            }
+            return;
+        }
+
+        if (!ReachSameModuleEpoch(
+                admission.epoch, g_reachDisplayEpoch))
+        {
+            ResetReachDisplayCandidateLocked(true, true);
+            if (!g_reachDirectCopyGate.AdvanceEpoch(admission.epoch))
+                return;
+            g_reachDisplayEpoch = admission.epoch;
+        }
+
+        const uint64_t lifecycleSerial =
+            g_reachDisplayLifecycleSerial.load(
+                std::memory_order_acquire);
+        const bool presentAdmissionMatches =
+            lifecycleSerial != std::numeric_limits<uint64_t>::max() &&
+            g_reachPresentSoleEligible.load(
+                std::memory_order_acquire) &&
+            g_reachPresentAvailabilitySetEpochMs.load(
+                std::memory_order_acquire) ==
+                admission.availability.availabilitySetEpochMs &&
+            g_reachPresentGeneration.load(
+                std::memory_order_acquire) ==
+                admission.epoch.generation &&
+            g_reachPresentModuleBase.load(
+                std::memory_order_acquire) ==
+                admission.epoch.moduleBase;
+        const ReachPreflightToken preflight =
+            ReachRenderCandidate_GetPreflight(admission.epoch);
+        if (!presentAdmissionMatches || !preflight.Complete() ||
+            !ReachRenderCandidate_IsPreflightCurrent(preflight))
+        {
+            g_reachDirectCopyGate.Invalidate(admission.epoch);
+            g_reachDisplayReadyLogged = false;
+            return;
+        }
+
+        const uint64_t now = GetTickCount64();
+        if (now < g_reachDisplayNextAttemptMs)
+            return;
+        g_reachDisplayNextAttemptMs = now + 250;
+        // Every cold refresh revokes the old capability before touching any
+        // engine or COM object. A failed replacement can never leave the prior
+        // resource proof current.
+        g_reachDirectCopyGate.Invalidate(admission.epoch);
+
+        ReachModuleReference moduleReference;
+        ReachDisplayFailure failure = ReachDisplayFailure::ModuleReference;
+        if (!moduleReference.Acquire(admission.epoch.moduleBase))
+        {
+            g_reachDisplayReadyLogged = false;
+        }
+        else
+        {
+            ReachDisplaySnapshotLease snapshotLease;
+            const bool haveSnapshot = snapshotLease.Acquire();
+            const ReachDisplaySnapshot* snapshot = snapshotLease.Get();
+            const bool snapshotMatches = haveSnapshot && snapshot &&
+                ReachSameModuleEpoch(snapshot->epoch, admission.epoch) &&
+                snapshot->availabilitySetEpochMs ==
+                    admission.availability.availabilitySetEpochMs &&
+                snapshot->lifecycleSerial == lifecycleSerial;
+            failure = snapshotMatches
+                ? ReachDisplayFailure::SwapchainContract
+                : ReachDisplayFailure::EngineFields;
+
+            ReachDisplaySurfaceProof proof{};
+            const bool built = snapshotMatches &&
+                BuildReachDisplayProof(
+                    *snapshot, admission.epoch, preflight,
+                    proof, failure);
+            ReachDisplayAdmission finalAdmission{};
+            const bool admissionStillCurrent =
+                ReadReachDisplayAdmission(finalAdmission) &&
+                ReachSameDisplayAdmission(admission, finalAdmission) &&
+                g_reachDisplayLifecycleSerial.load(
+                    std::memory_order_acquire) == lifecycleSerial &&
+                g_reachPresentSoleEligible.load(
+                    std::memory_order_acquire) &&
+                g_reachPresentAvailabilitySetEpochMs.load(
+                    std::memory_order_acquire) ==
+                    admission.availability.availabilitySetEpochMs &&
+                g_reachPresentGeneration.load(
+                    std::memory_order_acquire) ==
+                    admission.epoch.generation &&
+                g_reachPresentModuleBase.load(
+                    std::memory_order_acquire) ==
+                    admission.epoch.moduleBase &&
+                ReachRenderCandidate_IsPreflightCurrent(preflight);
+            const bool published = built && admissionStillCurrent &&
+                g_reachDirectCopyGate.Publish(proof);
+            if (published)
+            {
+                if (!g_reachDisplayReadyLogged)
+                {
+                    g_reachDisplayReadyLogged = true;
+                    LOG("Reach display worker proof PASS: exact Present "
+                        "buffer0, specialization0 structural continuity, "
+                        "same device/context identity, and two private exact "
+                        "eye caches; no Reach copy or runtime hook is enabled");
+                }
+                return;
+            }
+            if (built && !admissionStillCurrent)
+                failure = ReachDisplayFailure::Publication;
+            else if (built)
+                failure = ReachDisplayFailure::Publication;
+            g_reachDisplayReadyLogged = false;
+        }
+
+        if (!g_reachDisplayLastFailureLogMs ||
+            now - g_reachDisplayLastFailureLogMs >= 2000)
+        {
+            g_reachDisplayLastFailureLogMs = now;
+            LOG("Reach display worker proof waiting (%s); stock Reach remains active",
+                ReachDisplayFailureName(failure));
+        }
+    }
+#endif
 
     void ValidateStereoImagesOnce()
     {
@@ -2985,9 +4120,24 @@ void VR_InitInstance()
         g_instanceFailed = true; // Fail() already showed a message
 }
 
+#if HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE
+void VR_ReachRenderCandidate_ColdPoll()
+{
+    PollReachDisplayCandidate();
+}
+#endif
+
 void VR_BeforePresent(IDXGISwapChain* sc)
 {
     g_gameSwapchain = sc;
+#if HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE
+    // This observation is intentionally before every OpenXR/session early
+    // return. It rejects unrelated Presents with one raw engine-swapchain
+    // identity read, then at most every 250 ms captures a fixed-storage retained
+    // buffer/device snapshot at the exact Reach Present boundary. It performs
+    // no file/signature scan, resource allocation, lock, or logging.
+    ObserveReachPresentSwapchain(sc);
+#endif
 #if HALOMCCVR_EXPERIMENTAL_ODST_BRINGUP
     // Presentation cleanup must not depend on a healthy/running OpenXR session.
     // The D3D Present hook still reaches this path when instance/session setup
@@ -3162,6 +4312,14 @@ void VR_NotifyCameraTransform()
 
 void VR_OnResizeBuffers(IDXGISwapChain*)
 {
+#if HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE
+    // Resize is rare and must exclude the worker while DXGI owns the buffer
+    // transition. VR_AfterResizeBuffers releases this lock after the real call.
+    AcquireSRWLockExclusive(&g_reachDisplayResourceLock);
+    g_reachResizeActive.store(true, std::memory_order_release);
+    InvalidateReachPresentAdmission();
+    DiscardReachDisplaySnapshots(true);
+#endif
     // The game is about to destroy its backbuffer; anything of ours that
     // references it must go first or the resize fails. The tracked history
     // targets are resolution-dependent too — drop and re-learn them.
@@ -3180,9 +4338,24 @@ void VR_OnResizeBuffers(IDXGISwapChain*)
 #endif
     g_gameBackbufferDesc = {};
     g_gameBackbufferDescValid = false;
+#if HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE
+    // Buffer 0 and the engine's record-0 views are invalid at this edge. A
+    // copied readiness token must fail immediately even if COM reuses every
+    // pointer value after ResizeBuffers.
+    ResetReachDisplayCandidateLocked(false, false);
+#endif
     if (ID3D11Texture2D* retained =
             g_nextGameBackbuffer.exchange(nullptr, std::memory_order_acq_rel))
         retained->Release();
+}
+
+void VR_AfterResizeBuffers(IDXGISwapChain*)
+{
+#if HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE
+    g_reachPresentNextSnapshotMs.store(0, std::memory_order_relaxed);
+    g_reachResizeActive.store(false, std::memory_order_release);
+    ReleaseSRWLockExclusive(&g_reachDisplayResourceLock);
+#endif
 }
 
 void VR_RequestRecenter()
@@ -3258,6 +4431,11 @@ void VR_DetachGamePresentation()
     g_scopeActive = false;
     g_scopeHasImage = false;
     g_scopeResetRequested = true;
+#if HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE
+    // The worker owns gate/resource mutation. Present only revokes the
+    // admission stamp so a proof racing this detach cannot publish.
+    InvalidateReachPresentAdmission();
+#endif
     ReleaseSourceViews();
     if (g_sceneColorRtv)
     {

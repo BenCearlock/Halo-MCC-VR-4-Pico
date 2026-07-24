@@ -18,6 +18,9 @@
 #include "reach_adapter.h"
 #include "reach_observer_logic.h"
 #include "reach_render_candidate.h"
+#if HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE
+#include "reach_render_preflight.h"
+#endif
 #include "reach_render_logic.h"
 #include "scope_logic.h"
 #include "title_registry.h"
@@ -52,6 +55,45 @@ namespace
         proof.exactOuterCallerEdges = true;
         proof.exactInnerCallerEdge = true;
         proof.fixedDataRanges = true;
+        return proof;
+    }
+
+    ReachDisplaySurfaceProof CompleteReachDisplaySurfaceProof(
+        const ReachModuleEpoch& epoch,
+        const ReachPreflightToken& preflight,
+        uint64_t resourceRevision = 1)
+    {
+        ReachDisplaySurfaceProof proof{};
+        proof.continuity.epoch = epoch;
+        proof.continuity.resourceRevision = resourceRevision;
+        proof.continuity.lifecycleSerial = 7;
+        proof.continuity.swapchainIdentity = 0x20000000;
+        proof.continuity.buffer0Identity = 0x20001000;
+        proof.continuity.surfaceArrayIdentity = 0x20002000;
+        proof.continuity.record0RtvIdentity = 0x20003000;
+        proof.continuity.record0SrvIdentity = 0x20004000;
+        proof.continuity.selectedRtvIdentity = 0x20003000;
+        proof.continuity.deviceIdentity = 0x20008000;
+        proof.continuity.immediateContextIdentity = 0x20005000;
+        proof.continuity.eyeResourceIdentities[0] = 0x20006000;
+        proof.continuity.eyeResourceIdentities[1] = 0x20007000;
+        proof.continuity.specializationCount =
+            kReachDisplaySurfaceCount;
+        proof.continuity.selectedSpecialization = 0;
+        proof.preflight = preflight;
+        proof.immediateContextIdentity = 0x20005000;
+        proof.eyeResourceIdentities[0] = 0x20006000;
+        proof.eyeResourceIdentities[1] = 0x20007000;
+        proof.source = {1920, 1080, 1, 1,
+                        kReachDisplayFormatR8G8B8A8Unorm, 1, 0};
+        proof.eyes[0] = proof.source;
+        proof.eyes[1] = proof.source;
+        proof.readyEyeMask = 0x3u;
+        proof.engineSwapchainMatchesPresent = true;
+        proof.selectedRtvMatchesRecord0 = true;
+        proof.swapchainContract = true;
+        proof.sameDevice = true;
+        proof.immediateContext = true;
         return proof;
     }
 
@@ -287,15 +329,275 @@ int main()
             "Reach render proof fails closed when any identity gate is absent");
 
         const ReachModuleEpoch proofEpoch{0x10000000u, 1};
+        ReachPreflightPublication preflightPublication;
+        Check(preflightPublication.Publish(proofEpoch, proof),
+            "Reach preflight publication accepts one complete exact proof");
         const ReachPreflightToken preflight =
-            ReachPreflightToken::Create(proofEpoch, proof);
+            preflightPublication.Get(proofEpoch);
         auto incompleteProof = proof;
         incompleteProof.frustumHelperMatchCount = 0;
+        ReachPreflightPublication incompletePublication;
         Check(preflight.Complete() &&
+              IsPreflightCurrent(preflight) &&
               ReachSameModuleEpoch(preflight.Epoch(), proofEpoch) &&
-              !ReachPreflightToken::Create(
-                  proofEpoch, incompleteProof).Complete(),
-            "Reach preflight authorization is epoch-bound and requires the full proof");
+              !incompletePublication.Publish(
+                  proofEpoch, incompleteProof) &&
+              !incompletePublication.Get(proofEpoch).Complete(),
+            "Reach preflight authorization is publication-bound and requires the full proof");
+        ReachPreflightPublication replacementPublication;
+        Check(replacementPublication.Publish(proofEpoch, proof),
+            "Reach preflight replacement test begins with one current proof");
+        const ReachPreflightToken replacedPreflight =
+            replacementPublication.Get(proofEpoch);
+        Check(replacedPreflight.Complete() &&
+              replacementPublication.IsCurrent(replacedPreflight) &&
+              !replacementPublication.Publish(proofEpoch, incompleteProof) &&
+              !replacementPublication.HasCurrent() &&
+              !replacementPublication.IsCurrent(replacedPreflight),
+            "A failed preflight replacement revokes prior readiness and copied tokens");
+
+        ReachDisplaySurfaceProof displayProof =
+            CompleteReachDisplaySurfaceProof(proofEpoch, preflight);
+        Check(ReachDisplaySurfaceProofComplete(displayProof),
+            "Reach display proof accepts exact buffer0 shape and record0 structural continuity");
+        const auto displayRejects = [&displayProof](auto mutate)
+        {
+            auto candidate = displayProof;
+            mutate(candidate);
+            return !ReachDisplaySurfaceProofComplete(candidate);
+        };
+        Check(displayRejects([](auto& p) { p.preflight = {}; }) &&
+              displayRejects([](auto& p) {
+                  ++p.continuity.epoch.generation;
+              }) &&
+              displayRejects([](auto& p) {
+                  p.continuity.resourceRevision = 0;
+              }) &&
+              displayRejects([](auto& p) {
+                  p.continuity.lifecycleSerial = 0;
+              }) &&
+              displayRejects([](auto& p) {
+                  p.continuity.lifecycleSerial =
+                      std::numeric_limits<uint64_t>::max();
+              }) &&
+              displayRejects([](auto& p) {
+                  p.continuity.swapchainIdentity = 0;
+              }) &&
+              displayRejects([](auto& p) {
+                  p.continuity.buffer0Identity = 0;
+              }) &&
+              displayRejects([](auto& p) {
+                  p.continuity.surfaceArrayIdentity = 0;
+              }) &&
+              displayRejects([](auto& p) {
+                  p.continuity.record0RtvIdentity = 0;
+              }) &&
+              displayRejects([](auto& p) {
+                  p.continuity.record0SrvIdentity = 0;
+              }) &&
+              displayRejects([](auto& p) {
+                  ++p.continuity.selectedRtvIdentity;
+              }) &&
+              displayRejects([](auto& p) {
+                  p.continuity.deviceIdentity = 0;
+              }) &&
+              displayRejects([](auto& p) {
+                  ++p.continuity.immediateContextIdentity;
+              }) &&
+              displayRejects([](auto& p) {
+                  ++p.continuity.eyeResourceIdentities[0];
+              }) &&
+              displayRejects([](auto& p) {
+                  ++p.continuity.eyeResourceIdentities[1];
+              }) &&
+              displayRejects([](auto& p) {
+                  p.continuity.specializationCount = 3;
+              }) &&
+              displayRejects([](auto& p) {
+                  p.continuity.selectedSpecialization = 1;
+              }) &&
+              displayRejects([](auto& p) {
+                  p.continuity.teardownRequested = true;
+              }) &&
+              displayRejects([](auto& p) {
+                  p.eyeResourceIdentities[1] =
+                      p.eyeResourceIdentities[0];
+              }) &&
+              displayRejects([](auto& p) {
+                  p.eyeResourceIdentities[0] =
+                      p.continuity.buffer0Identity;
+              }) &&
+              displayRejects([](auto& p) {
+                  p.immediateContextIdentity = 0;
+              }) &&
+              displayRejects([](auto& p) { p.source.width = 0; }) &&
+              displayRejects([](auto& p) {
+                  p.source.format = 0;
+              }) &&
+              displayRejects([](auto& p) { ++p.eyes[0].width; }) &&
+              displayRejects([](auto& p) { ++p.eyes[1].sampleCount; }) &&
+              displayRejects([](auto& p) { p.readyEyeMask = 1; }) &&
+              displayRejects([](auto& p) {
+                  p.engineSwapchainMatchesPresent = false;
+              }) &&
+              displayRejects([](auto& p) {
+                  p.selectedRtvMatchesRecord0 = false;
+              }) &&
+              displayRejects([](auto& p) {
+                  p.swapchainContract = false;
+              }) &&
+              displayRejects([](auto& p) { p.sameDevice = false; }) &&
+              displayRejects([](auto& p) {
+                  p.immediateContext = false;
+              }),
+            "Reach display proof rejects stale identity, aliasing, partial eyes, and every copy-shape/context mismatch");
+
+        ReachDirectCopyGate displayGate;
+        const ReachPreparedFrameToken displayFrame =
+            ReachPreparedFrameToken::Create(proofEpoch, 11, true);
+        Check(displayGate.AdvanceEpoch(proofEpoch) &&
+              displayGate.Publish(displayProof),
+            "Reach direct-copy gate admits one monotonic cold resource proof");
+        const ReachDirectCopyToken firstCopy = displayGate.Prepare(
+            displayFrame, displayProof.continuity);
+        Check(firstCopy.Ready() && displayGate.IsCurrent(
+                  firstCopy, displayProof.continuity),
+            "A current display proof mints one live direct-copy token");
+        const auto liveContinuityRejects =
+            [&displayGate, &firstCopy, &displayFrame, &displayProof](
+                auto mutate)
+        {
+            auto live = displayProof.continuity;
+            mutate(live);
+            return !displayGate.IsCurrent(firstCopy, live) &&
+                !displayGate.Prepare(displayFrame, live).Ready();
+        };
+        Check(liveContinuityRejects([](auto& c) {
+                  c.epoch.moduleBase += 0x10000;
+              }) &&
+              liveContinuityRejects([](auto& c) {
+                  ++c.epoch.generation;
+              }) &&
+              liveContinuityRejects([](auto& c) {
+                  ++c.resourceRevision;
+              }) &&
+              liveContinuityRejects([](auto& c) {
+                  ++c.lifecycleSerial;
+              }) &&
+              liveContinuityRejects([](auto& c) {
+                  ++c.swapchainIdentity;
+              }) &&
+              liveContinuityRejects([](auto& c) {
+                  ++c.buffer0Identity;
+              }) &&
+              liveContinuityRejects([](auto& c) {
+                  ++c.surfaceArrayIdentity;
+              }) &&
+              liveContinuityRejects([](auto& c) {
+                  ++c.record0RtvIdentity;
+              }) &&
+              liveContinuityRejects([](auto& c) {
+                  ++c.record0SrvIdentity;
+              }) &&
+              liveContinuityRejects([](auto& c) {
+                  ++c.selectedRtvIdentity;
+              }) &&
+              liveContinuityRejects([](auto& c) {
+                  ++c.deviceIdentity;
+              }) &&
+              liveContinuityRejects([](auto& c) {
+                  ++c.immediateContextIdentity;
+              }) &&
+              liveContinuityRejects([](auto& c) {
+                  ++c.eyeResourceIdentities[0];
+              }) &&
+              liveContinuityRejects([](auto& c) {
+                  ++c.eyeResourceIdentities[1];
+              }) &&
+              liveContinuityRejects([](auto& c) {
+                  ++c.specializationCount;
+              }) &&
+              liveContinuityRejects([](auto& c) {
+                  ++c.selectedSpecialization;
+              }) &&
+              liveContinuityRejects([](auto& c) {
+                  c.teardownRequested = true;
+              }),
+            "Every live Reach display-continuity field invalidates copied and newly prepared tokens when it drifts");
+        ReachDisplaySurfaceProof invalidReplacement =
+            CompleteReachDisplaySurfaceProof(
+                proofEpoch, preflight, 2);
+        invalidReplacement.sameDevice = false;
+        Check(!displayGate.Publish(invalidReplacement) &&
+              !displayGate.Ready() &&
+              !displayGate.IsCurrent(
+                  firstCopy, displayProof.continuity),
+            "A failed display replacement revokes prior readiness and copied tokens");
+        auto changedContinuity = displayProof.continuity;
+        ++changedContinuity.record0RtvIdentity;
+        Check(!displayGate.IsCurrent(firstCopy, changedContinuity) &&
+              displayGate.Invalidate(proofEpoch) &&
+              !displayGate.IsCurrent(
+                  firstCopy, displayProof.continuity) &&
+              !displayGate.Publish(displayProof),
+            "Resize or live view drift invalidates copied tokens and forbids resource-revision replay");
+        ReachDisplaySurfaceProof nextDisplayProof =
+            CompleteReachDisplaySurfaceProof(
+                proofEpoch, preflight, 2);
+        const ReachPreparedFrameToken nextDisplayFrame =
+            ReachPreparedFrameToken::Create(proofEpoch, 12, true);
+        Check(displayGate.Publish(nextDisplayProof),
+            "A higher same-epoch resource revision may re-arm after ResizeBuffers or resident title ambiguity");
+        const ReachDirectCopyToken nextCopy = displayGate.Prepare(
+            nextDisplayFrame, nextDisplayProof.continuity);
+        Check(nextCopy.Ready() &&
+              nextCopy.PreparedFrameSerial() == 12 &&
+              nextCopy.ResourceRevision() == 2 &&
+              !displayGate.IsCurrent(
+                  firstCopy, nextDisplayProof.continuity),
+            "A new resource publication invalidates its predecessor");
+
+        ReachPreflightPublication differentPublication;
+        Check(differentPublication.Publish(proofEpoch, proof) &&
+              !differentPublication.IsCurrent(preflight),
+            "A Reach preflight token cannot cross publication owners");
+        const uint64_t firstPublicationNonce =
+            preflight.PublicationNonce();
+        Check(preflightPublication.Publish(proofEpoch, proof),
+            "The same module epoch may receive a newer cold-proof publication");
+        const ReachPreflightToken reissuedPreflight =
+            preflightPublication.Get(proofEpoch);
+        Check(reissuedPreflight.Complete() &&
+              IsPreflightCurrent(reissuedPreflight) &&
+              reissuedPreflight.PublicationNonce() >
+                  firstPublicationNonce &&
+              preflight.Complete() &&
+              !IsPreflightCurrent(preflight) &&
+              !ReachDisplaySurfaceProofComplete(nextDisplayProof) &&
+              !displayGate.Ready() &&
+              !displayGate.IsCurrent(
+                  nextCopy, nextDisplayProof.continuity) &&
+              !displayGate.Publish(nextDisplayProof),
+            "A newer preflight nonce rejects copied-token replay and stale display publication");
+        ReachDisplaySurfaceProof reissuedDisplayProof =
+            CompleteReachDisplaySurfaceProof(
+                proofEpoch, reissuedPreflight, 3);
+        const ReachPreparedFrameToken reissuedDisplayFrame =
+            ReachPreparedFrameToken::Create(proofEpoch, 13, true);
+        Check(displayGate.Publish(reissuedDisplayProof),
+            "A current preflight nonce can publish a newer display revision");
+        const ReachDirectCopyToken reissuedCopy = displayGate.Prepare(
+            reissuedDisplayFrame, reissuedDisplayProof.continuity);
+        Check(reissuedCopy.Ready() &&
+              displayGate.IsCurrent(
+                  reissuedCopy, reissuedDisplayProof.continuity) &&
+              displayGate.Teardown(proofEpoch) &&
+              !displayGate.IsCurrent(
+                  reissuedCopy, reissuedDisplayProof.continuity) &&
+              !displayGate.AdvanceEpoch(proofEpoch) &&
+              displayGate.AdvanceEpoch({proofEpoch.moduleBase, 2}) &&
+              displayGate.Teardown({proofEpoch.moduleBase, 2}),
+            "Reach direct-copy teardown rejects old resource and module-generation replay");
 
         ReachRenderFreshnessGate freshness;
         const ReachModuleEpoch freshnessEpoch{0x10000000u, 7};
@@ -357,8 +659,12 @@ int main()
         outer.cameraStackDepthBefore = 0;
         outer.nowMs = 1101;
         const ReachModuleEpoch epoch{moduleBase, 9};
-        outer.preflight = ReachPreflightToken::Create(
-            epoch, CompleteReachRenderCandidateProof());
+        const ReachRenderCandidateProof outerProof =
+            CompleteReachRenderCandidateProof();
+        ReachPreflightPublication outerPreflightPublication;
+        Check(outerPreflightPublication.Publish(epoch, outerProof),
+            "Reach outer preflight publishes for the selected module epoch");
+        outer.preflight = outerPreflightPublication.Get(epoch);
         ReachRenderFreshnessGate ownerFreshness;
         Check(ownerFreshness.AdvanceEpoch(epoch) &&
               !ownerFreshness.Observe(
@@ -374,6 +680,13 @@ int main()
             1101, epoch, 42, true, true);
         outer.preparedFrame = ReachPreparedFrameToken::Create(
             epoch, 42, true);
+        const ReachModuleEpoch wrongPreflightEpoch{moduleBase, 10};
+        ReachPreflightPublication wrongPreflightPublication;
+        Check(wrongPreflightPublication.Publish(
+                  wrongPreflightEpoch, outerProof),
+            "Reach mismatch test publishes a distinct module generation");
+        const ReachPreflightToken wrongPreflight =
+            wrongPreflightPublication.Get(wrongPreflightEpoch);
 
         Check(ClassifyReachOuterRenderCaller(
                   moduleBase, kReachRetailImageSize,
@@ -402,11 +715,8 @@ int main()
               outerRejects([](auto& v) { v.preflight = {}; }) &&
               outerRejects([](auto& v) { v.freshCamera = {}; }) &&
               outerRejects([](auto& v) { v.preparedFrame = {}; }) &&
-              outerRejects([](auto& v) {
-                  auto wrongEpoch = v.preflight.Epoch();
-                  ++wrongEpoch.generation;
-                  v.preflight = ReachPreflightToken::Create(
-                      wrongEpoch, CompleteReachRenderCandidateProof());
+              outerRejects([&wrongPreflight](auto& v) {
+                  v.preflight = wrongPreflight;
               }) &&
               outerRejects([](auto& v) {
                   v.preparedFrame = ReachPreparedFrameToken::Create(
@@ -454,16 +764,27 @@ int main()
         inner.primaryCameraValid = true;
         inner.secondaryCameraValid = true;
         inner.preparedFrame = outer.preparedFrame;
-        inner.directCopy = ReachDirectCopyToken::Create(epoch, 42, true);
+        ReachDirectCopyGate directCopyGate;
+        ReachDisplaySurfaceProof innerDisplayProof =
+            CompleteReachDisplaySurfaceProof(
+                epoch, outer.preflight);
+        Check(directCopyGate.AdvanceEpoch(epoch) &&
+              directCopyGate.Publish(innerDisplayProof),
+            "Reach inner admission begins with a live cold display-resource owner");
+        inner.displayContinuity = innerDisplayProof.continuity;
+        inner.directCopy = directCopyGate.Prepare(
+            inner.preparedFrame, inner.displayContinuity);
 
-        const auto innerRejects = [&owner, &inner](auto mutate)
+        const auto innerRejects =
+            [&owner, &inner, &directCopyGate](auto mutate)
         {
             auto candidate = inner;
             mutate(candidate);
             return !ReachInnerScopeMatches(
-                owner, owner.Token(), candidate);
+                owner, owner.Token(), directCopyGate, candidate);
         };
-        Check(ReachInnerScopeMatches(owner, owner.Token(), inner) &&
+        Check(ReachInnerScopeMatches(
+                  owner, owner.Token(), directCopyGate, inner) &&
               innerRejects([](auto& v) { ++v.returnAddress; }) &&
               innerRejects([](auto& v) { v.preparedFrame = {}; }) &&
               innerRejects([](auto& v) {
@@ -471,9 +792,14 @@ int main()
                       v.directCopy.Epoch(), 43, true);
               }) &&
               innerRejects([](auto& v) { v.directCopy = {}; }) &&
+              innerRejects([&directCopyGate](auto& v) {
+                  v.directCopy = directCopyGate.Prepare(
+                      ReachPreparedFrameToken::Create(
+                          v.preparedFrame.Epoch(), 43, true),
+                      v.displayContinuity);
+              }) &&
               innerRejects([](auto& v) {
-                  v.directCopy = ReachDirectCopyToken::Create(
-                      v.preparedFrame.Epoch(), 43, true);
+                  ++v.displayContinuity.surfaceArrayIdentity;
               }) &&
               innerRejects([](auto& v) { ++v.playerView; }) &&
               innerRejects([](auto& v) { ++v.activeView; }) &&
@@ -491,27 +817,44 @@ int main()
         auto wrongInner = inner;
         ++wrongInner.returnAddress;
         Check(SelectReachRenderAction(
-                  false, outer.preflight, owner, ownerToken, inner) ==
+                  false, outer.preflight, owner, ownerToken,
+                  directCopyGate, inner) ==
                   ReachRenderAction::StockOnce &&
               SelectReachRenderAction(
-                  true, incompletePreflight, owner, ownerToken, inner) ==
+                  true, incompletePreflight, owner, ownerToken,
+                  directCopyGate, inner) ==
                   ReachRenderAction::StockOnce &&
               SelectReachRenderAction(
-                  true, outer.preflight, owner, ownerToken, wrongInner) ==
+                  true, outer.preflight, owner, ownerToken,
+                  directCopyGate, wrongInner) ==
                   ReachRenderAction::StockOnce &&
               SelectReachRenderAction(
-                  true, outer.preflight, owner, ownerToken, inner) ==
+                  true, outer.preflight, owner, ownerToken,
+                  directCopyGate, inner) ==
                   ReachRenderAction::StereoTransaction,
             "Reach action selection consumes bound proof, owner, and inner-scope inputs");
         Check(SelectReachRenderAction(
                   ReachAdapter_RuntimeHooksPermitted(), outer.preflight,
-                  owner, ownerToken, inner) == ReachRenderAction::StockOnce,
+                  owner, ownerToken, directCopyGate, inner) ==
+                  ReachRenderAction::StockOnce,
             "The adapter hard gate keeps an otherwise complete Reach scope stock-once");
 #if HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE
+        ReachLoadedImagePreflight invalidLoadedImage{};
+        ReachLoadedImageModulePin invalidModulePin;
+        ReachRenderCandidate_ColdPoll(0, 0, 0, false);
         Check(ReachRenderCandidate_Compiled() &&
               !ReachRenderCandidate_RuntimeHooksEnabled() &&
+              !ReachRender_RunLoadedImagePreflight(
+                  0, kReachRetailImageSize,
+                  invalidLoadedImage, invalidModulePin) &&
+              !invalidModulePin.Valid() &&
+              invalidLoadedImage.failure ==
+                  ReachLoadedImageFailure::InvalidInput &&
+              !ReachRenderCandidate_GetPreflight(epoch).Complete() &&
+              !ReachRenderCandidate_IsPreflightCurrent({}) &&
               ReachRenderCandidate_SelectAction(
-                  outer.preflight, owner, ownerToken, inner) ==
+                  outer.preflight, owner, ownerToken,
+                  directCopyGate, inner) ==
                   ReachRenderAction::StockOnce,
             "The compiled DLL-facing Reach wrapper remains hard-disabled");
 #endif
@@ -533,7 +876,8 @@ int main()
               !owner.Token().Active() &&
               owner.LastCompletedSerial() == 42 &&
               SelectReachRenderAction(
-                  true, outer.preflight, owner, ownerToken, inner) ==
+                  true, outer.preflight, owner, ownerToken,
+                  directCopyGate, inner) ==
                   ReachRenderAction::StockOnce,
             "Owner completion requires clean rollback and invalidates every copied owner token");
 
@@ -563,8 +907,9 @@ int main()
               !owner.AdvanceEpoch({moduleBase, 8}),
             "Teardown retains the generation high-water mark against stale replay");
         const ReachModuleEpoch nextEpoch{moduleBase, 10};
-        outer.preflight = ReachPreflightToken::Create(
-            nextEpoch, CompleteReachRenderCandidateProof());
+        Check(outerPreflightPublication.Publish(nextEpoch, outerProof),
+            "A newer module generation receives a newer preflight publication");
+        outer.preflight = outerPreflightPublication.Get(nextEpoch);
         Check(owner.AdvanceEpoch(nextEpoch) &&
               ownerFreshness.AdvanceEpoch(nextEpoch) &&
               !ownerFreshness.Observe(
@@ -1819,13 +2164,13 @@ int main()
         "The normal Release preset keeps the Reach adapter disabled");
 #endif
     Check(!ReachAdapter_RuntimeHooksPermitted(),
-        "Neither controller admission nor the inert render scaffold can install Reach runtime hooks");
+        "Neither controller admission nor the hard-off render foundation can install Reach runtime hooks");
 #if HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE
     Check(HALOMCCVR_EXPERIMENTAL_REACH_BRINGUP == 1,
-        "The disabled Reach render scaffold compiles only with controller admission retained");
+        "The hard-off Reach render foundation compiles only with controller admission retained");
 #else
     Check(true,
-        "The normal and controller-only presets omit the Reach render scaffold");
+        "The normal and controller-only presets omit the Reach render foundation");
 #endif
     const ReachEvidenceIdentity& reachIdentity =
         ReachAdapter_GetEvidenceIdentity();

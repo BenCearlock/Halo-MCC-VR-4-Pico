@@ -213,7 +213,10 @@
         "same_swapchain_used_by_stock_present": true,
         "halo3_scene_color_identity_rule_reusable": false,
         "first_capture_route": "COLD_VALIDATE_BUFFER0_THEN_COPYRESOURCE_AFTER_EACH_PLAYER_VIEW_RENDER",
-        "direct_rtv_redirect_first_candidate": false
+        "direct_rtv_redirect_first_candidate": false,
+        "production_cold_validator_compiled": true,
+        "production_cold_validator_runtime_result": "UNTESTED",
+        "production_copyresource_reachable": false
       }
     },
     "hrek_homolog": {
@@ -263,13 +266,19 @@
       "wait_for_gpu_final_eye_policy_runtime_validated": false
     },
     "disabled_render_candidate": {
-      "status": "COMPILED_INERT_POLICY_SLICE",
+      "status": "COLD_PREFLIGHT_AND_RESOURCE_READINESS_COMPILED_HOOKS_OFF",
       "build_option": "HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE",
       "build_option_requires_controller_bringup": true,
       "implementation": [
         "src/common/reach_render_logic.h",
         "src/dll/reach_render_candidate.h",
-        "src/dll/reach_render_candidate.cpp"
+        "src/dll/reach_render_candidate.cpp",
+        "src/dll/reach_render_preflight.h",
+        "src/dll/reach_render_preflight.cpp",
+        "src/dll/game.cpp",
+        "src/dll/d3d11_hook.cpp",
+        "src/dll/vr.h",
+        "src/dll/vr.cpp"
       ],
       "implemented_pure_gates": [
         "canonical_main_inner_and_frustum_signature_bytes",
@@ -277,6 +286,10 @@
         "exact_normal_screenshot_unknown_outer_return_classification",
         "slot0_workspace_player_view_and_pre_push_depth_validation",
         "opaque_epoch_bound_preflight_freshness_prepared_frame_and_direct_copy_tokens",
+        "worker_only_exact_backing_file_loaded_pe_three_signature_two_body_hash_six_edge_and_fixed_range_preflight",
+        "cold_present_buffer0_specialization0_record0_structural_device_context_and_exact_copy_shape_validation",
+        "monotonic_display_resource_revision_nonce_and_live_continuity_gate",
+        "resize_view_drift_title_exit_and_module_generation_invalidation",
         "freshness_exact_serial_nonce_time_live_state_and_one_time_owner_consumption",
         "monotonic_generation_non_reentrant_single_serial_outer_token_live_selection_and_keyed_cleanup",
         "exact_inner_return_active_view_depth_top_callback_render_owner_and_specialization_validation",
@@ -286,26 +299,30 @@
         "bounded_workspace_camera_state_and_matrix_rollback_layout_and_owner_coupled_cleanup_tokens"
       ],
       "not_implemented": [
-        "loaded_pe_runtime_scanner_and_body_hashing",
         "outer_or_inner_detour_installation",
         "inside_scope_camera_rebuild_or_any_engine_write",
-        "cold_swapchain_buffer0_validation_or_eye_copy",
+        "reach_copyresource_or_completed_eye_content",
+        "live_inner_scope_display_continuity_observation",
         "reach_lifecycle_heartbeat_or_runtime_capability_publication",
         "callback_quiescence_or_detour_teardown"
       ],
+      "loaded_image_preflight_compiled": true,
+      "display_copy_readiness_compiled": true,
+      "runtime_result": "UNTESTED",
       "title_hook_plan": "NONE",
       "runtime_capabilities": "NONE",
       "runtime_hooks_permitted": false,
       "engine_memory_mutation_reachable": false,
+      "copyresource_reachable": false,
       "stereo_action_reachable": false
     },
     "remaining_runtime_proof": [
-      "production_runtime_repeats_loaded_image_preflight",
+      "live_result_from_production_loaded_image_preflight",
       "production_exact_normal_return_and_stock_only_alternate_unknown_routing",
       "production_runtime_enforces_camera_freshness_and_one_second_safety_interval",
       "production_outer_owner_token_inner_serial_reuse_and_transitive_side_effect_safety",
       "inside_scope_eye_rebuild_openxr_mapping_and_byte_exact_rollback",
-      "cold_buffer0_identity_specialization0_continuity_and_copyresource_success",
+      "live_cold_buffer0_identity_inner_specialization0_continuity_and_copyresource_success",
       "pause_cinematic_split_screen_and_transition_observation",
       "device_loss_title_unload_and_callback_quiescence",
       "runtime_finite_range_index_and_count_guards",
@@ -524,12 +541,12 @@
         ]
       },
       "remaining_proof": [
-        "production_runtime_repeats_loaded_image_preflight",
+        "live_result_from_production_loaded_image_preflight",
         "production_exact_normal_return_and_stock_only_alternate_unknown_routing",
         "production_runtime_enforces_camera_freshness_and_one_second_safety_interval",
         "production_outer_owner_token_inner_serial_reuse_and_transitive_side_effect_safety",
         "inside_scope_eye_rebuild_openxr_mapping_and_byte_exact_rollback",
-        "cold_buffer0_identity_specialization0_continuity_and_copyresource_success",
+        "live_cold_buffer0_identity_inner_specialization0_continuity_and_copyresource_success",
         "pause_cinematic_split_screen_and_transition_observation",
         "device_loss_title_unload_and_callback_quiescence",
         "runtime_finite_range_index_and_count_guards",

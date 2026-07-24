@@ -60,7 +60,7 @@ try {
         throw 'Could not resolve the candidate source commit.'
     }
 
-    $acceptedSource = '3a2a11bfc66b36e70f60282e91c9d5436f2e18d1'
+    $acceptedSource = 'a5524d3fe58e4ed5507c27429ccca52a3d4fdf7d'
     & git -C $repoRoot merge-base --is-ancestor $acceptedSource $commit
     if ($LASTEXITCODE -ne 0) {
         throw "Refusing to package: HEAD does not descend from accepted source $acceptedSource."
@@ -102,7 +102,7 @@ try {
         $renderCandidatePattern =
             "(?m)^HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE:BOOL=$expectedRenderCandidate\r?$"
         if ($cache -notmatch $renderCandidatePattern) {
-            throw "Refusing to package: disabled Reach render candidate is not $expectedRenderCandidate in preset $preset."
+            throw "Refusing to package: hard-off Reach render candidate is not $expectedRenderCandidate in preset $preset."
         }
 
         & cmake --build --preset $preset --clean-first
@@ -172,7 +172,7 @@ try {
         (Get-FileHash -LiteralPath $launcherPath -Algorithm SHA256).Hash
 
     $manifest = [ordered]@{
-        schema_version = 3
+        schema_version = 4
         status = 'UNTESTED_LOCAL_CANDIDATE'
         accepted = $false
         package_id = $packageId
@@ -188,7 +188,11 @@ try {
         }
         reach_controller_input_enabled = $reachEnabled
         reach_render_candidate_compiled = $reachRenderCompiled
+        reach_loaded_image_preflight_enabled = $reachRenderCompiled
+        reach_display_copy_readiness_enabled = $reachRenderCompiled
         reach_render_candidate_enabled = $false
+        reach_copyresource_enabled = $false
+        reach_engine_memory_writes_enabled = $false
         reach_runtime_hooks_enabled = $false
         base_release = 'MCC_VR_ALPHA_0.2.2'
         files = [ordered]@{

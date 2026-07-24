@@ -14,6 +14,11 @@ void VR_InitInstance();
 void VR_BeforePresent(IDXGISwapChain* swapchain);
 void VR_AfterPresent(IDXGISwapChain* swapchain);
 void VR_OnResizeBuffers(IDXGISwapChain* swapchain);
+void VR_AfterResizeBuffers(IDXGISwapChain* swapchain);
+
+// Worker-thread-only Reach display/resource proof. The private candidate calls
+// this after its loaded-image proof; normal builds never reference it.
+void VR_ReachRenderCandidate_ColdPoll();
 
 // Timing beacon from Halo's camera-copy hook. The first call after
 // VR_AfterPresent proves how quickly the freshly predicted pose reaches the

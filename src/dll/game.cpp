@@ -12,6 +12,12 @@
 #include "vr.h"
 #include "ik.h"
 #include "title_adapter.h"
+#ifndef HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE
+#define HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE 0
+#endif
+#if HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE
+#include "reach_render_candidate.h"
+#endif
 #include "../common/log.h"
 #include "../common/config.h"
 #include "../common/hud_layout_logic.h"
@@ -22,7 +28,6 @@
 #ifndef HALOMCCVR_EXPERIMENTAL_ODST_BRINGUP
 #define HALOMCCVR_EXPERIMENTAL_ODST_BRINGUP 0
 #endif
-
 // M1 head tracking. We hook the game's per-frame camera-update function and,
 // each frame, overwrite the authoritative camera's forward/up vectors with the
 // direction of the headset. Writing from inside the game's own frame (rather
@@ -9324,6 +9329,25 @@ namespace
                 TitleAdapter_PollLoaded(pollNow);
             const TitleAdapterRuntimeSnapshot runtime =
                 RuntimeSnapshot(pollNow);
+#if HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE
+            {
+                const bool soleReachTitle = activeTitle &&
+                    activeTitle->title == GameTitle::HaloReach &&
+                    TitleAdapter_GetActiveTitle() == GameTitle::HaloReach;
+                uintptr_t reachBase = 0;
+                size_t reachSize = 0;
+                const uint32_t reachGeneration = soleReachTitle
+                    ? TitleAdapter_GetGeneration(GameTitle::HaloReach)
+                    : 0;
+                const bool haveReachRange = soleReachTitle &&
+                    sig::ModuleRange(
+                        activeTitle->moduleName, reachBase, reachSize);
+                ReachRenderCandidate_ColdPoll(
+                    reachBase, reachSize, reachGeneration,
+                    haveReachRange);
+                VR_ReachRenderCandidate_ColdPoll();
+            }
+#endif
             // Snapshot resolution is deliberately side-effect free so render
             // and input callers cannot log. The worker owns fallback-mode
             // publication when no title render path is publishing a mode.

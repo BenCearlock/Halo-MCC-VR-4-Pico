@@ -484,10 +484,13 @@ shared Halo 3 learner requires a full-resolution slot-0
 `R8G8B8A8_TYPELESS` resource with RT, SRV, and UAV bind flags; applying that
 identity rule to Reach would be unsupported and could omit late native CHUD.
 
-The smallest conservative capture route is to validate record 0 against
-`swapchain->GetBuffer(0)` once per Reach generation in the existing cold
-pre-Present path, create matching eye caches there, then let each eye render
-normally into Reach's display buffer. Immediately after each original
+The safe first readiness slice retains buffer 0 from the live Present receiver,
+then validates it on the cold title worker only when the captured D3D11 creation
+flags permit cross-thread device use. Record-0/selected-view values are tracked
+only as structural identities and are never dereferenced across the separate
+cleanup/recovery paths. The worker creates matching eye caches there; a future
+candidate can then let each eye render normally into Reach's display buffer.
+Immediately after each original
 `player_view_render` returns, the candidate would use same-context
 `CopyResource` to snapshot the intended completed world, first-person, and
 executed native-CHUD phases into that eye cache. The second eye would remain in
@@ -519,8 +522,9 @@ eligible, the remaining runtime-evidence and implementation gates are:
 - inside-active-scope safety and OpenXR mapping for the stock-observed
   pre-scope rebuild,
   plus byte-exact rollback of every touched region;
-- cold record-0/buffer-0 identity, specialization-index-zero continuity, and a
-  successful same-context per-eye `CopyResource`;
+- live confirmation that the production cold record-0/buffer-0 and
+  specialization-zero readiness checks pass, continued identity at the exact
+  inner scope, and a successful same-context per-eye `CopyResource`;
 - pause, cinematic, split-screen, unload/reload, device-loss, and title-module
   transition behavior;
 - callback quiescence and complete detour teardown;
@@ -530,7 +534,7 @@ eligible, the remaining runtime-evidence and implementation gates are:
 Accordingly, all Reach `proof_complete` and `hook_eligible` fields remain
 false.
 
-## Disabled render-candidate scaffold
+## Hard-off render-candidate foundation
 
 The Halo 3 behavior being matched is one synchronous two-pass transaction at
 the inner view renderer: configurable eye order, identical stock starting
@@ -539,16 +543,19 @@ immediate eye capture, and restoration after the pair. In Reach, the entire
 source-named `player_view_render` remains indivisible because its world,
 effects, first-person, and conditional CHUD subpasses interleave.
 
-`HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE=ON` now compiles a separate,
-inert policy scaffold. It pins the canonical 32-byte `main_render_view`,
-69-byte masked `player_view_render`, and 25-byte frustum entries and implements
-allocation-free pure gates for:
+`HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE=ON` compiles a separate,
+hard-off candidate foundation. It pins the canonical 32-byte
+`main_render_view`, 69-byte masked `player_view_render`, and 25-byte frustum
+entries and implements allocation-free pure gates for:
 
 - exact normal, screenshot, and unknown outer-return routing;
 - slot-zero workspace/player-view validation and the pre-push depth limit;
 - opaque module-base/generation-bound preflight, freshness, prepared-frame, and
   direct-copy tokens; freshness is also bound to the exact frame serial,
   observation nonce/time, live gate state, and one-time owner consumption;
+- a monotonic display-resource revision and nonce. Only the live resource gate
+  can mint a direct-copy-readiness token, and ResizeBuffers, view/pointer drift,
+  title teardown, or module-generation change invalidates copied tokens;
 - monotonic-generation, non-reentrant, single-prepared-serial outer ownership
   with generation-and-serial-keyed finish/abort and live-owner validation in
   final action selection;
@@ -565,14 +572,45 @@ allocation-free pure gates for:
   that tracks both passes as dirty and is the only source of the exact clean
   completion/abort token required to release an owner.
 
-This scaffold has no loaded-PE production scanner, no MinHook installation
-path, no camera or engine-memory write, no Reach `CopyResource`, and no Reach
-lifecycle or capability publication. `TitleHookPlan::None`,
+The same build now contains the first production cold proof path. On the 50 ms
+title worker, and only while Reach is the sole detected title, it temporarily
+pins the loaded module and verifies the exact backing-file SHA-256, AMD64 PE
+timestamp and image size, bounded non-overlapping executable sections, exactly
+one loaded-image match at each of the three expected RVAs, both complete body
+hashes, all six pinned rel32 edges, and every consumed fixed image range. Its
+generation-tagged publication is invalidated on title ambiguity or exit.
+Signature scanning, hashing, file I/O, D3D resource allocation, and candidate
+logging remain outside Present and every engine render callback.
+
+Present first compares its swapchain with Reach's engine-global swapchain using
+one raw pointer read, so unrelated overlay/video Presents cannot consume the
+throttle. At most every 250 ms on the exact Reach Present boundary, it reads the
+fixed display fields twice into lock-free fixed storage and retains only the
+exact live Present swapchain, its buffer 0, and its device across worker handoff.
+Record-0 RTV/SRV values are structural continuity identities only and are never
+dereferenced by the worker. The snapshot also records device creation flags and
+device/immediate-context identities; `D3D11_CREATE_DEVICE_SINGLETHREADED` fails
+closed before publication or any worker D3D call. It does no file/hash/signature
+scan, allocation, lock, or logging. After loaded-image publication, the 50 ms
+worker consumes only that retained snapshot. It checks group 1's count/array/
+record-0 identities, specialization index zero, and selected RTV cache, verifies
+the proven one-buffer DISCARD/UNORM contract and exact single-sample copy shape,
+verifies one D3D11 device and
+its immediate context, and transactionally creates two distinct matching Reach-
+private eye caches without touching Halo 3/ODST resources. Each refresh first
+revokes the old capability and consumes a newly retained buffer/device snapshot;
+ResizeBuffers excludes the worker and invalidates
+the resource revision even if COM later reuses the same addresses. A temporary
+Halo 3/Reach ambiguity invalidates readiness while preserving the resident Reach
+generation, so sole-Reach re-entry can safely publish a higher revision.
+
+This is implementation readiness, not live proof: the path has not yet been
+run in MCC. It installs no Reach MinHook detour, performs no camera or
+engine-memory write, issues no Reach `CopyResource`, captures no eye, and
+publishes no Reach lifecycle or capability. `TitleHookPlan::None`,
 `TitleCapability_None`, and `ReachAdapter_RuntimeHooksPermitted()==false`
-remain unchanged. The runtime wrapper supplies false authorization, so an
-otherwise complete proof and scope still select stock-once. The separate option
-exists so controller-only build identity cannot be confused with
-render-candidate compilation.
+remain unchanged. The runtime wrapper supplies false authorization, so even a
+complete static, display, owner, and inner-scope proof still selects stock-once.
 
 ## Controller-input-only candidate behavior
 
