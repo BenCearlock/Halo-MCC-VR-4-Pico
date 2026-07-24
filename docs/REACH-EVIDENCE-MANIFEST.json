@@ -130,9 +130,10 @@
       "first_person_and_chud_phases_are_conditional": true
     },
     "remaining_runtime_proof": [
-      "live_mcc_loaded_image_preflight",
+      "production_runtime_repeats_loaded_image_preflight",
       "normal_caller_scope_and_alternate_caller_semantics",
-      "continuous_camera_freshness_and_one_second_safety_interval",
+      "production_runtime_enforces_camera_freshness_and_one_second_safety_interval",
+      "hook_time_camera_workspace_lifetime_and_snapshot_restore",
       "capture_target_lifetime_and_copy_success",
       "pause_cinematic_split_screen_and_transition_observation",
       "device_loss_title_unload_and_callback_quiescence",
@@ -143,7 +144,7 @@
     "hook_eligible": false
   },
   "runtime_observer": {
-    "status": "IMPLEMENTED_UNRUN",
+    "status": "OBSERVATIONS_REVIEWED_INCOMPLETE",
     "executable": "reach-runtime-observer.exe",
     "implementation": [
       "tools/reach_runtime_observer.cpp",
@@ -231,9 +232,77 @@
     },
     "preflight_only_exit_nonzero": true,
     "preflight_only_result": "INCONCLUSIVE",
-    "observed_runtime_results": [],
-    "loaded_image_proof_complete": false,
-    "continuous_freshness_proof_complete": false,
+    "observed_runtime_results": [
+      {
+        "review_status": "ACCEPTED_LIMITED_RUNTIME_CORROBORATION",
+        "observed_local_date": "2026-07-23",
+        "observer_source_commit": "5d34180ca935e7e32d0b1b2beffb014d198c774f",
+        "observer_package": "out/diagnostics/5d34180-reach-runtime-observer-20260723-233050073Z",
+        "observer_executable_sha256": "AC43FA4F65256DF1CB46B9C0471DDA97E3120265AEDC876E0A3A73FC6A86CF6A",
+        "run_directory": "out/test-runs/5d34180-stock-reach-observer-20260724-025036448Z",
+        "log": {
+          "bytes": 18295,
+          "sha256": "3C36AF1F06FC428E914AB0C71330838587B020335EFBF2B017F8EF178768212D"
+        },
+        "duration_seconds": 480,
+        "reported_result": "OBSERVATIONS_RECORDED_UNASSESSED",
+        "totals": {
+          "preflight_passes": 2,
+          "unloads": 1,
+          "ambiguity_entries": 3,
+          "snapshot_failures": 0,
+          "observed_transactions": 29507,
+          "valid_cameras": 29496,
+          "invalid_cameras": 0,
+          "outside_array": 0,
+          "multi_owner": 0,
+          "stable_windows": 7
+        },
+        "generation_scope": "OBSERVER_ADMISSION_SESSION_NOT_DISTINCT_MODULE_MAPPING",
+        "generations": [
+          {
+            "generation": 1,
+            "module_base": "0x7FF9FAFB0000",
+            "terminal_reason": "ambiguous title residency",
+            "transactions": 11248,
+            "valid_cameras": 11238,
+            "invalid_cameras": 0,
+            "outside_array": 0,
+            "torn_snapshots": 10,
+            "multi_owner": 0,
+            "stable_windows": 5,
+            "longest_fresh_ms": 73500,
+            "slot_mask": "0x1"
+          },
+          {
+            "generation": 2,
+            "module_base": "0x7FF9FAFB0000",
+            "terminal_reason": "Reach unload/title exit",
+            "transactions": 18259,
+            "valid_cameras": 18258,
+            "invalid_cameras": 0,
+            "outside_array": 0,
+            "torn_snapshots": 1,
+            "multi_owner": 0,
+            "stable_windows": 2,
+            "longest_fresh_ms": 134875,
+            "slot_mask": "0x1"
+          }
+        ],
+        "observed_slots": [
+          0
+        ],
+        "runtime_stride_corroborated": false,
+        "observed_ambiguity_reset_and_readmission": true,
+        "observed_unload": true,
+        "observed_reappearance_after_unload_in_ambiguous_residency": true,
+        "observed_unload_then_unambiguous_preflight": false
+      }
+    ],
+    "loaded_image_proof_complete": true,
+    "loaded_image_proof_scope": "EXACT_PINNED_EXTERNAL_STOCK_PREFLIGHT_ONLY",
+    "continuous_freshness_proof_complete": true,
+    "continuous_freshness_proof_scope": "OBSERVED_SLOT0_SINGLE_OWNER_ONLY_IN_TWO_ADMISSION_SESSIONS",
     "lifecycle_proof_complete": false,
     "capture_target_proof_complete": false,
     "proof_complete": false,
@@ -279,9 +348,10 @@
         ]
       },
       "remaining_proof": [
-        "live_mcc_loaded_image_preflight",
+        "production_runtime_repeats_loaded_image_preflight",
         "normal_caller_scope_and_alternate_caller_semantics",
-        "continuous_camera_freshness_and_lifetime",
+        "production_runtime_enforces_camera_freshness_and_one_second_safety_interval",
+        "hook_time_camera_workspace_lifetime_and_snapshot_restore",
         "capture_target_lifetime_and_copy_success",
         "pause_cinematic_split_screen_and_transition_observation",
         "runtime_teardown_and_callback_quiescence",

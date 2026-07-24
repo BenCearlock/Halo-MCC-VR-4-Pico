@@ -40,6 +40,35 @@ milestone, not a public release or tag. The public known-good product remains
 - This result does not authorize or claim Reach camera, stereo, 6DOF, aim,
   movement, HUD, IK, haptics, or lifecycle hooks.
 
+### Reach stock runtime observation - 2026-07-23
+
+The external read-only Reach observer from source
+`5d34180ca935e7e32d0b1b2beffb014d198c774f` was run against stock
+anti-cheat-disabled MCC. This was not a mod installation or candidate launch
+and does not change either accepted source pointer.
+
+| Identity | Value |
+| --- | --- |
+| Observer package | `out/diagnostics/5d34180-reach-runtime-observer-20260723-233050073Z` |
+| Observer EXE SHA-256 | `AC43FA4F65256DF1CB46B9C0471DDA97E3120265AEDC876E0A3A73FC6A86CF6A` |
+| Preserved run | `out/test-runs/5d34180-stock-reach-observer-20260724-025036448Z` |
+| Evidence log SHA-256 | `3C36AF1F06FC428E914AB0C71330838587B020335EFBF2B017F8EF178768212D` |
+| Observer result | `OBSERVATIONS_RECORDED_UNASSESSED`, reviewed as limited runtime corroboration |
+
+- Two exact loaded-image preflights passed. Across two admitted sessions the
+  observer recorded 29,507 normal transactions, 29,496 valid camera samples,
+  seven one-second stable windows, zero invalid cameras, zero multi-owner
+  intervals, and zero module-snapshot failures.
+- The external observer paused and reset sampling during multi-title
+  ambiguity, ran a full preflight on re-admission, then recorded one Reach
+  unload/title exit.
+- Every transaction was slot 0, so the run corroborates the array base but not
+  the `0xA40` stride or split-screen behavior.
+- Exact normal-versus-alternate caller scope, the owning capture target,
+  broader lifecycle/device-loss behavior, callback quiescence and teardown,
+  stereo/OpenXR, and headset behavior remain unproven. All Reach runtime hooks
+  remain unauthorized and disabled.
+
 ## Accepted cumulative release
 
 The current known-good product is the public

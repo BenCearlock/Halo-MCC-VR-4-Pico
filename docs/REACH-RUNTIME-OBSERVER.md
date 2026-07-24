@@ -1,7 +1,8 @@
 # Halo: Reach runtime observer
 
-Status: **IMPLEMENTED_UNRUN**. No runtime log has been accepted, no Reach hook
-is authorized, and this tool does not advance the accepted-build pointer.
+Status: **OBSERVATIONS_REVIEWED_INCOMPLETE**. One exact stock-runtime log has
+been accepted as limited corroboration. No Reach hook is authorized, and this
+tool does not advance the accepted-build pointer.
 
 `reach-runtime-observer.exe` is a standalone, external evidence tool for the
 pinned Steam `haloreach.dll`. It observes stock MCC from another process. It is
@@ -159,6 +160,50 @@ the log; do not bypass an identity, uniqueness, range, or contamination check.
 Stopping after a successful preflight but before any usable camera sample is
 intentionally a nonzero, inconclusive result; preserve that log too.
 
+## Reviewed stock runtime observation - 2026-07-23
+
+The first accepted observation used source
+`5d34180ca935e7e32d0b1b2beffb014d198c774f` from package
+`out/diagnostics/5d34180-reach-runtime-observer-20260723-233050073Z`.
+The exact `reach-runtime-observer.exe` SHA-256 was
+`AC43FA4F65256DF1CB46B9C0471DDA97E3120265AEDC876E0A3A73FC6A86CF6A`.
+It ran for 480,000 ms against stock anti-cheat-disabled MCC, with no
+`halo3xr.dll` loaded, and wrote:
+
+`out/test-runs/5d34180-stock-reach-observer-20260724-025036448Z/reach-runtime-observer.log`
+
+The 18,295-byte log SHA-256 is
+`3C36AF1F06FC428E914AB0C71330838587B020335EFBF2B017F8EF178768212D`.
+The redirected stdout is byte-identical; stderr is empty. The observer's final
+result was `OBSERVATIONS_RECORDED_UNASSESSED`; review accepts only the limited
+runtime corroboration stated here.
+
+- Aggregate: two passing loaded-image preflights, one observed Reach
+  unload/title exit, three ambiguity entries, zero module-snapshot failures,
+  29,507 normal transactions, 29,496 valid cameras, zero invalid cameras,
+  zero outside-array pointers, zero multiple-owner intervals, and seven stable
+  windows.
+- Generation 1 ended on ambiguous title residency with 11,248 transactions,
+  11,238 valid cameras, 10 discarded torn snapshots, five stable windows, and
+  a 73,500 ms longest fresh span.
+- Reach was re-admitted with the same observed mapping identity after the shell
+  ambiguity. No unload/reload was recorded between these sessions, and a
+  same-identity reload between 100 ms polls remains unobservable. Generation 2
+  passed the full loaded-image preflight again, then ended on an explicit Reach
+  unload/title exit with 18,259 transactions, 18,258 valid cameras, one
+  discarded torn snapshot, two stable windows, and a 134,875 ms longest fresh
+  span.
+- Every classified transaction used slot 0 (`slotMask=0x1`). This
+  runtime-corroborates the array base, not the `0xA40` stride or split-screen
+  behavior.
+
+This closes the exact external stock loaded-image preflight and continuous
+observed single-owner freshness for these sessions. The external observer also
+paused and reset sampling on ambiguity, ran a full preflight on re-admission,
+and recorded one observed unload. It does not prove equivalent production-hook
+behavior, make the player-view transaction proof complete, or authorize a
+detour.
+
 ## Reading the result
 
 A useful log contains a loaded-image preflight pass, normal-slot transactions,
@@ -186,5 +231,8 @@ not the stride. It cannot prove:
 - stereo eye mutation, OpenXR submission, headset parity, or player-visible
   Reach VR behavior.
 
-Those remain separate gates. Until an exact observer artifact is run and its
-log reviewed, even the live loaded-image and freshness claims remain unproven.
+Those remain separate gates. The reviewed pass above closes only the pinned
+stock loaded-image and observed-freshness portions. Exact caller scope, the
+capture target, broader lifecycle and split-screen behavior, production
+failure guards and teardown, stereo, OpenXR, headset validation, and Halo 3
+regression remain unproven.

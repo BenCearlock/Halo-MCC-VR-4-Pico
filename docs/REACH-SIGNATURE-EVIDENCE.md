@@ -43,7 +43,7 @@ recorded below; the other three have not.
 
 | Candidate | RVA | Loaded-image unique | Executable range | ABI | Callers | Data flow | HREK semantics | Layout fields | Status |
 | --- | ---: | --- | --- | --- | --- | --- | --- | --- | --- |
-| Camera-derived frustum bounds (original viewport hypothesis) | `0x287F58` | One match in a non-executable Windows image mapping; live preflight still required | Yes, `.text`, `0x287F58`-`0x2881CC` | Yes | Nine direct callers | Yes | Yes | Static consumers and producer proven; live lifetime still open | Static role proven; hook forbidden |
+| Camera-derived frustum bounds (original viewport hypothesis) | `0x287F58` | Exact stock observer passed the unique loaded-image check twice; production must repeat it | Yes, `.text`, `0x287F58`-`0x2881CC` | Yes | Nine direct callers | Yes | Yes | Static consumers and producer proven; live lifetime still open | Static role proven; hook forbidden |
 | First-person camera upload | `0x282D60` | No | Offline file only | No | No | No | No | No | Unproven |
 | Visible palette | `0x2B4EB0` | No | Offline file only | No | No | No | No | No | Unproven |
 | Special-bone composer | `0x213224` | No | Offline file only | No | No | No | No | No | Unproven |
@@ -143,11 +143,13 @@ Retail constants used by the centering/scaling math are `0.5f` and `2.0f`.
 
 ### Remaining gate
 
-Before any Reach detour is allowed, a cold runtime preflight must repeat the
-exactly-one scan in the pinned MCC module, check the resolved range and
-function boundary, and fail open on any mismatch. The player-view transaction
-proof below does not make this shared helper a safe hook. Live camera lifetime,
-runtime finite/range guards, and headset validation are still required.
+The exact external stock observer repeated the exactly-one scan and loaded
+range checks successfully in two admitted sessions. Any future production
+runtime must independently repeat that cold preflight and fail open on a
+mismatch. The player-view transaction proof below still does not make this
+shared helper a safe hook. Caller scope, hook-time camera/workspace lifetime
+and full snapshot/restore, live capture-target lifetime, production
+finite/range guards, teardown, and headset validation remain required.
 Therefore `proof_complete` and `hook_eligible` remain false.
 
 ## Player-view prepare/render transaction
@@ -283,8 +285,10 @@ The static owner, stride, within-call freshness, late-CHUD order, pre-Present
 capture placement, and transaction-scoped clear are closed. Before a Reach
 hook is eligible, the remaining runtime-evidence and implementation gates are:
 
-- exactly-one loaded-image signatures and the normal caller scope;
-- continuous camera freshness and the one-second safety interval;
+- normal caller scope and alternate-caller semantics, while production repeats
+  the now-corroborated exactly-one loaded-image checks;
+- production enforcement of the now-observed continuous camera freshness and
+  one-second safety interval;
 - the render target that remains valid at the selected capture point;
 - pause, cinematic, split-screen, unload/reload, device-loss, and title-module
   transition behavior;
@@ -319,8 +323,9 @@ protection change, debug attach, or detour.
 
 ## Standalone runtime observer
 
-Status: **IMPLEMENTED_UNRUN**. `reach-runtime-observer.exe` is an external
-read-only diagnostic, not an injected Reach candidate. It requests only
+Status: **OBSERVATIONS_REVIEWED_INCOMPLETE**.
+`reach-runtime-observer.exe` is an external read-only diagnostic, not an
+injected Reach candidate. It requests only
 `PROCESS_QUERY_INFORMATION | PROCESS_VM_READ`, installs no hook or detour,
 injects no code, and writes no process memory or MCC file. Its only file write
 is a new, exclusively created self log; it never overwrites an existing log.
@@ -370,18 +375,36 @@ work cannot establish ownership. This is observer evidence only and never arms
 VR. Polling can miss the short engine-owned active-view pulse, so absence is
 inconclusive. A preflight-only run exits nonzero and is likewise inconclusive.
 
-The complete safety contract, desktop procedure, and interpretation limits are
-in `docs/REACH-RUNTIME-OBSERVER.md`. No live result exists yet. In particular,
-the tool cannot prove exact caller execution, GPU target/copy lifetime,
-device-loss or detour teardown, stereo-eye behavior, headset parity, or a
-player-visible Reach path. `proof_complete` and `hook_eligible` remain false.
+The exact source-`5d34180` executable, SHA-256
+`AC43FA4F65256DF1CB46B9C0471DDA97E3120265AEDC876E0A3A73FC6A86CF6A`,
+was run against stock MCC for 480,000 ms. Its retained log at
+`out/test-runs/5d34180-stock-reach-observer-20260724-025036448Z/reach-runtime-observer.log`
+has SHA-256
+`3C36AF1F06FC428E914AB0C71330838587B020335EFBF2B017F8EF178768212D`.
+Two preflights passed; 29,507 normal slot-0 transactions yielded 29,496 valid
+camera samples and seven stable windows, with no invalid cameras,
+outside-array pointers, multi-owner intervals, contamination, or snapshot
+failures. The observer safely reset on ambiguous residency, re-ran preflight
+when Reach became sole-resident again, and later recorded one Reach
+unload/title exit. Only slot 0 appeared, so the array base is
+runtime-corroborated but the `0xA40` stride is not.
+
+The complete safety contract, procedure, exact counters, and interpretation
+limits are in `docs/REACH-RUNTIME-OBSERVER.md`. The pass runtime-corroborates
+the pinned loaded image and observed single-owner camera freshness only. The
+tool cannot prove exact caller execution or alternate-caller semantics, GPU
+target/copy lifetime, split-screen, an unload/reload pair, device-loss or
+detour teardown, stereo-eye behavior, headset parity, or a player-visible
+Reach path. `proof_complete` and `hook_eligible` remain false.
 
 ## Evidence still required
 
-Runtime-corroborate the statically identified player-view transaction, caller
-scope, capture target, continuous freshness, and lifecycle behavior. Still
-independently derive observer effects, stereo camera mutation, first-person
-weapon behavior, HUD anchor, skeleton and weapon-marker facts, brightness, and
-motion blur before enabling player-visible behavior. Xbox 360 map symbols may
-supply names or call-graph hints only; every fact must be re-proven against
-HREK and the pinned MCC x64 module.
+Resolve the normal and alternate caller scopes and the owning capture target.
+Prove hook-time camera/workspace lifetime and exact snapshot/restore,
+production freshness enforcement, pause/cinematic/split-screen behavior,
+unload/reload and device-loss handling, callback quiescence, and complete
+detour teardown. Still independently derive observer effects, stereo camera
+mutation, first-person weapon behavior, HUD anchor, skeleton and weapon-marker
+facts, brightness, and motion blur before enabling player-visible behavior.
+Xbox 360 map symbols may supply names or call-graph hints only; every fact must
+be re-proven against HREK and the pinned MCC x64 module.
