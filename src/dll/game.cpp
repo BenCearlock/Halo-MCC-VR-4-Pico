@@ -10373,18 +10373,20 @@ namespace
         }
     }
 
-    // ---- Passive first-person palette probe (experimental, log-only) -------
-    // Learns Reach's real weapon/arm rig before any IK is attempted. It is a
-    // pure passthrough to the stock visible-palette consumer 0x2B4EB0 (the FP
-    // path; the special-bone composer 0x213224 proved silent in a headset test),
-    // then a rate-limited, SEH-guarded dump of the render model it consumed. It
-    // reads only, never writes game memory, never changes behaviour, and
-    // allocates nothing. All addressing was read from that function's OWN code
-    // (see reach_render_logic.h): modelHandle=table[tag].+4, blockBase=
-    // blockTable[modelHandle>>28], count=*(u32)(blockBase+modelHandle*4+0x30).
-    // Per bone it logs the boneMap source index and that source bone's
-    // translation + scale so the hand/gun bones are identifiable by count and
-    // geometry. Project law: only a runtime dump is trusted for these facts.
+    // ---- First-person palette hook: gun-follows-controller + diagnostics ----
+    // Hooks the stock visible-palette consumer 0x2B4EB0 (Reach's FP path; the
+    // special-bone composer 0x213224 proved silent in a headset test). Two jobs:
+    //   (1) BEHAVIOR: substitute a controller-aligned render root so the whole
+    //       first-person gun+arms assembly points where the right controller
+    //       aims (ReachBuildControllerFpRoot; gated on arm_ik, fail-open to the
+    //       stock root). This is the accepted Reach FP-IK bringup step.
+    //   (2) DIAGNOSTIC: a rate-limited, SEH-guarded, read-only dump of the
+    //       render model + root that produced the rig (below). Never writes game
+    //       memory, allocates nothing. All addressing was read from that
+    //       function's OWN code (see reach_render_logic.h): modelHandle =
+    //       (*table)[tag].+4, blockBase = blockTable[modelHandle>>28], count =
+    //       *(u32)(blockBase+modelHandle*4+0x30). Project law: only a runtime
+    //       dump is trusted -- the rig (47 bones, root basis) was confirmed live.
     static int SafeReadBytes(const void* src, void* dst, size_t n)
     {
         __try { memcpy(dst, src, n); }
@@ -10502,6 +10504,69 @@ namespace
         }
     }
 
+    // Build a substitute first-person render root whose ORIENTATION follows the
+    // right controller's aim ray, so the whole gun+arms assembly points where
+    // you aim. It PRESERVES root's world translation and scale (the assembly
+    // stays anchored at the camera; only its orientation turns), so a wrong
+    // frame can at worst mis-point the gun -- never fling it off screen. The
+    // basis convention was read live from this exact haloreach.dll (rows
+    // R0=forward, R1=right=cross(worldUp,fwd), R2=up=cross(fwd,right); confirmed
+    // against the logged render root to 3 decimals). The controller ray is
+    // mapped into Halo world yaw/pitch exactly as Game_ComputeAimStick does
+    // (g_gameYawRef + yawSign*(ctrlYaw - headYawRef); pitchSign*ctrlPitch), so
+    // it lands in the same world frame g_aimFwd/root use. Reuses the existing
+    // gun_yaw/pitch/roll_deg knobs; no new config. Deterministic, no allocation.
+    bool ReachBuildControllerFpRoot(const BoneMatrix* root, BoneMatrix& out)
+    {
+        if (!root)
+            return false;
+        float q[4], p[3];
+        if (!VR_GetAimPose(q, p))
+            return false;
+        const float localFwd[3] = {0.0f, 0.0f, -1.0f};
+        float vf[3];
+        RotateByQuat(q, localFwd, vf);
+        const float cyRaw = atan2f(vf[0], -vf[2]);
+        const float cpRaw = asinf(Clamp(vf[1], -1.0f, 1.0f));
+        const float kDeg = 0.01745329252f;
+        const float worldYaw = g_gameYawRef +
+            g_yawSign.load() * WrapPi(cyRaw - g_headYawRef) +
+            g_config.gun_yaw_deg * kDeg;
+        const float worldPitch = Clamp(
+            g_pitchSign.load() * cpRaw + g_config.gun_pitch_deg * kDeg,
+            -1.45f, 1.45f);
+        const float cp = cosf(worldPitch), sp = sinf(worldPitch);
+        const float cyw = cosf(worldYaw), syw = sinf(worldYaw);
+        float F[3] = {cp * cyw, cp * syw, sp};        // world forward (row R0)
+        // Right = normalize(cross(worldUp=(0,0,1), F)); guard near-vertical aim.
+        float R[3] = {-F[1], F[0], 0.0f};
+        float rl = sqrtf(R[0] * R[0] + R[1] * R[1] + R[2] * R[2]);
+        if (rl < 1e-4f) { R[0] = 1.0f; R[1] = 0.0f; R[2] = 0.0f; rl = 1.0f; }
+        R[0] /= rl; R[1] /= rl; R[2] /= rl;
+        // Up = cross(F, R) (unit for orthonormal F,R).
+        float U[3] = {
+            F[1] * R[2] - F[2] * R[1],
+            F[2] * R[0] - F[0] * R[2],
+            F[0] * R[1] - F[1] * R[0]};
+        if (g_config.gun_roll_deg != 0.0f)                // roll about forward
+        {
+            const float rr = g_config.gun_roll_deg * kDeg;
+            const float cr = cosf(rr), sr = sinf(rr);
+            float Rn[3], Un[3];
+            for (int i = 0; i < 3; ++i)
+            {
+                Rn[i] = R[i] * cr + U[i] * sr;
+                Un[i] = -R[i] * sr + U[i] * cr;
+            }
+            for (int i = 0; i < 3; ++i) { R[i] = Rn[i]; U[i] = Un[i]; }
+        }
+        out = *root;                                   // keep scale + translation
+        out.rotation[0] = F[0]; out.rotation[1] = F[1]; out.rotation[2] = F[2];
+        out.rotation[3] = R[0]; out.rotation[4] = R[1]; out.rotation[5] = R[2];
+        out.rotation[6] = U[0]; out.rotation[7] = U[1]; out.rotation[8] = U[2];
+        return true;
+    }
+
     __declspec(noinline) void __fastcall ReachFpPaletteProbe(
         uint16_t tag, const BoneMatrix* root, BoneMatrix* destination,
         uintptr_t unused, const BoneMatrix* source, const int32_t* boneMap)
@@ -10509,7 +10574,22 @@ namespace
         g_reachCamera.activeCallbacks.fetch_add(1, std::memory_order_acq_rel);
         __try
         {
-            g_reachOrigFpPalette(tag, root, destination, unused, source, boneMap);
+            // Gun-follows-controller: substitute a controller-aligned root when
+            // armed + VR aim on + arm_ik enabled. Fail-open -- any failure (no
+            // controller, disabled) falls back to the game's own render root, so
+            // the FP model renders exactly as stock. Reach-only hook; Halo 3 /
+            // ODST have their own FP path and are untouched.
+            const BoneMatrix* useRoot = root;
+            BoneMatrix controllerRoot;
+            if (root &&
+                g_reachCamera.armed.load(std::memory_order_acquire) &&
+                g_enabled.load() && g_vrAim.load() && g_config.arm_ik &&
+                ReachBuildControllerFpRoot(root, controllerRoot))
+            {
+                useRoot = &controllerRoot;
+            }
+            g_reachOrigFpPalette(
+                tag, useRoot, destination, unused, source, boneMap);
             ReachFpPaletteProbeDump(tag, root, source, boneMap);
         }
         __finally
@@ -11378,13 +11458,14 @@ namespace
             static_cast<unsigned long long>(kReachPatchyFogFlagsRva),
             static_cast<unsigned>(kReachPatchyFogSkipMask));
 
-        // PASSIVE first-person skeleton probe (experimental, log-only): a pure
-        // passthrough hook on the verified special-bone composer that dumps
-        // Reach's real FP rig so IK can later be built on proven bone facts.
-        // Fail-open: a mismatched prologue or a MinHook failure just skips the
-        // probe and leaves the camera core fully intact. The pinned-image
+        // First-person palette hook (experimental): substitutes a controller-
+        // aligned render root so the FP gun+arms follow the right controller
+        // (ReachBuildControllerFpRoot, gated on arm_ik) and dumps the rig for
+        // diagnostics. Fail-open: a mismatched prologue or a MinHook failure
+        // just skips it and leaves the camera core fully intact; at runtime any
+        // per-frame failure falls back to the stock root. The pinned-image
         // preflight already proved the module SHA, so base+RVA is exact; the
-        // 28-byte prologue is re-verified here as a belt-and-suspenders guard.
+        // 40-byte prologue is re-verified here as a belt-and-suspenders guard.
         {
             void* const probeTarget =
                 reinterpret_cast<void*>(base + kReachFpVisiblePaletteRva);
@@ -11405,8 +11486,9 @@ namespace
                 MH_EnableHook(probeTarget) == MH_OK)
             {
                 g_reachCamera.fpPaletteProbeTarget = probeTarget;
-                LOG("Reach FP probe installed: passive palette dump on "
-                    "visible-palette consumer at haloreach.dll+0x%llX",
+                LOG("Reach FP palette hook installed: gun-follows-controller "
+                    "(arm_ik) + diagnostics on visible-palette consumer at "
+                    "haloreach.dll+0x%llX",
                     static_cast<unsigned long long>(
                         kReachFpVisiblePaletteRva));
             }
