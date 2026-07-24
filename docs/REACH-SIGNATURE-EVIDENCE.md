@@ -10,6 +10,23 @@ invalid camera, or a fault -- Halo 3 and ODST are never touched. The
 camera-injection mapping is a headset-tuning result; the accepted product pointer
 stays at `MCC_VR_ALPHA_0.2.2` until a headset pass confirms it.
 
+The first armed candidate mutated only the compact camera and called
+`player_view_render` directly. In the headset that rendered a narrow "cone" with
+no stereo depth or 6DOF, because `player_view_render` reads the view/projection
+matrices the engine's setup already built into `player_view+0x490` from the stock
+centre camera -- it never re-reads the compact camera. The current candidate
+therefore re-runs the stock pre-scope rebuild per eye (steps 2-6 below): the
+frustum helper `0x287F58`, projection builder `0x2884BC`, camera-state updater
+`0x286F9C`, and projection/matrix builder `0x28AF8C`, so the matrices the inner
+render consumes are rebuilt from the per-eye VR camera. The frustum helper and
+projection builder are additionally verified at install by decoding the exact
+`rel32` targets of their proven setup call sites (`0x26C2FF`, `0x26C316`); a
+mismatched image fails open. This mirrors Halo 3's `RenderViewHook`, which
+rebuilds `view+0x98` with the engine's own `build_viewport`/`build_matrices`
+helpers before each eye's render. The per-eye rebuild running inside the active
+render scope, the symmetric-vs-asymmetric FOV mapping, and the secondary
+render-camera policy all remain headset-tuning results.
+
 This document records Reach-specific facts for the cumulative Halo 3 + ODST +
 Reach line. Halo 3 and ODST offsets, layouts, bones, markers, and tag meanings
 are not Reach evidence. The authoritative accepted baseline remains public

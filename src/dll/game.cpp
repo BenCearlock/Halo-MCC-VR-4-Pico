@@ -9325,6 +9325,46 @@ namespace
     using ReachMainRenderViewFn =
         uintptr_t(__fastcall*)(uintptr_t, uintptr_t, uint32_t);
 
+    // The four stock camera-rebuild helpers, with the exact ABIs proven in
+    // REACH-SIGNATURE-EVIDENCE.md steps 2-6. Running them per eye before the
+    // inner render rebuilds player_view+0x490 from the VR camera, exactly as
+    // Halo 3's RenderViewHook rebuilds view+0x98 with the engine's own helpers.
+    using ReachFrustumHelperFn = bool(__fastcall*)(void*, float*);
+    using ReachProjectionBuilderFn = void(__fastcall*)(void*, float*, void*, float);
+    using ReachCameraStateUpdaterFn = void(__fastcall*)(void*, void*);
+    using ReachMatrixBuilderFn =
+        void(__fastcall*)(void*, void*, void*, void*, void*);
+
+    struct ReachRenderHelpers
+    {
+        ReachFrustumHelperFn frustum = nullptr;
+        ReachProjectionBuilderFn projection = nullptr;
+        ReachCameraStateUpdaterFn cameraState = nullptr;
+        ReachMatrixBuilderFn matrix = nullptr;
+        bool Ready() const
+        {
+            return frustum && projection && cameraState && matrix;
+        }
+    };
+    ReachRenderHelpers g_reachHelpers;
+
+    // A direct `call rel32` is `E8 <int32>`; its target is site + 5 + rel32.
+    // Verifying the two proven setup call sites resolve to the documented helper
+    // RVAs anchors those addresses to real, in-image call edges so a changed
+    // module fails open instead of arming on a stale offset.
+    bool ReachVerifyRel32Call(
+        uintptr_t base, uintptr_t siteRva, uintptr_t expectedTargetRva)
+    {
+        const uint8_t* p = reinterpret_cast<const uint8_t*>(base + siteRva);
+        if (p[0] != 0xE8)
+            return false;
+        int32_t rel = 0;
+        memcpy(&rel, p + 1, sizeof(rel));
+        const uintptr_t target =
+            base + siteRva + 5 + static_cast<uintptr_t>(static_cast<intptr_t>(rel));
+        return target == base + expectedTargetRva;
+    }
+
     struct ReachOwnerScope
     {
         bool active = false;
@@ -9353,7 +9393,9 @@ namespace
     ReachMainRenderViewFn g_reachOrigMainRenderView = nullptr;
 
     constexpr size_t kReachCompactCameraBytes = 0x90;
-    constexpr uintptr_t kReachSecondaryCompactOffset = 0x154;
+    // kReachSecondaryCompactOffset and the derived/render-bounds sub-block
+    // offsets now live in reach_render_logic.h alongside the rest of the proven
+    // workspace layout.
     // Player-view rollback: the camera-state block (+0x3B0) through the
     // last-window flag (+0xA30) inclusive.
     constexpr uintptr_t kReachPvSnapshotBegin = kReachPlayerViewCameraStateOffset;
@@ -9515,6 +9557,9 @@ namespace
         const uintptr_t workspace = g_reachOwnerScope.workspace;
         unsigned char* compact = reinterpret_cast<unsigned char*>(workspace);
 
+        if (!g_reachHelpers.Ready())
+            return false;
+
         ReachCompactCameraObservation observed{};
         if (!ValidateReachCompactCamera(compact, kReachCompactCameraBytes, observed))
             return false;
@@ -9560,19 +9605,59 @@ namespace
                     pass, rightFirst, originalLastWindow);
                 if (!policy.valid)
                     break;
-                // Stamp this eye into both the primary (+0x000) and secondary
-                // render (+0x154) compact cameras, matching stock normal setup
-                // which mirrors both.
+                // Head-tracked centre plus this eye's stereo separation, cant,
+                // and vertical FOV, stamped into the primary compact camera.
                 memcpy(compact, center, kReachCompactCameraBytes);
                 ReachApplyEyeOffset(compact, policy.eye);
-                memcpy(compact + kReachSecondaryCompactOffset, compact,
-                       kReachCompactCameraBytes);
+
+                // Rebuild this eye exactly as stock setup does, but from the VR
+                // camera, so player_view_render renders from per-eye matrices
+                // instead of the pre-built stock centre matrices. Without this
+                // rebuild the compact-camera edits are never read -- that is the
+                // cone and the missing 6DOF the headset showed. This is the
+                // proven pre-scope rebuild (REACH-SIGNATURE-EVIDENCE.md steps
+                // 2-6): frustum bounds -> projection -> primary/secondary
+                // coherence -> camera-state update -> projection/matrix build
+                // into player_view+0x490. It mirrors Halo 3's RenderViewHook,
+                // which rebuilds view+0x98 with the engine's own helpers.
+                unsigned char* primaryDerived = reinterpret_cast<unsigned char*>(
+                    workspace + kReachPrimaryDerivedOffset);
+                float frustumBounds[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+                g_reachHelpers.frustum(compact, frustumBounds);
+                g_reachHelpers.projection(
+                    compact, frustumBounds, primaryDerived, 0.0f);
+                // Mirror the rebuilt primary compact + derived into the secondary
+                // render pair, matching stock normal setup which mirrors both.
+                memcpy(reinterpret_cast<void*>(
+                           workspace + kReachSecondaryCompactOffset),
+                       compact, kReachCompactCameraBytes);
+                memcpy(reinterpret_cast<void*>(
+                           workspace + kReachSecondaryDerivedOffset),
+                       primaryDerived, kReachDerivedBlockSize);
+                // Re-arm the render-camera owner before the state updater and the
+                // render read it; the previous eye's call zeroed it (see the
+                // entry check above).
+                *reinterpret_cast<uintptr_t*>(reachOwnerGlobal) = entryOwner;
+                g_reachHelpers.cameraState(
+                    reinterpret_cast<void*>(
+                        playerView + kReachPlayerViewCameraStateOffset),
+                    compact);
+                g_reachHelpers.matrix(
+                    reinterpret_cast<void*>(
+                        playerView + kReachPlayerViewCurrentMatricesOffset),
+                    primaryDerived,
+                    primaryDerived + kReachDerivedProjectionOffset,
+                    compact + kReachCompactRenderBoundsOffset,
+                    reinterpret_cast<void*>(
+                        playerView + kReachPlayerViewProjectionOffsetPairOffset));
+
                 if (policy.writeLastWindow)
                     *reinterpret_cast<uint8_t*>(
                         playerView + kReachLastWindowFlagOffset) =
                         policy.lastWindowInput;
-                // Re-arm the render-camera owner the stock call expects on entry;
-                // the previous eye's call zeroed it (see the entry check above).
+                // Re-arm once more immediately before the render in case the
+                // state updater cleared or moved the owner the inner render
+                // dereferences.
                 *reinterpret_cast<uintptr_t*>(reachOwnerGlobal) = entryOwner;
                 g_reachOrigPlayerViewRender(playerView);
                 VR_ReachCopyEye(access, policy.eye);
@@ -9684,6 +9769,7 @@ namespace
         g_reachCamera.installedAtMs = 0;
         g_reachOrigPlayerViewRender = nullptr;
         g_reachOrigMainRenderView = nullptr;
+        g_reachHelpers = {};
         g_reachCamera.installed.store(false, std::memory_order_release);
         LOG("Reach camera core removed; stock Reach owns the title");
         return true;
@@ -9704,6 +9790,23 @@ namespace
         if (!preflight.Complete() ||
             !ReachRenderCandidate_IsPreflightCurrent(preflight))
             return false;
+
+        // Resolve the four stock camera-rebuild helpers. The preflight already
+        // pinned the exact module SHA-256, so base+RVA is exact; additionally
+        // cross-check the two setup call sites so a mismatched image fails open.
+        if (kReachFrustumHelperRva >= size ||
+            kReachProjectionBuilderRva >= size ||
+            kReachCameraStateUpdaterRva >= size ||
+            kReachProjectionMatrixBuilderRva >= size ||
+            !ReachVerifyRel32Call(
+                base, kReachSetupFrustumCallRva, kReachFrustumHelperRva) ||
+            !ReachVerifyRel32Call(
+                base, kReachSetupProjectionCallRva, kReachProjectionBuilderRva))
+        {
+            LOG("Reach camera install: camera-rebuild helper verification failed; "
+                "stock Reach remains active");
+            return false;
+        }
 
         HMODULE moduleReference = nullptr;
         if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
@@ -9739,6 +9842,14 @@ namespace
             return false;
         }
 
+        g_reachHelpers.frustum = reinterpret_cast<ReachFrustumHelperFn>(
+            base + kReachFrustumHelperRva);
+        g_reachHelpers.projection = reinterpret_cast<ReachProjectionBuilderFn>(
+            base + kReachProjectionBuilderRva);
+        g_reachHelpers.cameraState = reinterpret_cast<ReachCameraStateUpdaterFn>(
+            base + kReachCameraStateUpdaterRva);
+        g_reachHelpers.matrix = reinterpret_cast<ReachMatrixBuilderFn>(
+            base + kReachProjectionMatrixBuilderRva);
         g_reachCamera.base = base;
         g_reachCamera.size = size;
         g_reachCamera.generation = generation;

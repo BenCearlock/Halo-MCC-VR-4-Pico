@@ -29,6 +29,19 @@ inline constexpr uintptr_t kReachOuterMainRenderTargetRva = 0x000C33F8;
 inline constexpr uintptr_t kReachOuterPresentCallRva = 0x000C3000;
 inline constexpr uintptr_t kReachOuterPresentTargetRva = 0x0025113C;
 inline constexpr uintptr_t kReachFrustumHelperRva = 0x00287F58;
+// The remaining three stock camera-rebuild helpers, proven in
+// REACH-SIGNATURE-EVIDENCE.md ("Inner stereo candidate and coherent rebuild
+// constraints", steps 2-6). The projection builder is the direct call that
+// follows the frustum helper at every one of its nine call sites; the
+// camera-state updater and projection/matrix builder complete the stock
+// pre-scope rebuild that writes player_view+0x3B0 and +0x490.
+inline constexpr uintptr_t kReachProjectionBuilderRva = 0x002884BC;
+inline constexpr uintptr_t kReachCameraStateUpdaterRva = 0x00286F9C;
+inline constexpr uintptr_t kReachProjectionMatrixBuilderRva = 0x0028AF8C;
+// Proven setup call sites (inside setup 0x26C204) that anchor the first two
+// helpers by their exact rel32 target, so a mismatched image fails open.
+inline constexpr uintptr_t kReachSetupFrustumCallRva = 0x0026C2FF;
+inline constexpr uintptr_t kReachSetupProjectionCallRva = 0x0026C316;
 inline constexpr uintptr_t kReachPlayerViewArrayRva = 0x029F2B90;
 inline constexpr size_t kReachPlayerViewStride = 0x0A40;
 inline constexpr uint32_t kReachPlayerViewCount = 4;
@@ -56,6 +69,21 @@ inline constexpr uintptr_t kReachPlayerViewPreviousMatricesOffset = 0x0760;
 inline constexpr uintptr_t kReachLastWindowFlagOffset = 0x0A30;
 inline constexpr size_t kReachPlayerViewCameraStateSize = 0x00C8;
 inline constexpr size_t kReachPlayerViewMatrixBlockSize = 0x02D0;
+// Zeroed projection-offset pair inside the camera-state envelope; passed as the
+// projection/matrix builder's fifth argument.
+inline constexpr uintptr_t kReachPlayerViewProjectionOffsetPairOffset = 0x0470;
+// Rasterizer-workspace sub-block layout (REACH-SIGNATURE-EVIDENCE.md, the 0x2B0
+// render-scope snapshot table): primary compact +0x000/0x90, primary derived
+// +0x090/0xC4, secondary compact +0x154/0x90, secondary derived +0x1E4/0xC4.
+inline constexpr uintptr_t kReachCompactCameraSize = 0x0090;
+inline constexpr uintptr_t kReachPrimaryDerivedOffset = 0x0090;
+inline constexpr size_t kReachDerivedBlockSize = 0x00C4;
+inline constexpr uintptr_t kReachSecondaryCompactOffset = 0x0154;
+inline constexpr uintptr_t kReachSecondaryDerivedOffset = 0x01E4;
+// Fields the projection/matrix builder consumes: the derived projection matrix
+// at derived+0x78 and the compact render bounds at compact+0x4C.
+inline constexpr uintptr_t kReachDerivedProjectionOffset = 0x0078;
+inline constexpr uintptr_t kReachCompactRenderBoundsOffset = 0x004C;
 inline constexpr uint64_t kReachRenderFreshnessMaxGapMs = 500;
 inline constexpr uint64_t kReachRenderSafetyIntervalMs = 1000;
 
