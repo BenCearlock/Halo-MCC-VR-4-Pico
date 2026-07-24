@@ -72,6 +72,11 @@ inline constexpr uintptr_t kReachMotionBlurMaxEntryRva = 0x00B3A1C8;
 inline constexpr uintptr_t kReachMotionBlurScaleEntryRva = 0x00B3A1E0;
 inline constexpr uintptr_t kReachMotionBlurMaxValueRva = 0x00B44600;
 inline constexpr uintptr_t kReachMotionBlurScaleValueRva = 0x00B44604;
+// Retail apply_distortions divides the maximum by the scale at both sites.
+// The scale must therefore remain positive even when the maximum is zeroed.
+inline constexpr uintptr_t kReachMotionBlurMaxOverScaleDivideRva = 0x00287561;
+inline constexpr uintptr_t kReachMotionBlurScaledMaxDivideRva = 0x002875AD;
+inline constexpr float kReachMotionBlurMinimumUsableScale = 1.0e-6f;
 inline constexpr uintptr_t kReachPlayerViewCameraStateOffset = 0x03B0;
 inline constexpr uintptr_t kReachPlayerViewCurrentMatricesOffset = 0x0490;
 inline constexpr uintptr_t kReachPlayerViewPreviousMatricesOffset = 0x0760;
@@ -1195,9 +1200,17 @@ inline bool ReachMotionBlurSlotsMatchPinnedImage(
         scaleSlot == expectedScale && maxSlot == expectedMax;
 }
 
-inline bool ReachMotionBlurValuesFinite(float scale, float maximum) noexcept
+inline bool ReachMotionBlurScaleUsable(float scale) noexcept
 {
-    return std::isfinite(scale) && std::isfinite(maximum);
+    return std::isfinite(scale) &&
+        scale > kReachMotionBlurMinimumUsableScale;
+}
+
+inline bool ReachMotionBlurSuppressionValuesValid(
+    float scale, float maximum) noexcept
+{
+    return ReachMotionBlurScaleUsable(scale) &&
+        std::isfinite(maximum) && maximum >= 0.0f;
 }
 
 inline ReachOuterRenderCaller ClassifyReachOuterRenderCaller(

@@ -9477,7 +9477,7 @@ namespace
         uint64_t installedAtMs = 0;
         MotionBlurVar motionBlurVars[2]{};
         bool motionBlurResolved = false;
-        bool motionBlurZeroed = false;
+        bool motionBlurSuppressed = false;
     } g_reachCamera;
     static_assert(std::atomic<int>::is_always_lock_free);
 
@@ -9491,17 +9491,17 @@ namespace
     ReachPlayerViewRenderFn g_reachOrigPlayerViewRender = nullptr;
     ReachMainRenderViewFn g_reachOrigMainRenderView = nullptr;
 
-    // Reach's sequential eye renders otherwise feed the native distortion pass
-    // current-eye matrices plus shared/stale camera history. Match accepted
-    // Halo 3/ODST motion-blur comfort behavior: reassert the two proven native
-    // float controls at each exact normal Reach stereo boundary, retain any
-    // authored values reloaded by tags, and restore only after both detours are
-    // quiescent. These render-hook helpers do no logging, allocation, locking,
-    // or scanning.
+    // Reach's apply_distortions pass divides motion_blur_max by
+    // motion_blur_scale. Zeroing both controls creates 0/0 NaNs in the
+    // translucent screen-space pass. Match accepted Halo 3/ODST comfort
+    // behavior without invalid constants: retain/reassert a positive authored
+    // scale and zero only the maximum at each exact normal stereo boundary.
+    // Restore both authored values only after both detours are quiescent. These
+    // render-hook helpers do no logging, allocation, locking, or scanning.
     bool ReachRestoreMotionBlurValues()
     {
         if (!g_reachCamera.motionBlurResolved ||
-            !g_reachCamera.motionBlurZeroed)
+            !g_reachCamera.motionBlurSuppressed)
         {
             return true;
         }
@@ -9510,7 +9510,7 @@ namespace
             if (!SafeWriteFloat(var.slot, var.original))
                 return false;
         }
-        g_reachCamera.motionBlurZeroed = false;
+        g_reachCamera.motionBlurSuppressed = false;
         return true;
     }
 
@@ -9524,20 +9524,35 @@ namespace
             return;
         }
 
-        // Mark restoration pending before the first possible write. If either
-        // protected read/write fails after a partial mutation, config re-enable
-        // or quiescent teardown must still restore both authored values.
-        g_reachCamera.motionBlurZeroed = true;
-        for (MotionBlurVar& var : g_reachCamera.motionBlurVars)
+        MotionBlurVar& scale = g_reachCamera.motionBlurVars[0];
+        MotionBlurVar& maximum = g_reachCamera.motionBlurVars[1];
+        float currentScale = 0.0f;
+        float currentMaximum = 0.0f;
+        if (!SafeReadFloat(scale.slot, &currentScale) ||
+            !SafeReadFloat(maximum.slot, &currentMaximum) ||
+            !std::isfinite(currentMaximum) || currentMaximum < 0.0f)
         {
-            float current = 0.0f;
-            if (!SafeReadFloat(var.slot, &current) || !isfinite(current))
-                return;
-            if (current != 0.0f)
-                var.original = current;
-            if (!SafeWriteFloat(var.slot, 0.0f))
-                return;
+            return;
         }
+
+        // Tags may reload either control. Preserve a newly authored usable
+        // scale/max, but repair an unexpected zero/near-zero scale by
+        // reasserting the positive value captured at install.
+        if (ReachMotionBlurScaleUsable(currentScale))
+            scale.original = currentScale;
+        if (!ReachMotionBlurScaleUsable(scale.original))
+            return;
+        if (currentMaximum != 0.0f)
+            maximum.original = currentMaximum;
+
+        // Mark restoration pending before the first possible write. If either
+        // protected write fails after a partial mutation, config re-enable or
+        // quiescent teardown must still restore both authored values.
+        g_reachCamera.motionBlurSuppressed = true;
+        if (!SafeWriteFloat(scale.slot, scale.original))
+            return;
+        if (!SafeWriteFloat(maximum.slot, 0.0f))
+            return;
     }
 
     // kReachSecondaryCompactOffset and the derived/render-bounds sub-block
@@ -10793,7 +10808,7 @@ namespace
         if (!DisableAndRemoveReachHooks())
             return false;
 
-        const bool restoreReachBlur = g_reachCamera.motionBlurZeroed;
+        const bool restoreReachBlur = g_reachCamera.motionBlurSuppressed;
         if (!ReachRestoreMotionBlurValues())
         {
             LOG("Reach camera cleanup: could not restore title-native "
@@ -10827,7 +10842,7 @@ namespace
         g_reachCamera.motionBlurVars[0] = {};
         g_reachCamera.motionBlurVars[1] = {};
         g_reachCamera.motionBlurResolved = false;
-        g_reachCamera.motionBlurZeroed = false;
+        g_reachCamera.motionBlurSuppressed = false;
         g_reachOrigPlayerViewRender = nullptr;
         g_reachOrigMainRenderView = nullptr;
         g_reachHelpers = {};
@@ -10889,7 +10904,7 @@ namespace
             !SafeReadFloat(
                 reachMotionBlurScale, &reachMotionBlurScaleOriginal) ||
             !SafeReadFloat(reachMotionBlurMax, &reachMotionBlurMaxOriginal) ||
-            !ReachMotionBlurValuesFinite(
+            !ReachMotionBlurSuppressionValuesValid(
                 reachMotionBlurScaleOriginal, reachMotionBlurMaxOriginal))
         {
             LOG("Reach camera install: exact title-native motion-blur "
@@ -10950,7 +10965,7 @@ namespace
         g_reachCamera.motionBlurVars[1] = {
             reachMotionBlurMax, reachMotionBlurMaxOriginal};
         g_reachCamera.motionBlurResolved = true;
-        g_reachCamera.motionBlurZeroed = false;
+        g_reachCamera.motionBlurSuppressed = false;
         for (int eye = 0; eye < 2; ++eye)
         {
             g_reachRenderFovSerial[eye].store(0, std::memory_order_release);
@@ -10980,7 +10995,7 @@ namespace
             "main_render_view hooked; waiting one-second fresh-camera interval "
             "before arming per-eye stereo");
         LOG("Reach comfort evidence: blurScale=%llX blurMax=%llX "
-            "(authored %.4f/%.4f); VR default is OFF",
+            "(authored %.4f/%.4f); VR default keeps scale finite and zeros max",
             static_cast<unsigned long long>(
                 reinterpret_cast<uintptr_t>(reachMotionBlurScale) - base),
             static_cast<unsigned long long>(

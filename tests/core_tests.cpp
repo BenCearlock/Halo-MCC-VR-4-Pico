@@ -257,10 +257,18 @@ int main()
                   motionBlurTestBase, kReachRetailImageSize - 1,
                   motionBlurTestBase + kReachMotionBlurScaleValueRva,
                   motionBlurTestBase + kReachMotionBlurMaxValueRva) &&
-              ReachMotionBlurValuesFinite(0.35f, 0.08f) &&
-              !ReachMotionBlurValuesFinite(
+              kReachMotionBlurMaxOverScaleDivideRva == 0x00287561 &&
+              kReachMotionBlurScaledMaxDivideRva == 0x002875AD &&
+              ReachMotionBlurSuppressionValuesValid(0.35f, 0.08f) &&
+              ReachMotionBlurSuppressionValuesValid(0.35f, 0.0f) &&
+              !ReachMotionBlurSuppressionValuesValid(0.0f, 0.0f) &&
+              !ReachMotionBlurSuppressionValuesValid(1.0e-6f, 0.08f) &&
+              !ReachMotionBlurSuppressionValuesValid(0.35f, -0.01f) &&
+              !ReachMotionBlurSuppressionValuesValid(
+                  0.35f, std::numeric_limits<float>::infinity()) &&
+              !ReachMotionBlurSuppressionValuesValid(
                   std::numeric_limits<float>::quiet_NaN(), 0.08f),
-            "Reach motion-blur parity accepts only the pinned distinct slots and finite authored values");
+            "Reach blur suppression pins the exact slots/divisions and keeps a positive scale with zero max");
 
         std::array<uint8_t, kReachMainRenderViewAob.size()> exactMask{};
         exactMask.fill(0xFF);

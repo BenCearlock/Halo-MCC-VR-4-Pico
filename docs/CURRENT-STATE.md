@@ -136,14 +136,34 @@ recommended `3400x3468` eye size, with no per-frame allocation or leak evidence.
 Unlike accepted Halo 3 and ODST, Reach still ran its native temporal motion blur.
 Pinned retail and HREK evidence identifies unique type-6 float controls
 `motion_blur_scale` and `motion_blur_max`, authored as `0.35` and `0.08`.
-Reach's duplicated renderer consumes current and previous camera matrices in the
-distortion/motion-blur phase, so sequential eyes can create false other-eye
-velocity that is most visible in fog. The next forward candidate changes only
-this title-native comfort behavior: resolve the two exact pinned slots by name,
-reassert zero at admitted Reach stereo boundaries while the shared
-`motion_blur=0` default is active, honor `motion_blur=1`, and restore authored
-values only after both Reach hooks reach verified quiescence. Camera, culling,
-eye order, projection, and capture remain unchanged.
+This led to the first title-native suppression candidate below. Camera, culling,
+eye order, projection, and capture remained unchanged.
+
+### Unaccepted Reach invalid-distortion-constants result - 2026-07-24
+
+This result is evidence only and does not advance the accepted pointer above.
+
+| Identity | Value |
+| --- | --- |
+| Tested runtime source | `facf6b0713ace0432e709916184d938fc553f4b1` |
+| Candidate package | `out/candidates/facf6b0-reach-camera-20260724-122131028Z` |
+| `halo3xr.dll` SHA-256 | `38BEEF66535A01E0AAC76A6FCFA52117183EEE305F2512663654DB29D6C492A0` |
+| `halo3xr_launcher.exe` SHA-256 | `09E1F0450F2C667E43FF8E63F56CC8B08FA34BF9E458DB85DD64F5DA1D6EB5E7` |
+| Preserved headset evidence | `out/test-runs/facf6b0-reach-alpha-fog-fail-20260724-072511Z` |
+| Headset result | The fog-like contribution remained as a translucent/alpha texture following the head; this was not a valid blur-off result because both distortion operands were zeroed |
+
+The installed hashes and the source identity in the first log line matched the
+package. The full preserved log SHA-256 is
+`380697D91F174E82B944211D515119A4C76058C7E1FFE07DD86AC4EF2C3854F3`.
+The exact retail `apply_distortions` constant builder divides
+`motion_blur_max / motion_blur_scale` at `0x00287561`, then divides the scaled
+maximum by twice the scale at `0x002875AD`; HREK independently performs the same
+operations at `0x0086BBA9` and `0x0086BBF9`. Source `facf6b0` wrote both
+authored controls to zero, so both ratios became `0/0` NaNs inside the
+screen-space distortion pass. The next forward candidate therefore preserves
+and reasserts the positive authored scale and zeros only the maximum. It does
+not change camera history, culling, stereo, projection, capture, depth, or
+controller paths.
 
 ### Reach stock runtime observation - 2026-07-23
 

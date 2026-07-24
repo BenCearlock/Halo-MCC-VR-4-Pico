@@ -176,12 +176,25 @@
       },
       "native_motion_blur_parity": {
         "headset_evidence_source": "86864bd088867a8e67950eb7d013d1c29d9f2d45",
-        "headset_result": "CAMERA_CULLING_STEREO_PASS_TEMPORAL_FOG_HAZE_FAIL",
-        "retail_distortion_matrix_upload_rva_range": "0x0026C956..0x0026C967",
+        "headset_result": "CAMERA_CULLING_STEREO_PASS_THEN_FACF_BOTH_ZERO_DISTORTION_NAN_ALPHA_FAIL",
+        "failed_suppression_source": "facf6b0713ace0432e709916184d938fc553f4b1",
+        "failed_suppression_dll_sha256": "38BEEF66535A01E0AAC76A6FCFA52117183EEE305F2512663654DB29D6C492A0",
+        "failed_suppression_evidence": "out/test-runs/facf6b0-reach-alpha-fog-fail-20260724-072511Z",
+        "retail_water_renderer_setup_argument_rva_range": "0x0026C956..0x0026C967",
+        "retail_water_renderer_setup_target_rva": "0x0025795C",
+        "hrek_water_renderer_setup_target_rva": "0x00812670",
+        "water_renderer_previous_origin_use": "player_view_previous_matrices+0xF0..+0xF8 only for greater-than-five-world-unit movement/camera-cut flag",
         "retail_current_matrix_block": "player_view+0x490",
         "retail_previous_matrix_block": "player_view+0x760",
+        "retail_distortion_constant_builder_rva": "0x00287398",
+        "retail_max_over_scale_divide_rva": "0x00287561",
+        "retail_scaled_max_over_double_scale_divide_rva": "0x002875AD",
         "hrek_apply_distortions_call_rva": "0x008351E6",
         "hrek_distortion_motion_blur_call_rva": "0x00835201",
+        "hrek_distortion_constant_builder_rva": "0x0086B670",
+        "hrek_constant_block_rva_range": "0x0086BA8F..0x0086BC2F",
+        "hrek_max_over_scale_divide_rva": "0x0086BBA9",
+        "hrek_scaled_max_over_double_scale_divide_rva": "0x0086BBF9",
         "controls": {
           "motion_blur_max": {
             "retail_entry_rva": "0x00B3A1C8",
@@ -202,11 +215,11 @@
         },
         "shared_config": "motion_blur",
         "vr_default": "OFF",
-        "production_resolution": "EXACT_NAME_AFTER_PINNED_IMAGE_PREFLIGHT_THEN_REQUIRE_EXACT_RETAIL_VALUE_RVAS_DISTINCT_FINITE",
-        "render_policy": "REASSERT_ZERO_AT_EXACT_NORMAL_ADMITTED_REACH_STEREO_BOUNDARY_WITHOUT_LOGGING_ALLOCATION_LOCKING_OR_SCANNING",
+        "production_resolution": "EXACT_NAME_AFTER_PINNED_IMAGE_PREFLIGHT_THEN_REQUIRE_EXACT_RETAIL_VALUE_RVAS_DISTINCT_POSITIVE_FINITE_SCALE_AND_FINITE_NONNEGATIVE_MAX",
+        "render_policy": "PRESERVE_OR_REASSERT_POSITIVE_AUTHORED_SCALE_AND_ZERO_ONLY_MAX_AT_EXACT_NORMAL_ADMITTED_REACH_STEREO_BOUNDARY_WITHOUT_LOGGING_ALLOCATION_LOCKING_OR_SCANNING",
         "config_enabled_policy": "RESTORE_LATEST_AUTHORED_VALUES",
         "teardown": "DISABLE_BOTH_REACH_HOOKS_PROVE_CALLBACK_AND_RELAY_WRAPPER_RIP_QUIESCENCE_THEN_RESTORE_OR_RETAIN_AND_RETRY",
-        "camera_culling_eye_order_projection_capture_changed": false
+        "camera_culling_history_eye_order_projection_capture_depth_controller_changed": false
       },
       "pre_inner_visibility": {
         "ordering": "AFTER_NORMAL_SETUP_BEFORE_PLAYER_VIEW_RENDER",
@@ -375,7 +388,7 @@
         "exact_prepared_serial_lock_free_head_pad_and_two_eye_snapshot",
         "pre_visibility_head_center_binocular_angular_union_camera_commit",
         "coherent_head_center_player_view_fallback",
-        "reach_native_motion_blur_scale_max_exact_slot_resolution_reassert_and_quiescent_restore",
+        "reach_native_motion_blur_exact_slot_resolution_positive_scale_max_only_zero_and_quiescent_restore",
         "two_eye_engine_camera_rebuild_copyresource_and_projection_fov_publication",
         "callback_wrapper_and_minhook_relay_rip_quiescent_teardown"
       ],
@@ -383,12 +396,12 @@
         "reach_controller_projectile_reticle_and_weapon_body_aim",
         "reach_native_hud_and_arm_ik",
         "exact_finite_distance_cull_coverage_for_translated_eye_origins",
-        "current_forward_native_motion_blur_off_temporal_fog_headset_result",
+        "current_forward_finite_zero_blur_distortion_constants_alpha_fog_headset_result",
         "halo3_and_odst_regression_for_this_exact_shared_binary"
       ],
       "loaded_image_preflight_compiled": true,
       "display_copy_readiness_compiled": true,
-      "runtime_result": "86864bd exact headset test passed stereo, projection, 6DOF, stick/head coherence, and head-owned culling at approximately 94-120 FPS with zero frame-order failures; fog/haze appeared eye-swapped and head-following because Reach native temporal motion blur remained active unlike accepted H3/ODST; exact scale/max suppression is untested",
+      "runtime_result": "86864bd exact headset test passed stereo, projection, 6DOF, stick/head coherence, and head-owned culling at approximately 94-120 FPS with zero frame-order failures; facf6b0 then zeroed both native blur controls and the user still saw an alpha-like head-following texture, but exact retail/HREK analysis proved that policy generated 0/0 NaNs inside apply_distortions, so positive-scale/max-only-zero suppression remains headset-untested",
       "title_hook_plan": "REACH_CAMERA_CORE",
       "runtime_capabilities": [
         "STEREO",
@@ -406,7 +419,7 @@
     },
     "remaining_runtime_proof": [
       "close_peripheral_geometry_result_under_head_center_visibility_policy",
-      "exact_forward_motion_blur_off_fog_haze_has_no_eye_swap_or_head_locked_trail",
+      "exact_forward_positive_scale_max_only_zero_has_no_alpha_fog_eye_swap_or_head_locked_trail",
       "pause_cinematic_split_screen_device_loss_and_title_transition_observation",
       "exact_dll_headset_validation_then_halo3_and_odst_regression"
     ],

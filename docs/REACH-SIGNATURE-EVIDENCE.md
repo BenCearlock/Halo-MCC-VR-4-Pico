@@ -47,6 +47,16 @@ fog/haze contribution that appeared eye-swapped and followed head motion. The
 run is preserved under
 `out/test-runs/86864bd-reach-camera-pass-fog-eye-fail-20260724-120101Z`.
 
+Source `facf6b07` then attempted the shared motion-blur comfort outcome by
+writing both Reach controls below to zero. Its exact DLL
+`38BEEF66535A01E0AAC76A6FCFA52117183EEE305F2512663654DB29D6C492A0`
+ran with the camera/culling transaction intact, but the user still saw a
+translucent/alpha texture following the head. That run is preserved under
+`out/test-runs/facf6b0-reach-alpha-fog-fail-20260724-072511Z`. Static analysis
+after the headset result proved that this was not a valid blur-off experiment:
+the Reach distortion pass divides by `motion_blur_scale`, so setting scale and
+maximum to zero generated invalid shader constants.
+
 The preceding culling defect was pinned to an exact pre-inner stage. Retail
 `main_render_view` performs its visibility work before calling
 `player_view_render`; its cluster lookup at `0x0C3320 -> 0x273458` explicitly
@@ -95,15 +105,25 @@ projection/matrix builder `0x28AF8C` before each inner render.
 ### Reach-native temporal motion-blur parity
 
 The accepted Halo 3 and ODST paths disable title-native camera motion blur by
-default because sequential stereo eyes otherwise make the previous camera the
-other eye. Reach had not yet consumed that shared comfort policy in `86864bd`.
+default. Reach had not yet consumed that shared comfort outcome in `86864bd`.
 Pinned HREK `player_view_render` reaches `apply_distortions` and
 `distortion_apply_and/or_motion_blur` at RVAs `0x8351E6` and `0x835201`.
-Pinned retail uploads the current `player_view+0x490` and previous
-`player_view+0x760` matrix blocks at `0x26C956..0x26C967` before the equivalent
-distortion work. That makes false eye-to-eye velocity an evidence-backed cause
-for a head-motion haze artifact; it does not claim the authored fog shader
-itself is swapped.
+Separately, pinned retail passes current `player_view+0x490` and previous
+`player_view+0x760` matrix blocks at `0x26C956..0x26C967` to
+`water_renderer_setup_for_frame` (`0x25795C`, HREK homolog `0x812670`). That
+routine reads only the previous origin at `+0xF0..+0xF8` for a greater-than-five
+world-unit movement/camera-cut flag. Normal eye/head motion cannot satisfy that
+threshold, so it does not justify changing or mirroring camera history.
+
+The exact retail distortion-constant builder begins at `0x287398`. It loads
+`motion_blur_max` and `motion_blur_scale`, divides maximum by scale at
+`0x287561`, doubles scale, and divides the scaled maximum by that value at
+`0x2875AD`. HREK's homolog begins at `0x86B670`; its exact constant block
+`0x86BA8F..0x86BC2F` performs the same divisions at `0x86BBA9` and `0x86BBF9`.
+HREK profile strings identify the owning work as `apply_distortions` and
+`distortion_apply_and/or_motion_blur`. Thus `facf6b07`'s zero/zero policy
+provably uploaded NaNs into the screen-space distortion path, matching the
+reported alpha-like, head-locked contribution.
 
 Both exact binaries independently expose unique type-6 float debug-table
 entries:
@@ -115,14 +135,17 @@ entries:
 
 Production resolves both exact names only after the pinned loaded-image
 preflight, requires their resolved pointers to equal the proven retail value
-RVAs, and rejects aliases, out-of-image values, or non-finite authored values.
-At each exact normal admitted Reach stereo boundary it reasserts zero while the
-shared `motion_blur=0` VR default is active, without logging, allocation,
-scanning, or locking in the render hook. `motion_blur=1` restores the latest
-authored values. Title teardown first disables both Reach hooks and proves
-callback plus relay/wrapper RIP quiescence, then restores authored values; a
-failed restore retains the module/state and retries. No camera, culling, eye
-order, FOV, render, or capture policy changes in this candidate.
+RVAs, and rejects aliases, out-of-image values, a non-positive/near-zero scale,
+or a non-finite/negative maximum. At each exact normal admitted Reach stereo
+boundary, the forward correction preserves/reasserts a positive authored scale
+and writes only the maximum to zero while the shared `motion_blur=0` VR default
+is active. This makes both proven ratios finite zero without logging,
+allocation, scanning, or locking in the render hook. `motion_blur=1` restores
+both latest authored values. Title teardown first disables both Reach hooks and
+proves callback plus relay/wrapper RIP quiescence, then restores both authored
+values; a failed restore retains the module/state and retries. No camera,
+culling, history-matrix, eye-order, FOV, render, capture, depth, or controller
+policy changes in this candidate.
 
 This document records Reach-specific facts for the cumulative Halo 3 + ODST +
 Reach line. Halo 3 and ODST offsets, layouts, bones, markers, and tag meanings

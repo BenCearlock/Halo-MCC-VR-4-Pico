@@ -228,7 +228,8 @@ struct Config
     // Halo 3's camera motion blur. In two-render stereo its "previous frame"
     // camera is the other eye's, smearing bright content into repeated echoes
     // (the long-standing first-eye ghost). Off is also the VR comfort
-    // standard. 0 = blur scales forced to zero (default), 1 = engine values.
+    // standard. 0 = title-native blur amount suppressed (default), 1 = engine
+    // values.
     bool motion_blur = false;
 
     // (bullet_snap retired: the composed-wrist snap spun the right hand and
