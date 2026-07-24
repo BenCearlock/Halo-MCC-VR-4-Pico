@@ -72,6 +72,16 @@ inline constexpr uintptr_t kReachMotionBlurMaxEntryRva = 0x00B3A1C8;
 inline constexpr uintptr_t kReachMotionBlurScaleEntryRva = 0x00B3A1E0;
 inline constexpr uintptr_t kReachMotionBlurMaxValueRva = 0x00B44600;
 inline constexpr uintptr_t kReachMotionBlurScaleValueRva = 0x00B44604;
+// First-person skeleton PROBE anchors (passive, log-only). The special-bone
+// composer prologue is byte-identical to the accepted Halo 3 composer and
+// matches exactly once in the pinned image; its own body (and the shared
+// compose loop at 0x213188) resolve the animation node table as
+// handle=[model+0x4C], blockBase=blockTable[handle>>28] at
+// kReachNodeRecordBlockTableRva, record i at blockBase+(handle+i*11)*4, with
+// the parent int16 at record+8 (element stride 11 words = 44 bytes). See
+// docs/REACH-SIGNATURE-EVIDENCE.md (first-person facts remain runtime-pending).
+inline constexpr uintptr_t kReachSpecialBoneComposerRva = 0x00213224;
+inline constexpr uintptr_t kReachNodeRecordBlockTableRva = 0x04E39F20;
 // Retail apply_distortions divides the maximum by the scale at both sites.
 // The scale must therefore remain positive even when the maximum is zeroed.
 inline constexpr uintptr_t kReachMotionBlurMaxOverScaleDivideRva = 0x00287561;
