@@ -10504,18 +10504,26 @@ namespace
         }
     }
 
-    // Build a substitute first-person render root whose ORIENTATION follows the
-    // right controller's aim ray, so the whole gun+arms assembly points where
-    // you aim. It PRESERVES root's world translation and scale (the assembly
-    // stays anchored at the camera; only its orientation turns), so a wrong
-    // frame can at worst mis-point the gun -- never fling it off screen. The
-    // basis convention was read live from this exact haloreach.dll (rows
-    // R0=forward, R1=right=cross(worldUp,fwd), R2=up=cross(fwd,right); confirmed
-    // against the logged render root to 3 decimals). The controller ray is
-    // mapped into Halo world yaw/pitch exactly as Game_ComputeAimStick does
-    // (g_gameYawRef + yawSign*(ctrlYaw - headYawRef); pitchSign*ctrlPitch), so
-    // it lands in the same world frame g_aimFwd/root use. Reuses the existing
-    // gun_yaw/pitch/roll_deg knobs; no new config. Deterministic, no allocation.
+    // Build a substitute first-person render root that follows the right
+    // controller in BOTH orientation and POSITION, so the whole gun+arms
+    // assembly points where you aim AND moves with your hand through space
+    // (the earlier build only rotated at a fixed head anchor -- "only rotation,
+    // not location"). ORIENTATION: the basis convention was read live from this
+    // exact haloreach.dll (rows R0=forward, R1=right=cross(worldUp,fwd),
+    // R2=up=cross(fwd,right); confirmed against the logged render root to 3
+    // decimals). The controller ray is mapped into Halo world yaw/pitch exactly
+    // as Game_ComputeAimStick does (g_gameYawRef + yawSign*(ctrlYaw-headYawRef);
+    // pitchSign*ctrlPitch), the same world frame g_aimFwd/root use. LOCATION:
+    // the assembly is translated by the controller's world displacement from
+    // the recenter head reference, using the SAME room->world mapping the
+    // confirmed Halo 3/ODST hands use (ControllerWorldPoseEx), scaled by Reach's
+    // own kReachWorldUnitsPerMeter, plus a forward standoff along the aim ray.
+    // Bounded by hand reach, so it can carry the gun with your hand but never
+    // fling it; still fail-open to the stock root. This is the whole assembly
+    // moving rigidly -- the per-hand wrist anchoring (grip exactly in the hand,
+    // independent left hand for two-handed weapons) needs the Reach wrist bone
+    // name and comes next. Reuses gun_yaw/pitch/roll_deg + gun_forward_m only;
+    // no new config. Deterministic, no allocation.
     bool ReachBuildControllerFpRoot(const BoneMatrix* root, BoneMatrix& out)
     {
         if (!root)
@@ -10560,10 +10568,39 @@ namespace
             }
             for (int i = 0; i < 3; ++i) { R[i] = Rn[i]; U[i] = Un[i]; }
         }
-        out = *root;                                   // keep scale + translation
+        out = *root;                                   // keep scale
         out.rotation[0] = F[0]; out.rotation[1] = F[1]; out.rotation[2] = F[2];
         out.rotation[3] = R[0]; out.rotation[4] = R[1]; out.rotation[5] = R[2];
         out.rotation[6] = U[0]; out.rotation[7] = U[1]; out.rotation[8] = U[2];
+        // LOCATION: translate the assembly to follow the controller's WORLD
+        // position. p (from the aim pose read above) is the controller position
+        // in meters; g_headPosRef/g_headYawRef/g_gameYawRef are the same recenter
+        // references the Reach camera + aim already use. This mirrors the
+        // headset-confirmed ControllerWorldPoseEx displacement, Reach-scaled.
+        const float dx = p[0] - g_headPosRef[0];
+        const float dy = p[1] - g_headPosRef[1];
+        const float dz = p[2] - g_headPosRef[2];
+        const float sh = sinf(g_headYawRef), ch = cosf(g_headYawRef);
+        const float roomFwd = dx * sh - dz * ch;
+        const float roomRight = dx * ch + dz * sh;
+        const float cg = cosf(g_gameYawRef), sg = sinf(g_gameYawRef);
+        const float sMeters = kReachWorldUnitsPerMeter;
+        const float offX = (cg * roomFwd + sg * roomRight) * sMeters;
+        const float offY = (sg * roomFwd - cg * roomRight) * sMeters;
+        const float offZ = dy * sMeters;
+        // Forward standoff seats the gun at arm's length along the aim ray
+        // (reuses gun_forward_m; same clamp as ControllerWorldPoseEx).
+        const float standoff = Clamp(g_config.gun_forward_m, -0.3f, 0.5f) * sMeters;
+        out.translation[0] = root->translation[0] + offX + F[0] * standoff;
+        out.translation[1] = root->translation[1] + offY + F[1] * standoff;
+        out.translation[2] = root->translation[2] + offZ + F[2] * standoff;
+        if (!isfinite(out.translation[0]) || !isfinite(out.translation[1]) ||
+            !isfinite(out.translation[2]))
+        {   // fail-safe: never emit a NaN position -- fall back to the anchor
+            out.translation[0] = root->translation[0];
+            out.translation[1] = root->translation[1];
+            out.translation[2] = root->translation[2];
+        }
         return true;
     }
 
