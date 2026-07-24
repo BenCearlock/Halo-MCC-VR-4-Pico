@@ -10460,6 +10460,65 @@ namespace
         if (count < 0) count = 0;
         if (count > 120) count = 120;
 
+        // ONE-TIME node-record dump to identify the wrist/hands. The palette fn
+        // itself NEVER reads node names/parents (verified by full disasm of
+        // 0x2B4EB0: it only uses count+boneMap+source+root), so the skeleton
+        // identity lives in the render_model's node block, reached via the
+        // descriptor. Probe the layout Codex derived from the sibling composer
+        // 0x213224 for this SAME render_model struct: node-block handle at
+        // descriptor+0x4C, same block table (kReachNodeRecordBlockTableRva),
+        // record i at nodeBlock+(nodeHandle+i*11)*4, string-id@+0, parent@+8
+        // (i16). Also dumps the raw descriptor header + raw node words so the
+        // true field offsets are recoverable from ONE log if this layout is off.
+        // Read-only, SEH-guarded, emitted once. This is what Halo 3's IK matches
+        // (r_hand=0xA6/l_hand=0xA2/camera_control=0xD9) to seat the wrist.
+        static std::atomic<bool> nodesDumped{false};
+        if (count > 0 && !nodesDumped.exchange(true))
+        {
+            const uint8_t* descriptor =
+                blockBase + static_cast<size_t>(modelHandle) * 4u;
+            for (int r = 0; r < 0x60; r += 0x10)
+            {
+                uint32_t w[4] = {0, 0, 0, 0};
+                if (!SafeReadBytes(descriptor + r, w, sizeof(w)))
+                    break;
+                LOG("REACH FPPROBE desc+%02X: %08X %08X %08X %08X",
+                    r, w[0], w[1], w[2], w[3]);
+            }
+            uint32_t nodeHandle = 0;
+            const bool haveNodeHandle = SafeReadBytes(
+                descriptor + 0x4C, &nodeHandle, sizeof(nodeHandle));
+            const uint8_t* nodeBlock = nullptr;
+            bool haveNodeBlock = false;
+            if (haveNodeHandle)
+                haveNodeBlock =
+                    SafeReadBytes(reinterpret_cast<const uint8_t*>(
+                                      base + kReachNodeRecordBlockTableRva) +
+                                      static_cast<size_t>(nodeHandle >> 28) * 8u,
+                                  &nodeBlock, sizeof(nodeBlock)) &&
+                    nodeBlock;
+            LOG("REACH FPPROBE nodes: modelHandle=%08X nodeHandle=%08X "
+                "haveBlock=%d count=%d",
+                modelHandle, nodeHandle, static_cast<int>(haveNodeBlock), count);
+            if (haveNodeBlock)
+                for (int i = 0; i < count && i < 64; ++i)
+                {
+                    const uint8_t* rec =
+                        nodeBlock + (static_cast<size_t>(nodeHandle) +
+                                     static_cast<size_t>(i) * 11u) * 4u;
+                    uint32_t w0 = 0, w1 = 0, w2 = 0, w10 = 0;
+                    int16_t p8 = -1;
+                    SafeReadBytes(rec + 0x00, &w0, 4);
+                    SafeReadBytes(rec + 0x04, &w1, 4);
+                    SafeReadBytes(rec + 0x08, &w2, 4);
+                    SafeReadBytes(rec + 0x08, &p8, 2);
+                    SafeReadBytes(rec + 0x28, &w10, 4);
+                    LOG("REACH FPPROBE node[%d]: id=%08X w1=%08X w2=%08X "
+                        "parent16=%d w10=%08X",
+                        i, w0, w1, w2, static_cast<int>(p8), w10);
+                }
+        }
+
         // Dump the render root's FULL transform (scale, 3x3 rotation, xlate).
         // This is the coordinate-space ground truth for the IK candidate: the
         // palette fn premultiplies EVERY first-person bone by this one matrix
