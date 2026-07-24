@@ -47,7 +47,8 @@ bool ReachAdapter_HookProofComplete(const ReachHookProof& proof)
 bool ReachAdapter_RuntimeHooksPermitted()
 {
     // Controller transport is shared XInput policy, not a Reach engine hook.
-    // Camera, render, aim, movement, HUD, IK, haptics, and lifecycle hooks stay
-    // forbidden in this candidate.
+    // The separately identified render candidate may compile for static gate
+    // testing, but camera, render, aim, movement, HUD, IK, haptics, and
+    // lifecycle hooks stay forbidden in this milestone.
     return false;
 }

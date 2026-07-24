@@ -55,13 +55,16 @@ and does not change either accepted source pointer.
 | Evidence log SHA-256 | `3C36AF1F06FC428E914AB0C71330838587B020335EFBF2B017F8EF178768212D` |
 | Observer result | `OBSERVATIONS_RECORDED_UNASSESSED`, reviewed as limited runtime corroboration |
 
-- Two exact loaded-image preflights passed. Across two admitted sessions the
-  observer recorded 29,507 accepted exact-slot transactions, 29,496 valid camera samples,
+- Two loaded-image preflights passed: the complete `main_render_view` checks
+  were exact, while the frustum check used a unique 24-byte prefix of the
+  canonical 25-byte entry. Across two admitted sessions the observer recorded
+  29,507 accepted exact-slot transactions, 29,496 valid camera samples,
   seven one-second stable windows, zero invalid cameras, zero multi-owner
   intervals, and zero module-snapshot failures.
 - The external observer paused and reset sampling during multi-title
-  ambiguity, ran a full preflight on re-admission, then recorded one Reach
-  unload/title exit.
+  ambiguity, reran source `5d34180`'s preflight (including its unique 24-byte
+  frustum-prefix check) on re-admission, then recorded one Reach unload/title
+  exit.
 - Every transaction was slot 0, so the run corroborates the array base but not
   the `0xA40` stride or split-screen behavior.
 - Subsequent pinned retail/HREK analysis resolved the second caller as Reach's

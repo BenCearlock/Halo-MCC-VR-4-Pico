@@ -484,6 +484,29 @@ foreach ($candidate in $manifest.preliminary_candidates) {
 }
 
 $moduleBytes = [IO.File]::ReadAllBytes($ModulePath)
+$frustumEvidence = @($manifest.preliminary_candidates | Where-Object {
+    $_.id -eq 'viewport'
+})
+if ($frustumEvidence.Count -ne 1) {
+    throw 'Reach evidence manifest must contain exactly one viewport/frustum candidate.'
+}
+$frustumPattern = [int[]]@(Convert-AobTokens `
+    ([string]$frustumEvidence[0].aob) 'frustum helper')
+if ($frustumPattern.Count -ne 25) {
+    throw "Canonical Reach frustum AOB must contain exactly 25 bytes; got $($frustumPattern.Count)."
+}
+$frustumMatches = @(Find-ExecutableAobMatches `
+    $moduleBytes $sections $frustumPattern)
+$frustumRva = [uint64](Convert-HexUInt32 `
+    ([string]$frustumEvidence[0].rva) 'frustum helper RVA')
+if ($frustumMatches.Count -ne 1 -or $frustumMatches[0] -ne $frustumRva) {
+    $rendered = ($frustumMatches | ForEach-Object {
+        '0x{0:X8}' -f $_
+    }) -join ', '
+    throw "Frustum helper AOB mismatch: expected one 25-byte match at 0x$('{0:X8}' -f $frustumRva), got [$rendered]."
+}
+Write-Host ('Function frustum helper: exact 25-byte AOB at RVA 0x{0:X8}' -f `
+    $frustumRva)
 Test-FunctionEvidence -Bytes $moduleBytes -Sections $sections `
     -Evidence $manifest.player_view_transaction.retail.main_render_view `
     -Label 'main_render_view'

@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
-    [switch]$ReachPrivate
+    [switch]$ReachPrivate,
+    [switch]$ReachRenderDisabled
 )
 
 $ErrorActionPreference = 'Stop'
@@ -9,18 +10,33 @@ $candidateRoot = [IO.Path]::GetFullPath(
     (Join-Path $repoRoot 'out\candidates'))
 $expectedCandidateRoot = [IO.Path]::GetFullPath(
     (Join-Path $repoRoot 'out')) + [IO.Path]::DirectorySeparatorChar
-$packagePreset = if ($ReachPrivate) { 'release-reach-private' } else { 'release' }
-$packageBuildDir = if ($ReachPrivate) {
+$packagePreset = if ($ReachRenderDisabled) {
+    'release-reach-render-disabled'
+} elseif ($ReachPrivate) {
+    'release-reach-private'
+} else {
+    'release'
+}
+$packageBuildDir = if ($ReachRenderDisabled) {
+    'out\build\release-reach-render-disabled'
+} elseif ($ReachPrivate) {
     'out\build\release-reach-private'
 } else {
     'out\build\release'
 }
-$validationPresets = if ($ReachPrivate) {
+$validationPresets = if ($ReachRenderDisabled) {
+    @('release-reach-render-disabled')
+} elseif ($ReachPrivate) {
     @('release-reach-private')
 } else {
     @('release')
 }
-$reachEnabled = [bool]$ReachPrivate
+$reachEnabled = [bool]($ReachPrivate -or $ReachRenderDisabled)
+$reachRenderCompiled = [bool]$ReachRenderDisabled
+
+if ($ReachPrivate -and $ReachRenderDisabled) {
+    throw 'Choose either -ReachPrivate or -ReachRenderDisabled, not both.'
+}
 
 if (-not $candidateRoot.StartsWith(
         $expectedCandidateRoot,
@@ -56,7 +72,9 @@ try {
             throw "CMake configure failed for preset $preset."
         }
 
-        $presetBuildDir = if ($preset -eq 'release-reach-private') {
+        $presetBuildDir = if ($preset -eq 'release-reach-render-disabled') {
+            'out\build\release-reach-render-disabled'
+        } elseif ($preset -eq 'release-reach-private') {
             'out\build\release-reach-private'
         } else {
             'out\build\release'
@@ -67,7 +85,9 @@ try {
                 '(?m)^HALOMCCVR_EXPERIMENTAL_ODST_BRINGUP:BOOL=ON\r?$') {
             throw "Refusing to package: ODST is not ON in preset $preset."
         }
-        $expectedReach = if ($preset -eq 'release-reach-private') {
+        $expectedReach = if ($preset -in @(
+                'release-reach-private',
+                'release-reach-render-disabled')) {
             'ON'
         } else {
             'OFF'
@@ -76,6 +96,13 @@ try {
             "(?m)^HALOMCCVR_EXPERIMENTAL_REACH_BRINGUP:BOOL=$expectedReach\r?$"
         if ($cache -notmatch $reachPattern) {
             throw "Refusing to package: Reach is not $expectedReach in preset $preset."
+        }
+        $expectedRenderCandidate = if (
+                $preset -eq 'release-reach-render-disabled') { 'ON' } else { 'OFF' }
+        $renderCandidatePattern =
+            "(?m)^HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE:BOOL=$expectedRenderCandidate\r?$"
+        if ($cache -notmatch $renderCandidatePattern) {
+            throw "Refusing to package: disabled Reach render candidate is not $expectedRenderCandidate in preset $preset."
         }
 
         & cmake --build --preset $preset --clean-first
@@ -89,6 +116,14 @@ try {
         }
     }
 
+    if ($ReachRenderDisabled) {
+        & powershell -NoProfile -ExecutionPolicy Bypass -File `
+            (Join-Path $repoRoot 'tools\reach-preflight.ps1')
+        if ($LASTEXITCODE -ne 0) {
+            throw 'Reach offline evidence preflight failed.'
+        }
+    }
+
     $finalCommit = (& git -C $repoRoot rev-parse HEAD).Trim()
     $finalStatus =
         @(& git -C $repoRoot status --porcelain=v1 --untracked-files=normal)
@@ -98,7 +133,13 @@ try {
     }
 
     $createdUtc = [DateTime]::UtcNow
-    $packageKind = if ($ReachPrivate) { 'reach-private' } else { 'release' }
+    $packageKind = if ($ReachRenderDisabled) {
+        'reach-render-disabled'
+    } elseif ($ReachPrivate) {
+        'reach-private'
+    } else {
+        'release'
+    }
     $packageId = '{0}-{1}-{2}' -f $commit.Substring(0, 7), $packageKind,
         $createdUtc.ToString("yyyyMMdd-HHmmssfff'Z'")
     $packageDir = Join-Path $candidateRoot $packageId
@@ -131,7 +172,7 @@ try {
         (Get-FileHash -LiteralPath $launcherPath -Algorithm SHA256).Hash
 
     $manifest = [ordered]@{
-        schema_version = 2
+        schema_version = 3
         status = 'UNTESTED_LOCAL_CANDIDATE'
         accepted = $false
         package_id = $packageId
@@ -142,8 +183,12 @@ try {
             source_commit = $commit
             HALOMCCVR_EXPERIMENTAL_ODST_BRINGUP = $true
             HALOMCCVR_EXPERIMENTAL_REACH_BRINGUP = $reachEnabled
+            HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE =
+                $reachRenderCompiled
         }
         reach_controller_input_enabled = $reachEnabled
+        reach_render_candidate_compiled = $reachRenderCompiled
+        reach_render_candidate_enabled = $false
         reach_runtime_hooks_enabled = $false
         base_release = 'MCC_VR_ALPHA_0.2.2'
         files = [ordered]@{

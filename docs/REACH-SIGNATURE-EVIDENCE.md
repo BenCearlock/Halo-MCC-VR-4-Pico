@@ -43,7 +43,7 @@ recorded below; the other three have not.
 
 | Candidate | RVA | Loaded-image unique | Executable range | ABI | Callers | Data flow | HREK semantics | Layout fields | Status |
 | --- | ---: | --- | --- | --- | --- | --- | --- | --- | --- |
-| Camera-derived frustum bounds (original viewport hypothesis) | `0x287F58` | Exact stock observer passed the unique loaded-image check twice; production must repeat it | Yes, `.text`, `0x287F58`-`0x2881CC` | Yes | Nine direct callers | Yes | Yes | Static consumers and producer proven; live lifetime still open | Static role proven; hook forbidden |
+| Camera-derived frustum bounds (original viewport hypothesis) | `0x287F58` | Stock observer found the 24-byte prefix unique twice; canonical byte 25 was not rerun | Yes, `.text`, `0x287F58`-`0x2881CC` | Yes | Nine direct callers | Yes | Yes | Static consumers and producer proven; live lifetime still open | Static role proven; hook forbidden |
 | First-person camera upload | `0x282D60` | No | Offline file only | No | No | No | No | No | Unproven |
 | Visible palette | `0x2B4EB0` | No | Offline file only | No | No | No | No | No | Unproven |
 | Special-bone composer | `0x213224` | No | Offline file only | No | No | No | No | No | Unproven |
@@ -143,13 +143,14 @@ Retail constants used by the centering/scaling math are `0.5f` and `2.0f`.
 
 ### Remaining gate
 
-The exact external stock observer repeated the exactly-one scan and loaded
-range checks successfully in two admitted sessions. Any future production
-runtime must independently repeat that cold preflight and fail open on a
+The exact external stock observer found the first 24 bytes unique at the
+expected RVA and repeated the loaded-range checks in two admitted sessions. It
+did not check canonical byte 25. Any future production runtime must scan all 25
+bytes, require exactly one match at the expected RVA, and fail open on a
 mismatch. The player-view transaction proof below still does not make this
 shared helper a safe hook. Caller scope, hook-time camera/workspace lifetime
-and full snapshot/restore, live capture-target lifetime, production
-finite/range guards, teardown, and headset validation remain required.
+and full snapshot/restore, live capture-target lifetime, production finite/range
+guards, teardown, and headset validation remain required.
 Therefore `proof_complete` and `hook_eligible` remain false.
 
 ## Player-view prepare/render transaction
@@ -508,8 +509,8 @@ placement, and transaction-scoped clear are closed. Before a Reach hook is
 eligible, the remaining runtime-evidence and implementation gates are:
 
 - production exact-return routing for the normal caller, stock-only routing for
-  screenshot and unknown callers, and repetition of the exactly-one
-  loaded-image checks;
+  screenshot and unknown callers, and complete exactly-one loaded-image checks
+  including all 25 canonical frustum bytes;
 - production enforcement of the now-observed continuous camera freshness and
   one-second safety interval;
 - production propagation of the outer normal-owner token into the proven inner
@@ -528,6 +529,50 @@ eligible, the remaining runtime-evidence and implementation gates are:
 
 Accordingly, all Reach `proof_complete` and `hook_eligible` fields remain
 false.
+
+## Disabled render-candidate scaffold
+
+The Halo 3 behavior being matched is one synchronous two-pass transaction at
+the inner view renderer: configurable eye order, identical stock starting
+state, complete engine-owned world/first-person/native-CHUD work once per eye,
+immediate eye capture, and restoration after the pair. In Reach, the entire
+source-named `player_view_render` remains indivisible because its world,
+effects, first-person, and conditional CHUD subpasses interleave.
+
+`HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE=ON` now compiles a separate,
+inert policy scaffold. It pins the canonical 32-byte `main_render_view`,
+69-byte masked `player_view_render`, and 25-byte frustum entries and implements
+allocation-free pure gates for:
+
+- exact normal, screenshot, and unknown outer-return routing;
+- slot-zero workspace/player-view validation and the pre-push depth limit;
+- opaque module-base/generation-bound preflight, freshness, prepared-frame, and
+  direct-copy tokens; freshness is also bound to the exact frame serial,
+  observation nonce/time, live gate state, and one-time owner consumption;
+- monotonic-generation, non-reentrant, single-prepared-serial outer ownership
+  with generation-and-serial-keyed finish/abort and live-owner validation in
+  final action selection;
+- exact inner return edge, active-view, depth, top-workspace, callback,
+  render-camera owner, specialization-zero, camera-validity, copy-readiness,
+  and teardown checks;
+- strict camera freshness that can cross one second only on a new valid
+  transaction with every gap below 500 ms;
+- Halo 3-compatible configurable pass order, with invalid passes authorizing
+  no write, `+0xA30` false on the inserted first pass, and the original byte on
+  the final pass; and
+- the exact `0x2B0`, `0xC8`, and `0x2D0` rollback envelopes without treating
+  the full `0xA40` player view as reversible state, plus a pure cleanup gate
+  that tracks both passes as dirty and is the only source of the exact clean
+  completion/abort token required to release an owner.
+
+This scaffold has no loaded-PE production scanner, no MinHook installation
+path, no camera or engine-memory write, no Reach `CopyResource`, and no Reach
+lifecycle or capability publication. `TitleHookPlan::None`,
+`TitleCapability_None`, and `ReachAdapter_RuntimeHooksPermitted()==false`
+remain unchanged. The runtime wrapper supplies false authorization, so an
+otherwise complete proof and scope still select stock-once. The separate option
+exists so controller-only build identity cannot be confused with
+render-candidate compilation.
 
 ## Controller-input-only candidate behavior
 
@@ -575,6 +620,10 @@ Before sampling, it verifies the pinned backing-file hash, loaded PE identity,
 exactly-one executable-section matches at the expected `main_render_view` and
 frustum RVAs, the complete `main_render_view` body hash, six proven `rel32`
 edges, and committed readable `MEM_IMAGE` ownership for the fixed data ranges.
+The accepted source `5d34180` used the first 24 bytes of the canonical 25-byte
+frustum entry, omitting its terminal `0x50`. Its run therefore proves that
+24-byte prefix unique at the expected RVA, not the full documented entry in
+loaded memory. Current source checks all 25 bytes but has not been re-run.
 Its final snapshot rechecks the same Reach mapping, absence of `halo3xr.dll`,
 and Reach as the sole resident title module. It re-runs that preflight after
 every observed Reach unload/reload and pauses when another title module makes

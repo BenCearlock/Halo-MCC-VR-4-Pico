@@ -58,6 +58,18 @@ endif()
 option(HALOMCCVR_EXPERIMENTAL_REACH_BRINGUP
     "Compile private Halo: Reach controller-input admission" OFF)
 
+# Separate from controller admission: this compiles allocation-free routing,
+# ownership, freshness, pass-order, and rollback policy only. It does not add a
+# title hook plan or any reachable MinHook/camera/capture path.
+option(HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE
+    "Compile the disabled Halo: Reach render-candidate scaffold" OFF)
+
+if(HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE AND
+        NOT HALOMCCVR_EXPERIMENTAL_REACH_BRINGUP)
+    message(FATAL_ERROR
+        "The disabled Reach render candidate requires Reach controller bring-up ON")
+endif()
+
 if(HALOMCCVR_EXPERIMENTAL_REACH_BRINGUP)
     set(HALOMCCVR_BUILD_REACH "ON")
     message(STATUS
@@ -66,8 +78,15 @@ else()
     set(HALOMCCVR_BUILD_REACH "OFF")
     message(STATUS "Halo MCC VR: Reach remains stock")
 endif()
+if(HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE)
+    set(HALOMCCVR_BUILD_REACH_RENDER "COMPILED-DISABLED")
+    message(STATUS
+        "Halo MCC VR: Reach render candidate compiled; runtime hooks remain disabled")
+else()
+    set(HALOMCCVR_BUILD_REACH_RENDER "OFF")
+endif()
 message(STATUS
-    "Halo MCC VR build identity: ${HALOMCCVR_BUILD_COMMIT}, ODST=${HALOMCCVR_BUILD_ODST}, Reach=${HALOMCCVR_BUILD_REACH}")
+    "Halo MCC VR build identity: ${HALOMCCVR_BUILD_COMMIT}, ODST=${HALOMCCVR_BUILD_ODST}, Reach=${HALOMCCVR_BUILD_REACH}, ReachRender=${HALOMCCVR_BUILD_REACH_RENDER}")
 
 # Exact dependency commits used by the accepted release source. Shallow clones
 # avoid pulling entire third-party histories into the ignored build tree.
@@ -126,14 +145,19 @@ add_library(halo3xr SHARED
     src/dll/input.cpp
     src/dll/title_adapter.cpp
     src/dll/reach_adapter.cpp)
+if(HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE)
+    target_sources(halo3xr PRIVATE src/dll/reach_render_candidate.cpp)
+endif()
 target_compile_definitions(halo3xr PRIVATE
     UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN
     XR_USE_GRAPHICS_API_D3D11 XR_USE_PLATFORM_WIN32
     HALOMCCVR_EXPERIMENTAL_ODST_BRINGUP=$<BOOL:${HALOMCCVR_EXPERIMENTAL_ODST_BRINGUP}>
     HALOMCCVR_EXPERIMENTAL_REACH_BRINGUP=$<BOOL:${HALOMCCVR_EXPERIMENTAL_REACH_BRINGUP}>
+    HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE=$<BOOL:${HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE}>
     HALOMCCVR_BUILD_COMMIT="${HALOMCCVR_BUILD_COMMIT}"
     HALOMCCVR_BUILD_ODST="${HALOMCCVR_BUILD_ODST}"
-    HALOMCCVR_BUILD_REACH="${HALOMCCVR_BUILD_REACH}")
+    HALOMCCVR_BUILD_REACH="${HALOMCCVR_BUILD_REACH}"
+    HALOMCCVR_BUILD_REACH_RENDER="${HALOMCCVR_BUILD_REACH_RENDER}")
 target_link_libraries(halo3xr PRIVATE
     openxr_loader minhook imgui_lib
     d3d11 dxgi d3dcompiler)
@@ -171,11 +195,16 @@ if(BUILD_TESTING)
         src/common/config.cpp
         src/common/log.cpp
         src/dll/reach_adapter.cpp)
+    if(HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE)
+        target_sources(halomccvr_core_tests PRIVATE
+            src/dll/reach_render_candidate.cpp)
+    endif()
     target_include_directories(halomccvr_core_tests PRIVATE src/common src/dll)
     target_compile_definitions(halomccvr_core_tests PRIVATE
         UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN
         HALOMCCVR_EXPERIMENTAL_ODST_BRINGUP=$<BOOL:${HALOMCCVR_EXPERIMENTAL_ODST_BRINGUP}>
-        HALOMCCVR_EXPERIMENTAL_REACH_BRINGUP=$<BOOL:${HALOMCCVR_EXPERIMENTAL_REACH_BRINGUP}>)
+        HALOMCCVR_EXPERIMENTAL_REACH_BRINGUP=$<BOOL:${HALOMCCVR_EXPERIMENTAL_REACH_BRINGUP}>
+        HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE=$<BOOL:${HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE}>)
     add_test(NAME halomccvr_core_tests COMMAND halomccvr_core_tests)
 endif()
 

@@ -44,6 +44,21 @@ rendering, camera, aim and movement transforms, HUD, IK, haptics, lifecycle,
 and runtime capabilities disabled. Reach-OFF validation remains a separate
 milestone/promotion regression gate.
 
+To compile and test the next render-policy slice without making any Reach
+detour reachable:
+
+```powershell
+cmake --preset release-reach-render-disabled
+cmake --build --preset release-reach-render-disabled
+ctest --preset release-reach-render-disabled
+```
+
+This third preset keeps Halo 3, ODST, and Reach controller transport intact and
+adds only allocation-free Reach routing/ownership/rollback policy. Its build
+identity reports `ReachRender COMPILED-DISABLED`; `TitleHookPlan::None`, zero
+Reach runtime capabilities, and the hard runtime-hook gate remain unchanged.
+It performs no loaded-process scan, detour, camera mutation, or eye capture.
+
 ## Verify local Reach evidence
 
 After installing and extracting the official HREK, run the offline preflight:
@@ -143,9 +158,20 @@ powershell -NoProfile -ExecutionPolicy Bypass -File `
   .\tools\package-candidate.ps1 -ReachPrivate
 ```
 
-That command rebuilds and tests the Reach-ON Release tree before staging it.
-Reach-OFF is reserved for the milestone/promotion regression gate rather than
-blocking each routine Reach behavior candidate.
+For the compiled-but-inert Reach render scaffold, use:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File `
+  .\tools\package-candidate.ps1 -ReachRenderDisabled
+```
+
+That mode additionally runs the offline Reach evidence preflight and records
+separate `reach_render_candidate_compiled`, `reach_render_candidate_enabled`,
+and `reach_runtime_hooks_enabled` fields. The latter two fields remain false.
+
+Each command rebuilds and tests its selected Release preset before staging it.
+The two Reach switches select controller-only or compiled-inert candidates;
+the default command retains the cumulative Reach-OFF regression gate.
 
 The command refuses a dirty worktree, reconfigures, rebuilds, reruns tests, and
 creates a new directory such as:

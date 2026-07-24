@@ -17,7 +17,8 @@
         "BUILD_TESTING": "ON",
         "FETCHCONTENT_BASE_DIR": "${sourceDir}/out/deps",
         "HALOMCCVR_EXPERIMENTAL_ODST_BRINGUP": "ON",
-        "HALOMCCVR_EXPERIMENTAL_REACH_BRINGUP": "OFF"
+        "HALOMCCVR_EXPERIMENTAL_REACH_BRINGUP": "OFF",
+        "HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE": "OFF"
       }
     },
     {
@@ -34,7 +35,26 @@
         "FETCHCONTENT_SOURCE_DIR_MINHOOK": "${sourceDir}/out/deps/minhook-src",
         "FETCHCONTENT_SOURCE_DIR_IMGUI": "${sourceDir}/out/deps/imgui-src",
         "HALOMCCVR_EXPERIMENTAL_ODST_BRINGUP": "ON",
-        "HALOMCCVR_EXPERIMENTAL_REACH_BRINGUP": "ON"
+        "HALOMCCVR_EXPERIMENTAL_REACH_BRINGUP": "ON",
+        "HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE": "OFF"
+      }
+    },
+    {
+      "name": "release-reach-render-disabled",
+      "displayName": "Halo MCC VR disabled Reach render candidate",
+      "description": "x64 Halo 3 + ODST + Reach controller build with inert render scaffold and no Reach runtime hooks",
+      "generator": "Visual Studio 17 2022",
+      "architecture": "x64",
+      "binaryDir": "${sourceDir}/out/build/release-reach-render-disabled",
+      "cacheVariables": {
+        "BUILD_TESTING": "ON",
+        "FETCHCONTENT_BASE_DIR": "${sourceDir}/out/deps/reach-render-disabled",
+        "FETCHCONTENT_SOURCE_DIR_OPENXR": "${sourceDir}/out/deps/openxr-src",
+        "FETCHCONTENT_SOURCE_DIR_MINHOOK": "${sourceDir}/out/deps/minhook-src",
+        "FETCHCONTENT_SOURCE_DIR_IMGUI": "${sourceDir}/out/deps/imgui-src",
+        "HALOMCCVR_EXPERIMENTAL_ODST_BRINGUP": "ON",
+        "HALOMCCVR_EXPERIMENTAL_REACH_BRINGUP": "ON",
+        "HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE": "ON"
       }
     }
   ],
@@ -47,6 +67,11 @@
     {
       "name": "release-reach-private",
       "configurePreset": "release-reach-private",
+      "configuration": "Release"
+    },
+    {
+      "name": "release-reach-render-disabled",
+      "configurePreset": "release-reach-render-disabled",
       "configuration": "Release"
     }
   ],
@@ -62,6 +87,14 @@
     {
       "name": "release-reach-private",
       "configurePreset": "release-reach-private",
+      "configuration": "Release",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "release-reach-render-disabled",
+      "configurePreset": "release-reach-render-disabled",
       "configuration": "Release",
       "output": {
         "outputOnFailure": true

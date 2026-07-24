@@ -262,6 +262,43 @@
       "final_eye_actual_post_call_flag_must_persist": true,
       "wait_for_gpu_final_eye_policy_runtime_validated": false
     },
+    "disabled_render_candidate": {
+      "status": "COMPILED_INERT_POLICY_SLICE",
+      "build_option": "HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE",
+      "build_option_requires_controller_bringup": true,
+      "implementation": [
+        "src/common/reach_render_logic.h",
+        "src/dll/reach_render_candidate.h",
+        "src/dll/reach_render_candidate.cpp"
+      ],
+      "implemented_pure_gates": [
+        "canonical_main_inner_and_frustum_signature_bytes",
+        "full_frustum_match_count_expected_rva_and_executable_range_gate",
+        "exact_normal_screenshot_unknown_outer_return_classification",
+        "slot0_workspace_player_view_and_pre_push_depth_validation",
+        "opaque_epoch_bound_preflight_freshness_prepared_frame_and_direct_copy_tokens",
+        "freshness_exact_serial_nonce_time_live_state_and_one_time_owner_consumption",
+        "monotonic_generation_non_reentrant_single_serial_outer_token_live_selection_and_keyed_cleanup",
+        "exact_inner_return_active_view_depth_top_callback_render_owner_and_specialization_validation",
+        "strict_one_second_freshness_advanced_only_by_valid_transactions",
+        "halo3_compatible_configurable_eye_pass_order",
+        "checked_first_pass_false_final_pass_original_last_window_policy",
+        "bounded_workspace_camera_state_and_matrix_rollback_layout_and_owner_coupled_cleanup_tokens"
+      ],
+      "not_implemented": [
+        "loaded_pe_runtime_scanner_and_body_hashing",
+        "outer_or_inner_detour_installation",
+        "inside_scope_camera_rebuild_or_any_engine_write",
+        "cold_swapchain_buffer0_validation_or_eye_copy",
+        "reach_lifecycle_heartbeat_or_runtime_capability_publication",
+        "callback_quiescence_or_detour_teardown"
+      ],
+      "title_hook_plan": "NONE",
+      "runtime_capabilities": "NONE",
+      "runtime_hooks_permitted": false,
+      "engine_memory_mutation_reachable": false,
+      "stereo_action_reachable": false
+    },
     "remaining_runtime_proof": [
       "production_runtime_repeats_loaded_image_preflight",
       "production_exact_normal_return_and_stock_only_alternate_unknown_routing",
@@ -328,7 +365,11 @@
       "machine_timestamp_and_size_of_image": true,
       "main_render_view_executable_aob_exactly_once_at_expected_rva": true,
       "main_render_view_body_sha256": true,
-      "frustum_executable_aob_exactly_once_at_expected_rva": true,
+      "frustum_executable_prefix_bytes": 24,
+      "frustum_executable_prefix_exactly_once_at_expected_rva": true,
+      "canonical_frustum_aob_bytes": 25,
+      "canonical_frustum_terminal_byte_checked_by_source_5d34180": false,
+      "current_source_checks_canonical_frustum_aob": true,
       "rel32_edge_count": 6,
       "fixed_ranges_require_committed_readable_mem_image": true,
       "mapping_and_contamination_rechecked": true,
@@ -433,8 +474,8 @@
         "observed_unload_then_unambiguous_preflight": false
       }
     ],
-    "loaded_image_proof_complete": true,
-    "loaded_image_proof_scope": "EXACT_PINNED_EXTERNAL_STOCK_PREFLIGHT_ONLY",
+    "loaded_image_proof_complete": false,
+    "loaded_image_proof_scope": "MAIN_EXACT_FRUSTUM_UNIQUE_24_BYTE_PREFIX_ONLY",
     "continuous_freshness_proof_complete": true,
     "continuous_freshness_proof_scope": "OBSERVED_SLOT0_SINGLE_OWNER_ONLY_IN_TWO_ADMISSION_SESSIONS",
     "lifecycle_proof_complete": false,

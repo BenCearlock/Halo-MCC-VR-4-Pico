@@ -185,6 +185,13 @@ The redirected stdout is byte-identical; stderr is empty. The observer's final
 result was `OBSERVATIONS_RECORDED_UNASSESSED`; review accepts only the limited
 runtime corroboration stated here.
 
+Source `5d34180` checked the first 24 bytes of the documented 25-byte frustum
+entry and did not compare the terminal `0x50`. That 24-byte prefix was unique
+at the expected RVA in both preflights, so the location evidence remains
+useful, but the historical run is not evidence that loaded byte 25 matched.
+Current observer source checks all 25 bytes; it has not been re-run and does not
+retroactively expand the accepted run's scope.
+
 - Aggregate: two passing loaded-image preflights, one observed Reach
   unload/title exit, three ambiguity entries, zero module-snapshot failures,
   29,507 accepted exact-slot transactions, 29,496 valid cameras, zero invalid cameras,
@@ -196,18 +203,20 @@ runtime corroboration stated here.
 - Reach was re-admitted with the same observed mapping identity after the shell
   ambiguity. No unload/reload was recorded between these sessions, and a
   same-identity reload between 100 ms polls remains unobservable. Generation 2
-  passed the full loaded-image preflight again, then ended on an explicit Reach
-  unload/title exit with 18,259 transactions, 18,258 valid cameras, one
+  passed source `5d34180`'s loaded-image preflight again, including its unique
+  24-byte frustum-prefix check, then ended on an explicit Reach unload/title
+  exit with 18,259 transactions, 18,258 valid cameras, one
   discarded torn snapshot, two stable windows, and a 134,875 ms longest fresh
   span.
 - Every classified transaction used slot 0 (`slotMask=0x1`). This
   runtime-corroborates the array base, not the `0xA40` stride or split-screen
   behavior.
 
-This closes the exact external stock loaded-image preflight and continuous
-observed single-owner freshness for these sessions. The external observer also
-paused and reset sampling on ambiguity, ran a full preflight on re-admission,
-and recorded one observed unload. It does not prove equivalent production-hook
+This closes the exact main-render loaded-image checks, the unique 24-byte
+frustum-prefix location, and continuous observed single-owner freshness for
+these sessions. The external observer also paused and reset sampling on
+ambiguity, reran that source-`5d34180` preflight on re-admission, and recorded
+one observed unload. It does not prove equivalent production-hook
 behavior, make the player-view transaction proof complete, or authorize a
 detour.
 

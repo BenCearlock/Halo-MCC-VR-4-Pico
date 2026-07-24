@@ -17,6 +17,8 @@
 #include "odst_bringup_logic.h"
 #include "reach_adapter.h"
 #include "reach_observer_logic.h"
+#include "reach_render_candidate.h"
+#include "reach_render_logic.h"
 #include "scope_logic.h"
 #include "title_registry.h"
 #include "title_runtime_state.h"
@@ -32,6 +34,25 @@ namespace
             std::cerr << "FAIL: " << message << '\n';
             ++g_failures;
         }
+    }
+
+    ReachRenderCandidateProof CompleteReachRenderCandidateProof()
+    {
+        ReachRenderCandidateProof proof{};
+        proof.retailIdentity = true;
+        proof.mainRenderViewMatchCount = 1;
+        proof.mainRenderViewAtExpectedRva = true;
+        proof.mainRenderViewBodyHash = true;
+        proof.playerViewRenderMatchCount = 1;
+        proof.playerViewRenderAtExpectedRva = true;
+        proof.playerViewRenderBodyHash = true;
+        proof.frustumHelperMatchCount = 1;
+        proof.frustumHelperAtExpectedRva = true;
+        proof.frustumHelperExecutableRange = true;
+        proof.exactOuterCallerEdges = true;
+        proof.exactInnerCallerEdge = true;
+        proof.fixedDataRanges = true;
+        return proof;
     }
 
     std::string ReadTextFile(const std::filesystem::path& path)
@@ -167,6 +188,446 @@ int main()
                   !transactionGate.Observe(0) &&
                   transactionGate.Observe(playerArray + playerStride),
             "Reach continuity reset requires a new witnessed clear");
+    }
+
+    {
+        static_assert(kReachMainRenderViewAob.size() == 32);
+        static_assert(kReachPlayerViewRenderAob.size() == 69);
+        static_assert(kReachFrustumHelperAob.size() == 25);
+        Check(std::string_view(kReachMainRenderViewBodySha256) ==
+                  "95DF3EFFF9AC6EE29887D1272CCA8D7BF3E58F87041BAD8032107825B733FE89" &&
+              std::string_view(kReachPlayerViewRenderBodySha256) ==
+                  "2628D1189621EACED7C95A1F295815D70E7783054F1C3CBA46799F838CC33C60" &&
+              kReachMainRenderViewBodySize == 515 &&
+              kReachPlayerViewRenderBodySize == 2314,
+            "Reach render candidate pins both exact body identities");
+
+        std::array<uint8_t, kReachMainRenderViewAob.size()> exactMask{};
+        exactMask.fill(0xFF);
+        std::array<uint8_t, kReachMainRenderViewAob.size() * 2 + 1>
+            repeatedMain{};
+        std::memcpy(repeatedMain.data(), kReachMainRenderViewAob.data(),
+                    kReachMainRenderViewAob.size());
+        std::memcpy(repeatedMain.data() + kReachMainRenderViewAob.size() + 1,
+                    kReachMainRenderViewAob.data(),
+                    kReachMainRenderViewAob.size());
+        Check(CountReachMaskedPattern(
+                  repeatedMain.data(), repeatedMain.size(),
+                  kReachMainRenderViewAob.data(), exactMask.data(),
+                  kReachMainRenderViewAob.size()) == 2,
+            "Reach render scanner counts every exact executable candidate");
+
+        auto playerEntry = kReachPlayerViewRenderAob;
+        playerEntry[49] = 0x12;
+        playerEntry[50] = 0x34;
+        playerEntry[51] = 0x56;
+        playerEntry[52] = 0x78;
+        Check(CountReachMaskedPattern(
+                  playerEntry.data(), playerEntry.size(),
+                  kReachPlayerViewRenderAob.data(),
+                  kReachPlayerViewRenderAobMask.data(),
+                  kReachPlayerViewRenderAob.size()) == 1,
+            "Reach inner signature wildcards only the four cookie-displacement bytes");
+        playerEntry[48] ^= 1;
+        Check(CountReachMaskedPattern(
+                  playerEntry.data(), playerEntry.size(),
+                  kReachPlayerViewRenderAob.data(),
+                  kReachPlayerViewRenderAobMask.data(),
+                  kReachPlayerViewRenderAob.size()) == 0,
+            "Reach inner signature rejects a changed non-cookie byte");
+
+        auto frustumEntry = kReachFrustumHelperAob;
+        std::array<uint8_t, kReachFrustumHelperAob.size()> frustumMask{};
+        frustumMask.fill(0xFF);
+        Check(CountReachMaskedPattern(
+                  frustumEntry.data(), frustumEntry.size(),
+                  kReachFrustumHelperAob.data(), frustumMask.data(),
+                  kReachFrustumHelperAob.size()) == 1,
+            "Reach production pattern pins the canonical 25-byte frustum entry");
+        frustumEntry.back() ^= 1;
+        Check(CountReachMaskedPattern(
+                  frustumEntry.data(), frustumEntry.size(),
+                  kReachFrustumHelperAob.data(), frustumMask.data(),
+                  kReachFrustumHelperAob.size()) == 0,
+            "Reach production pattern checks the byte omitted by the historical observer");
+        Check(CountReachMaskedPattern(
+                  nullptr, 1, kReachMainRenderViewAob.data(), exactMask.data(),
+                  kReachMainRenderViewAob.size()) == 0 &&
+              CountReachMaskedPattern(
+                  repeatedMain.data(), repeatedMain.size(), nullptr,
+                  exactMask.data(), kReachMainRenderViewAob.size()) == 0,
+            "Reach masked scanning fails closed on invalid buffers");
+
+        ReachRenderCandidateProof proof =
+            CompleteReachRenderCandidateProof();
+        Check(ReachRenderCandidateProofComplete(proof),
+            "Reach render proof requires every exact static preflight gate");
+        const auto proofRejects = [&proof](auto mutate)
+        {
+            auto candidate = proof;
+            mutate(candidate);
+            return !ReachRenderCandidateProofComplete(candidate);
+        };
+        Check(proofRejects([](auto& p) { p.retailIdentity = false; }) &&
+              proofRejects([](auto& p) { p.mainRenderViewMatchCount = 0; }) &&
+              proofRejects([](auto& p) { p.mainRenderViewMatchCount = 2; }) &&
+              proofRejects([](auto& p) { p.mainRenderViewAtExpectedRva = false; }) &&
+              proofRejects([](auto& p) { p.mainRenderViewBodyHash = false; }) &&
+              proofRejects([](auto& p) { p.playerViewRenderMatchCount = 0; }) &&
+              proofRejects([](auto& p) { p.playerViewRenderMatchCount = 2; }) &&
+              proofRejects([](auto& p) { p.playerViewRenderAtExpectedRva = false; }) &&
+              proofRejects([](auto& p) { p.playerViewRenderBodyHash = false; }) &&
+              proofRejects([](auto& p) { p.frustumHelperMatchCount = 0; }) &&
+              proofRejects([](auto& p) { p.frustumHelperMatchCount = 2; }) &&
+              proofRejects([](auto& p) { p.frustumHelperAtExpectedRva = false; }) &&
+              proofRejects([](auto& p) { p.frustumHelperExecutableRange = false; }) &&
+              proofRejects([](auto& p) { p.exactOuterCallerEdges = false; }) &&
+              proofRejects([](auto& p) { p.exactInnerCallerEdge = false; }) &&
+              proofRejects([](auto& p) { p.fixedDataRanges = false; }),
+            "Reach render proof fails closed when any identity gate is absent");
+
+        const ReachModuleEpoch proofEpoch{0x10000000u, 1};
+        const ReachPreflightToken preflight =
+            ReachPreflightToken::Create(proofEpoch, proof);
+        auto incompleteProof = proof;
+        incompleteProof.frustumHelperMatchCount = 0;
+        Check(preflight.Complete() &&
+              ReachSameModuleEpoch(preflight.Epoch(), proofEpoch) &&
+              !ReachPreflightToken::Create(
+                  proofEpoch, incompleteProof).Complete(),
+            "Reach preflight authorization is epoch-bound and requires the full proof");
+
+        ReachRenderFreshnessGate freshness;
+        const ReachModuleEpoch freshnessEpoch{0x10000000u, 7};
+        Check(freshness.AdvanceEpoch(freshnessEpoch) &&
+              !freshness.Observe(
+                  100, freshnessEpoch, 1, true, true).Stable() &&
+              !freshness.Observe(
+                  499, freshnessEpoch, 2, true, true).Stable() &&
+              !freshness.Observe(
+                  898, freshnessEpoch, 3, true, true).Stable() &&
+              !freshness.Observe(
+                  1100, freshnessEpoch, 4, true, true).Stable() &&
+              freshness.CurrentSpanMs() == 1000,
+            "Reach production freshness arms only on a new transaction after one second");
+        const ReachFreshCameraToken stableFreshness =
+            freshness.Observe(1101, freshnessEpoch, 5, true, true);
+        Check(stableFreshness.Stable() &&
+              freshness.IsCurrent(stableFreshness) &&
+              stableFreshness.PreparedFrameSerial() == 5,
+            "Reach stable freshness is bound to the exact observed frame serial");
+        const ReachModuleEpoch staleFreshnessEpoch{0x10000000u, 6};
+        const ReachFreshCameraToken nextFreshness =
+            freshness.Observe(1200, freshnessEpoch, 6, true, true);
+        Check(!freshness.IsCurrent(stableFreshness) &&
+              nextFreshness.Stable() && freshness.IsCurrent(nextFreshness) &&
+              !freshness.AdvanceEpoch(staleFreshnessEpoch) &&
+              !freshness.Consume(
+                  nextFreshness,
+                  ReachPreparedFrameToken::Create(
+                      freshnessEpoch, 6, true),
+                  1700) &&
+              !freshness.IsCurrent(nextFreshness) &&
+              !freshness.Observe(
+                  1700, freshnessEpoch, 7, true, true).Stable() &&
+              freshness.TransactionCount() == 1 &&
+              !freshness.Teardown(staleFreshnessEpoch),
+            "Reach freshness invalidates saved tokens on a new observation or continuity gap");
+        Check(freshness.Teardown(freshnessEpoch) &&
+              !freshness.AdvanceEpoch(freshnessEpoch) &&
+              freshness.AdvanceEpoch({0x10000000u, 8}) &&
+              !freshness.Observe(
+                  1800, {0x10000000u, 8}, 1, false, true).Stable() &&
+              freshness.TransactionCount() == 0 &&
+              freshness.Teardown({0x10000000u, 8}) &&
+              !freshness.AdvanceEpoch({0x10000000u, 8}) &&
+              freshness.AdvanceEpoch({0x10000000u, 9}),
+            "Reach freshness rejects stale epochs, gaps, non-normal owners, and generation replay");
+    }
+
+    {
+        constexpr uintptr_t moduleBase = 0x10000000;
+        ReachOuterRenderInput outer{};
+        outer.moduleBase = moduleBase;
+        outer.moduleSize = kReachRetailImageSize;
+        outer.returnAddress = moduleBase + kReachNormalOuterReturnRva;
+        outer.workspace = moduleBase + kReachDefaultWorkspaceRva;
+        outer.playerView = moduleBase + kReachPlayerViewArrayRva;
+        outer.playerWindowIndex = 0;
+        outer.cameraStackDepthBefore = 0;
+        outer.nowMs = 1101;
+        const ReachModuleEpoch epoch{moduleBase, 9};
+        outer.preflight = ReachPreflightToken::Create(
+            epoch, CompleteReachRenderCandidateProof());
+        ReachRenderFreshnessGate ownerFreshness;
+        Check(ownerFreshness.AdvanceEpoch(epoch) &&
+              !ownerFreshness.Observe(
+                  100, epoch, 38, true, true).Stable() &&
+              !ownerFreshness.Observe(
+                  400, epoch, 39, true, true).Stable() &&
+              !ownerFreshness.Observe(
+                  700, epoch, 40, true, true).Stable() &&
+              !ownerFreshness.Observe(
+                  1000, epoch, 41, true, true).Stable(),
+            "Reach owner freshness starts from exact prepared-frame observations");
+        outer.freshCamera = ownerFreshness.Observe(
+            1101, epoch, 42, true, true);
+        outer.preparedFrame = ReachPreparedFrameToken::Create(
+            epoch, 42, true);
+
+        Check(ClassifyReachOuterRenderCaller(
+                  moduleBase, kReachRetailImageSize,
+                  moduleBase + kReachNormalOuterReturnRva) ==
+                  ReachOuterRenderCaller::NormalPlayer &&
+              ClassifyReachOuterRenderCaller(
+                  moduleBase, kReachRetailImageSize,
+                  moduleBase + kReachScreenshotOuterReturnRva) ==
+                  ReachOuterRenderCaller::ScreenshotTileBloom &&
+              ClassifyReachOuterRenderCaller(
+                  moduleBase, kReachRetailImageSize, moduleBase + 1) ==
+                  ReachOuterRenderCaller::Unknown &&
+              ClassifyReachOuterRenderCaller(
+                  moduleBase, kReachRetailImageSize - 1,
+                  moduleBase + kReachNormalOuterReturnRva) ==
+                  ReachOuterRenderCaller::Unknown,
+            "Reach outer routing distinguishes normal, screenshot, and unknown callers exactly");
+
+        const auto outerRejects = [&outer](auto mutate)
+        {
+            auto candidate = outer;
+            mutate(candidate);
+            return !ReachNormalOuterInputMatches(candidate);
+        };
+        Check(ReachNormalOuterInputMatches(outer) &&
+              outerRejects([](auto& v) { v.preflight = {}; }) &&
+              outerRejects([](auto& v) { v.freshCamera = {}; }) &&
+              outerRejects([](auto& v) { v.preparedFrame = {}; }) &&
+              outerRejects([](auto& v) {
+                  auto wrongEpoch = v.preflight.Epoch();
+                  ++wrongEpoch.generation;
+                  v.preflight = ReachPreflightToken::Create(
+                      wrongEpoch, CompleteReachRenderCandidateProof());
+              }) &&
+              outerRejects([](auto& v) {
+                  v.preparedFrame = ReachPreparedFrameToken::Create(
+                      v.preflight.Epoch(), 43, true);
+              }) &&
+              outerRejects([](auto& v) { v.teardownRequested = true; }) &&
+              outerRejects([](auto& v) { v.nowMs = 0; }) &&
+              outerRejects([](auto& v) { ++v.moduleBase; }) &&
+              outerRejects([](auto& v) { ++v.playerWindowIndex; }) &&
+              outerRejects([](auto& v) { v.cameraStackDepthBefore = 3; }) &&
+              outerRejects([](auto& v) { ++v.workspace; }) &&
+              outerRejects([](auto& v) { ++v.playerView; }) &&
+              outerRejects([](auto& v) {
+                  v.returnAddress = v.moduleBase +
+                      kReachScreenshotOuterReturnRva;
+              }),
+            "Only the exact fresh slot-zero normal owner can mint a Reach token");
+
+        ReachRenderOwnerGate owner;
+        Check(!owner.TryBegin(outer, ownerFreshness) &&
+              ownerFreshness.IsCurrent(outer.freshCamera) &&
+              owner.AdvanceEpoch(epoch) &&
+              !owner.AdvanceEpoch(epoch) &&
+              !owner.AdvanceEpoch({moduleBase, 8}) &&
+              owner.TryBegin(outer, ownerFreshness) &&
+              !ownerFreshness.IsCurrent(outer.freshCamera) &&
+              owner.Token().Active() &&
+              owner.Token().PreparedFrameSerial() == 42 &&
+              !owner.TryBegin(outer, ownerFreshness),
+            "Reach owner gate requires an explicit monotonic epoch and rejects nesting");
+        const ReachRenderOwnerToken ownerToken = owner.Token();
+        Check(!owner.Finish(ownerToken, {}) && owner.IsCurrent(ownerToken),
+            "A Reach owner cannot finish without a bound clean-completion token");
+
+        ReachInnerRenderInput inner{};
+        inner.returnAddress = moduleBase + kReachPlayerViewRenderReturnRva;
+        inner.playerView = outer.playerView;
+        inner.activeView = outer.playerView;
+        inner.cameraStackDepth = 1;
+        inner.topWorkspace = outer.workspace;
+        inner.workspaceCallback = moduleBase + kReachCameraStackCallbackRva;
+        inner.renderCameraOwner =
+            outer.playerView + kReachPlayerViewCameraStateOffset;
+        inner.selectedSpecialization = 0;
+        inner.primaryCameraValid = true;
+        inner.secondaryCameraValid = true;
+        inner.preparedFrame = outer.preparedFrame;
+        inner.directCopy = ReachDirectCopyToken::Create(epoch, 42, true);
+
+        const auto innerRejects = [&owner, &inner](auto mutate)
+        {
+            auto candidate = inner;
+            mutate(candidate);
+            return !ReachInnerScopeMatches(
+                owner, owner.Token(), candidate);
+        };
+        Check(ReachInnerScopeMatches(owner, owner.Token(), inner) &&
+              innerRejects([](auto& v) { ++v.returnAddress; }) &&
+              innerRejects([](auto& v) { v.preparedFrame = {}; }) &&
+              innerRejects([](auto& v) {
+                  v.preparedFrame = ReachPreparedFrameToken::Create(
+                      v.directCopy.Epoch(), 43, true);
+              }) &&
+              innerRejects([](auto& v) { v.directCopy = {}; }) &&
+              innerRejects([](auto& v) {
+                  v.directCopy = ReachDirectCopyToken::Create(
+                      v.preparedFrame.Epoch(), 43, true);
+              }) &&
+              innerRejects([](auto& v) { ++v.playerView; }) &&
+              innerRejects([](auto& v) { ++v.activeView; }) &&
+              innerRejects([](auto& v) { ++v.cameraStackDepth; }) &&
+              innerRejects([](auto& v) { ++v.topWorkspace; }) &&
+              innerRejects([](auto& v) { ++v.workspaceCallback; }) &&
+              innerRejects([](auto& v) { ++v.renderCameraOwner; }) &&
+              innerRejects([](auto& v) { ++v.selectedSpecialization; }) &&
+              innerRejects([](auto& v) { v.primaryCameraValid = false; }) &&
+              innerRejects([](auto& v) { v.secondaryCameraValid = false; }) &&
+              innerRejects([](auto& v) { v.teardownRequested = true; }),
+            "Reach inner admission checks the exact return edge, epoch, stack, camera, and target");
+
+        const ReachPreflightToken incompletePreflight{};
+        auto wrongInner = inner;
+        ++wrongInner.returnAddress;
+        Check(SelectReachRenderAction(
+                  false, outer.preflight, owner, ownerToken, inner) ==
+                  ReachRenderAction::StockOnce &&
+              SelectReachRenderAction(
+                  true, incompletePreflight, owner, ownerToken, inner) ==
+                  ReachRenderAction::StockOnce &&
+              SelectReachRenderAction(
+                  true, outer.preflight, owner, ownerToken, wrongInner) ==
+                  ReachRenderAction::StockOnce &&
+              SelectReachRenderAction(
+                  true, outer.preflight, owner, ownerToken, inner) ==
+                  ReachRenderAction::StereoTransaction,
+            "Reach action selection consumes bound proof, owner, and inner-scope inputs");
+        Check(SelectReachRenderAction(
+                  ReachAdapter_RuntimeHooksPermitted(), outer.preflight,
+                  owner, ownerToken, inner) == ReachRenderAction::StockOnce,
+            "The adapter hard gate keeps an otherwise complete Reach scope stock-once");
+#if HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE
+        Check(ReachRenderCandidate_Compiled() &&
+              !ReachRenderCandidate_RuntimeHooksEnabled() &&
+              ReachRenderCandidate_SelectAction(
+                  outer.preflight, owner, ownerToken, inner) ==
+                  ReachRenderAction::StockOnce,
+            "The compiled DLL-facing Reach wrapper remains hard-disabled");
+#endif
+
+        ReachRollbackGate rollback;
+        Check(rollback.Bind(owner, ownerToken) &&
+              rollback.BeginFirstPass(ownerToken) &&
+              rollback.NeedsRollback() &&
+              !rollback.BeginFinalPass(ownerToken) &&
+              rollback.MarkFirstPassRestored(ownerToken) &&
+              !rollback.NeedsRollback() &&
+              rollback.BeginFinalPass(ownerToken) &&
+              rollback.NeedsRollback(),
+            "Reach cleanup state tracks dirty first and final passes independently");
+        const ReachCleanupToken completedCleanup =
+            rollback.MarkFinalPassRestoredAndComplete(ownerToken);
+        Check(completedCleanup.Valid() && rollback.Finished() &&
+              owner.Finish(ownerToken, completedCleanup) &&
+              !owner.Token().Active() &&
+              owner.LastCompletedSerial() == 42 &&
+              SelectReachRenderAction(
+                  true, outer.preflight, owner, ownerToken, inner) ==
+                  ReachRenderAction::StockOnce,
+            "Owner completion requires clean rollback and invalidates every copied owner token");
+
+        outer.freshCamera = ownerFreshness.Observe(
+            1200, epoch, 43, true, true);
+        outer.nowMs = 1200;
+        outer.preparedFrame = ReachPreparedFrameToken::Create(
+            epoch, 43, true);
+        Check(owner.TryBegin(outer, ownerFreshness),
+            "A fresh prepared-frame serial can mint the next Reach owner token");
+        const ReachRenderOwnerToken abortedToken = owner.Token();
+        ReachRollbackGate abortedRollback;
+        Check(abortedRollback.Bind(owner, abortedToken) &&
+              abortedRollback.BeginFirstPass(abortedToken) &&
+              abortedRollback.NeedsRollback() &&
+              !owner.Abort(abortedToken, {}) &&
+              abortedRollback.MarkDirtyPassRestoredForAbort(abortedToken),
+            "A dirty aborted pass must explicitly transition through restored state");
+        const ReachCleanupToken abortedCleanup =
+            abortedRollback.AbortClean(abortedToken);
+        Check(abortedCleanup.Valid() && abortedRollback.Aborted() &&
+              owner.Abort(abortedToken, abortedCleanup) &&
+              !owner.TryBegin(outer, ownerFreshness),
+            "A clean abort consumes its exact prepared-frame serial");
+        Check(owner.Teardown(epoch) && ownerFreshness.Teardown(epoch) &&
+              !owner.AdvanceEpoch(epoch) &&
+              !owner.AdvanceEpoch({moduleBase, 8}),
+            "Teardown retains the generation high-water mark against stale replay");
+        const ReachModuleEpoch nextEpoch{moduleBase, 10};
+        outer.preflight = ReachPreflightToken::Create(
+            nextEpoch, CompleteReachRenderCandidateProof());
+        Check(owner.AdvanceEpoch(nextEpoch) &&
+              ownerFreshness.AdvanceEpoch(nextEpoch) &&
+              !ownerFreshness.Observe(
+                  100, nextEpoch, 39, true, true).Stable() &&
+              !ownerFreshness.Observe(
+                  400, nextEpoch, 40, true, true).Stable() &&
+              !ownerFreshness.Observe(
+                  700, nextEpoch, 41, true, true).Stable() &&
+              !ownerFreshness.Observe(
+                  1000, nextEpoch, 42, true, true).Stable(),
+            "A newer Reach generation starts fresh owner and freshness state");
+        outer.freshCamera = ownerFreshness.Observe(
+            1101, nextEpoch, 43, true, true);
+        outer.nowMs = 1101;
+        outer.preparedFrame = ReachPreparedFrameToken::Create(
+            nextEpoch, 43, true);
+        Check(owner.TryBegin(outer, ownerFreshness),
+            "A newer Reach module generation starts a fresh serial namespace");
+        const ReachRenderOwnerToken nextToken = owner.Token();
+        ReachRollbackGate nextRollback;
+        Check(nextRollback.Bind(owner, nextToken),
+            "The next generation binds cleanup to its live owner");
+        const ReachCleanupToken nextAbort =
+            nextRollback.AbortClean(nextToken);
+        Check(!owner.Abort(nextToken, abortedCleanup) &&
+              owner.IsCurrent(nextToken) &&
+              owner.Abort(nextToken, nextAbort) &&
+              owner.Teardown(nextEpoch) &&
+              ownerFreshness.Teardown(nextEpoch),
+            "A same-serial cleanup from an old generation cannot close the new owner");
+
+        Check(ReachEyeForPass(0, false) == 0 &&
+              ReachEyeForPass(1, false) == 1 &&
+              ReachEyeForPass(0, true) == 1 &&
+              ReachEyeForPass(1, true) == 0 &&
+              ReachEyeForPass(2, false) == -1,
+            "Reach pass order matches Halo 3 right-eye-first behavior exactly");
+        const ReachStereoPassPolicy firstPass =
+            SelectReachStereoPassPolicy(0, false, 1);
+        const ReachStereoPassPolicy finalPass =
+            SelectReachStereoPassPolicy(1, false, 1);
+        const ReachStereoPassPolicy invalidPass =
+            SelectReachStereoPassPolicy(2, false, 1);
+        Check(firstPass.valid && firstPass.eye == 0 &&
+              firstPass.writeLastWindow && firstPass.lastWindowInput == 0 &&
+              firstPass.restoreLastWindowAfterPass &&
+              finalPass.valid && finalPass.eye == 1 &&
+              finalPass.writeLastWindow && finalPass.lastWindowInput == 1 &&
+              !finalPass.restoreLastWindowAfterPass &&
+              !invalidPass.valid && invalidPass.eye == -1 &&
+              !invalidPass.writeLastWindow &&
+              invalidPass.restoreLastWindowAfterPass,
+            "Reach last-window policy fails closed for invalid passes and preserves the final result");
+        Check(kReachRollbackLayout.workspaceSize == 0x2B0 &&
+              kReachRollbackLayout.cameraStateOffset == 0x3B0 &&
+              kReachRollbackLayout.cameraStateSize == 0xC8 &&
+              kReachRollbackLayout.currentMatricesOffset == 0x490 &&
+              kReachRollbackLayout.currentMatricesSize == 0x2D0 &&
+              kReachRollbackLayout.previousMatricesOffset == 0x760 &&
+              kReachRollbackLayout.previousMatricesSize == 0x2D0 &&
+              kReachRollbackLayout.excludedLastWindowOffset == 0xA30 &&
+              kReachRollbackLayout.workspaceSize < kReachPlayerViewStride,
+            "Reach rollback policy snapshots bounded regions and excludes the whole player view");
     }
 
     {
@@ -1358,7 +1819,14 @@ int main()
         "The normal Release preset keeps the Reach adapter disabled");
 #endif
     Check(!ReachAdapter_RuntimeHooksPermitted(),
-        "The controller-only candidate cannot install Reach runtime hooks");
+        "Neither controller admission nor the inert render scaffold can install Reach runtime hooks");
+#if HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE
+    Check(HALOMCCVR_EXPERIMENTAL_REACH_BRINGUP == 1,
+        "The disabled Reach render scaffold compiles only with controller admission retained");
+#else
+    Check(true,
+        "The normal and controller-only presets omit the Reach render scaffold");
+#endif
     const ReachEvidenceIdentity& reachIdentity =
         ReachAdapter_GetEvidenceIdentity();
     Check(std::wstring_view(reachIdentity.moduleName) == L"haloreach.dll" &&
