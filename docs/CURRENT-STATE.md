@@ -192,10 +192,37 @@ pass. Retail `player_view_render` tests bit `0x08` at global RVA `0x00CA0240`
 at `0x0026CC59`; when clear it calls the patchy helper at
 `0x0026CC65 -> 0x0026EFEC`. HREK independently names the corresponding
 resources `_surface_patchy_fog_buffer0/1` and `Patchy Fog Global Parameters`.
-The current forward candidate sets only that proven skip bit immediately around
-each admitted VR eye render and restores only that bit in `__finally`, preserving
-atmospheric fog, distortion, camera/culling, eye order, capture, and all stock or
-fallback renders. It remains headset-pending.
+Source `b0710dc` sets only that proven skip bit immediately around each admitted
+VR eye render and restores only that bit in `__finally`, preserving atmospheric
+fog, distortion, camera/culling, eye order, capture, and all stock or fallback
+renders. Its exact headset result is recorded below.
+
+### Unaccepted Reach patchy-fog headset pass / scale-performance follow-up - 2026-07-24
+
+This result is evidence only and does not advance the accepted pointer above.
+
+| Identity | Value |
+| --- | --- |
+| Tested runtime source | `b0710dc01b1b6e5deec64830a42d33f19e1a52f1` |
+| Candidate package | `out/candidates/b0710dc-reach-camera-20260724-132647552Z` |
+| `halo3xr.dll` SHA-256 | `FF43BC89C5AFEC799DA43EB78EC58CC173B113DEC208FEE69E5F2B6235376C35` |
+| `halo3xr_launcher.exe` SHA-256 | `AAE13DBDB454DEF58D4922F08C1D7E981E3AE408D84368182540F7D59D043615` |
+| Preserved headset evidence | `out/test-runs/b0710dc-reach-patchy-fog-headset-20260724-132935Z` |
+| Headset result | The opposite-moving translucent fog layer was gone and the image looked good; remaining follow-up is slightly small world scale versus Halo 3/ODST and a performance dip |
+
+The installed files matched the candidate manifest, and the first log line
+reported the exact source above. Reach's cold preflight and display proof passed,
+the exact patchy-fog skip was active around each admitted eye, and stereo, head
+tracking, and 6DOF armed after the safety interval. Focused frames retained
+current private eye caches and zero frame-order failures. Logged stereo samples
+were 50, 46, 57, 55, and 58 FPS. The full log SHA-256 is
+`4A1B86F38E4799D2A48FF04E70F6316CAC4B7214AC7180BBAE8E6D2BA2F012`.
+The same low cadence was already present before Reach loaded or stereo armed;
+the per-eye patchy-fog wrapper is therefore not a causal performance regression.
+
+The user explicitly confirmed that this fixed the fog defect. This is a narrow
+Reach headset pass, not cumulative acceptance: exact physical-scale calibration,
+performance follow-up, and Halo 3 plus ODST regressions remain pending.
 
 ### Reach stock runtime observation - 2026-07-23
 

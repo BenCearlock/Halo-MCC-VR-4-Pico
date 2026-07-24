@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "status": "CAMERA_CULLING_HEADSET_PASS_PATCHY_FOG_FORWARD_CANDIDATE_UNACCEPTED",
+  "status": "CAMERA_CULLING_PATCHY_FOG_HEADSET_PASS_WORLD_SCALE_PERFORMANCE_H3_ODST_PENDING_UNACCEPTED",
   "hook_eligible": false,
   "hook_eligibility_scope": "PRELIMINARY_HELPER_CANDIDATES_ONLY; permanent main_render_view/player_view_render transaction is described separately below",
   "accepted_baseline": {
@@ -37,7 +37,7 @@
     "consumed_layout_fields"
   ],
   "player_view_transaction": {
-    "status": "CAMERA_CULLING_HEADSET_PASS_OPPOSITE_HEAD_SCREEN_SPACE_FOG_FAIL",
+    "status": "CAMERA_CULLING_PATCHY_FOG_HEADSET_PASS_SCALE_PERFORMANCE_H3_ODST_PENDING",
     "retail": {
       "main_render_game": {
         "function_rva": "0x000C33F8",
@@ -254,6 +254,30 @@
         "production_policy": "SET_ONLY_BIT_0X08_AROUND_EACH_ADMITTED_VR_EYE_ORIGINAL_CALL_AND_RESTORE_ONLY_THAT_BIT_IN_FINALLY",
         "stock_nested_screenshot_fallback_affected": false,
         "atmosphere_fog_changed": false,
+        "headset_result": "PASS_B0710DC_OPPOSITE_HEAD_LAYER_REMOVED",
+        "headset_result_source": "b0710dc01b1b6e5deec64830a42d33f19e1a52f1",
+        "headset_result_package": "out/candidates/b0710dc-reach-camera-20260724-132647552Z",
+        "headset_result_dll_sha256": "FF43BC89C5AFEC799DA43EB78EC58CC173B113DEC208FEE69E5F2B6235376C35",
+        "headset_result_launcher_sha256": "AAE13DBDB454DEF58D4922F08C1D7E981E3AE408D84368182540F7D59D043615",
+        "headset_result_evidence": "out/test-runs/b0710dc-reach-patchy-fog-headset-20260724-132935Z",
+        "headset_result_log_sha256": "4A1B86F38E4799D2A48FF04E70F6316CAC4B7214AC7180BBAE8E6D2BA2F012",
+        "headset_result_remaining_observations": [
+          "WORLD_SCALE_SLIGHTLY_SMALL_VERSUS_HALO3_ODST",
+          "STEREO_PERFORMANCE_DIP"
+        ]
+      },
+      "physical_world_scale": {
+        "headset_observation_source": "b0710dc01b1b6e5deec64830a42d33f19e1a52f1",
+        "headset_observation": "WORLD_SCALE_SLIGHTLY_SMALL_VERSUS_HALO3_ODST",
+        "prior_reach_world_units_per_meter": 0.33,
+        "accepted_odst_world_units_per_meter": 0.32808399,
+        "candidate_reach_world_units_per_meter": 0.32808399,
+        "candidate_formula": "1.0 / 3.048",
+        "prior_tracked_position_excess_percent": 0.5806,
+        "apparent_world_size_correction_percent": 0.584,
+        "head_and_eye_invariant": "SAME_REACH_TITLE_CONSTANT_FOR_ROOM_SCALE_TRANSLATION_AND_EXACT_OPENXR_EYE_POSITION",
+        "halo3_odst_changed": false,
+        "controller_world_position_policy": "WITHHELD_UNTIL_REACH_SPECIFIC_AIM_IK_EVIDENCE_THEN_REQUIRE_SAME_CONSTANT",
         "headset_result": "PENDING"
       },
       "pre_inner_visibility": {
@@ -432,12 +456,13 @@
         "reach_controller_projectile_reticle_and_weapon_body_aim",
         "reach_native_hud_and_arm_ik",
         "exact_finite_distance_cull_coverage_for_translated_eye_origins",
-        "current_forward_screen_aligned_patchy_fog_suppression_headset_result",
+        "reach_exact_physical_world_scale_headset_result",
+        "reach_performance_cadence_headroom_followup",
         "halo3_and_odst_regression_for_this_exact_shared_binary"
       ],
       "loaded_image_preflight_compiled": true,
       "display_copy_readiness_compiled": true,
-      "runtime_result": "86864bd passed stereo, projection, 6DOF, stick/head coherence, and head-owned culling at approximately 94-120 FPS with zero frame-order failures; 03f0bff then proved live finite blur controls max=0.0 scale=0.35 and one opaque OpenXR projection layer while the translucent fog still moved opposite head motion, ruling out native motion blur and an OpenXR overlay; retail/HREK isolate the screen-aligned patchy-fog pass and its narrow forward suppression remains headset-pending",
+      "runtime_result": "86864bd passed stereo, projection, 6DOF, stick/head coherence, and head-owned culling; 03f0bff proved finite max-only native blur suppression while the opposite-head layer persisted; b0710dc then passed exact per-eye patchy-fog suppression with the layer gone and the image good. The remaining Reach follow-up is exact 1/3.048 physical scale and performance cadence; b0710dc's low cadence began before Reach loaded or stereo armed and is not a patchy-fog regression",
       "title_hook_plan": "REACH_CAMERA_CORE",
       "runtime_capabilities": [
         "STEREO",
@@ -455,7 +480,8 @@
     },
     "remaining_runtime_proof": [
       "close_peripheral_geometry_result_under_head_center_visibility_policy",
-      "exact_forward_patchy_fog_suppression_has_no_opposite_head_motion_or_eye_swap",
+      "exact_reach_world_scale_parity_and_no_scale_swim_under_room_motion",
+      "performance_cadence_at_supported_reduced_internal_resolution",
       "atmospheric_depth_fog_remains_authored_and_world_stationary",
       "pause_cinematic_split_screen_device_loss_and_title_transition_observation",
       "exact_dll_headset_validation_then_halo3_and_odst_regression"

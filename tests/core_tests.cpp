@@ -244,6 +244,14 @@ int main()
               kReachPlayerViewRenderBodySize == 2314,
             "Reach render candidate pins both exact body identities");
 
+        constexpr float kReachTestIpdMeters = 0.064f;
+        Check(std::isfinite(kReachWorldUnitsPerMeter) &&
+              kReachWorldUnitsPerMeter > 0.0f &&
+              std::fabs(kReachWorldUnitsPerMeter * 3.048f - 1.0f) < 1.0e-6f &&
+              std::fabs(kReachTestIpdMeters * kReachWorldUnitsPerMeter -
+                        0.020997375f) < 1.0e-7f,
+            "Reach head translation and runtime IPD use the exact ten-foot world-unit conversion");
+
         constexpr uintptr_t motionBlurTestBase = 0x10000000u;
         Check(ReachMotionBlurSlotsMatchPinnedImage(
                   motionBlurTestBase, kReachRetailImageSize,

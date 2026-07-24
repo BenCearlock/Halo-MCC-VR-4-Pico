@@ -9748,7 +9748,7 @@ namespace
             const float hfhx = hfx / hlen, hfhz = hfz / hlen;
             const float fwdComp = dx * hfhx + dz * hfhz;
             const float rightComp = dx * (-hfhz) + dz * hfhx;
-            const float s = g_worldScale.load();
+            const float s = kReachWorldUnitsPerMeter;
             float ox = (cgy * fwdComp + sgy * rightComp) * s;
             float oy = (sgy * fwdComp - cgy * rightComp) * s;
             float oz = dy * s;
@@ -9857,7 +9857,7 @@ namespace
             fwd[1] * up[2] - fwd[2] * up[1],
             fwd[2] * up[0] - fwd[0] * up[2],
             fwd[0] * up[1] - fwd[1] * up[0]};
-        const float s = g_worldScale.load();
+        const float s = kReachWorldUnitsPerMeter;
         for (int axis = 0; axis < 3; ++axis)
             pos[axis] += (right[axis] * input.position[0] +
                           up[axis] * input.position[1] -

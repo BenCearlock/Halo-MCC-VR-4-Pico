@@ -103,6 +103,11 @@ inline constexpr uint8_t ReachPatchyFogRestoredFlags(
         (current & static_cast<uint8_t>(~kReachPatchyFogSkipMask)) |
         (original & kReachPatchyFogSkipMask));
 }
+// Halo's authored physical scale is one world unit per ten feet. Reach must use
+// the same exact conversion for every tracked position so room-scale motion and
+// runtime IPD cannot disagree. This is title-local: accepted Halo 3 calibration
+// remains independently adjustable through g_worldScale.
+inline constexpr float kReachWorldUnitsPerMeter = 1.0f / 3.048f;
 inline constexpr uintptr_t kReachPlayerViewCameraStateOffset = 0x03B0;
 inline constexpr uintptr_t kReachPlayerViewCurrentMatricesOffset = 0x0490;
 inline constexpr uintptr_t kReachPlayerViewPreviousMatricesOffset = 0x0760;

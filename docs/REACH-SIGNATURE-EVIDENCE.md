@@ -1,7 +1,8 @@
 # Halo: Reach signature evidence
 
-Status: **camera/culling transaction headset-passed; screen-aligned patchy-fog
-fix headset-pending**. The proven signatures below are wired into a permanent,
+Status: **camera/culling and screen-aligned patchy-fog transaction headset-passed;
+physical-scale calibration and cumulative regressions pending**. The proven
+signatures below are wired into a permanent,
 fail-open Reach per-eye camera core
 (`InstallReachCameraCore` in `src/dll/game.cpp`; see `BUILDING.md`). It installs
 the inner `player_view_render` and outer `main_render_view` hooks only after the
@@ -70,6 +71,14 @@ remaining world-stationary. The run is preserved under
 out native motion blur, invalid distortion constants, and a separate OpenXR
 overlay as the remaining cause.
 
+Source `b0710dc0` then set and restored only the proven patchy-fog skip bit around
+each admitted eye. Its exact DLL
+`FF43BC89C5AFEC799DA43EB78EC58CC173B113DEC208FEE69E5F2B6235376C35`
+passed the cold/runtime proofs, retained one opaque projection layer and zero
+frame-order failures, and removed the opposite-moving translucent layer in the
+headset. The user confirmed that the image looked good. The run is preserved
+under `out/test-runs/b0710dc-reach-patchy-fog-headset-20260724-132935Z`.
+
 The preceding culling defect was pinned to an exact pre-inner stage. Retail
 `main_render_view` performs its visibility work before calling
 `player_view_render`; its cluster lookup at `0x0C3320 -> 0x273458` explicitly
@@ -105,6 +114,25 @@ conservative for the exact widened FOVs and eye cant, but this candidate does no
 claim exact finite-distance coverage of translated eye origins. Close doorway
 edges and near peripheral geometry are therefore explicit headset tests rather
 than hidden fixed-IPD or guessed-near-plane padding.
+
+### Reach physical world-scale parity
+
+The patchy-fog passing run exposed a much smaller calibration difference: the
+user reported that Reach's world felt slightly too small relative to Halo 3 and
+ODST. Reach used the shared rounded `0.33` world-units-per-meter value for both
+room-scale head displacement and exact OpenXR eye separation. The accepted ODST
+adapter uses the authored ten-foot world-unit conversion `1 / 3.048`, or
+approximately `0.32808399`. Reach therefore scaled tracked positions 0.5806%
+too far relative to that exact physical baseline, making the perceived world
+approximately 0.584% too small in the reported direction.
+
+The forward calibration uses one Reach-only `kReachWorldUnitsPerMeter =
+1 / 3.048` constant in both physical transforms. It does not change Halo 3's
+independent calibration, ODST, FOV, culling, or eye orientation, and it never
+scales IPD without scaling room motion by the same amount. Reach controller aim
+is still withheld; future controller displacement, weapon standoff, support-hand
+IK, and world-space reticle/muzzle origins must consume this same title-specific
+conversion. This exact scale correction remains headset-pending.
 
 Reach controller-aim capability remains withheld because no Reach-specific
 projectile/reticle aim-forward or weapon/body-heading contract has been proven.
@@ -184,14 +212,15 @@ callback `0x00836B40`, and renderer `0x00894460`. Its strings identify
 headset report of a translucent screen-aligned texture moving opposite the
 head. This is distinct from the atmosphere-fog helper, which remains enabled.
 
-The forward correction sets only skip bit `0x08` immediately around each exact
+The correction sets only skip bit `0x08` immediately around each exact
 admitted VR eye's original `player_view_render` call. A per-eye `__finally`
 re-reads the byte and restores only bit `0x08`, preserving any unrelated engine
 flag changes. Setup or restoration failure rejects the stereo transaction and
 falls open to one unsuppressed stock render. Normal stock, nested, screenshot,
 and fallback calls never enter the suppression scope. Camera/culling, motion
 blur constants, matrices/history, eye order, projection, CHUD, and capture order
-are unchanged. This narrow forward candidate remains headset-pending.
+are unchanged. Source `b0710dc0` and its exact DLL passed this narrow headset
+gate: the opposite-moving translucent layer was gone and the image looked good.
 
 This document records Reach-specific facts for the cumulative Halo 3 + ODST +
 Reach line. Halo 3 and ODST offsets, layouts, bones, markers, and tag meanings
@@ -871,12 +900,13 @@ rollback, and cold-validated group-1 copy behind identity, scope, finite/range,
 specialization-zero, and current-frame gates. Those mechanics are not accepted
 merely because they build or launch.
 
-The camera/culling gate passed in source `86864bd` and remained passing in
-`03f0bff`. The immediate gate is now an exact-DLL headset result proving the
-screen-aligned fog layer no longer moves opposite the head or appears eye
-swapped, while atmospheric depth fog, stereo depth, projection coverage,
-positional 6DOF, head-owned visibility, and visual snap/smooth turning remain
-coherent. Halo 3 and ODST regressions are then required because shared
+The camera/culling gate passed in source `86864bd`, remained passing in
+`03f0bff`, and source `b0710dc` passed the screen-aligned patchy-fog gate. The
+immediate gate is now an exact-DLL headset result for the Reach-only
+`1 / 3.048` physical-scale correction, including 20-25 cm lateral/vertical head
+motion with no world swim, while atmospheric depth fog, stereo depth, projection
+coverage, head-owned visibility, and visual snap/smooth turning remain coherent.
+Halo 3 and ODST regressions are then required because shared
 input/submission code remains cumulative. Broader
 pause/cinematic/split-screen, unload/reload, device-loss, callback quiescence,
 and detour-teardown coverage also remains open. First-person weapon/body aim,
