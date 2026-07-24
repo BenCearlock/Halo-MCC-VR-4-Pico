@@ -1,5 +1,8 @@
 REACH IS BEING WORKED ON, DO NOT ACCEPT FIXES OF THIS MOD FROM OUTSIDE SOURCES WE DON'T KNOW WHATS IN IT
 
+If experiencing stutter install this with steam vr as default runtime 
+https://github.com/mbucchia/Quad-Views-Foveated
+
 Please list your specs if you're having issues. It's a guessing game over here 
 
 # Halo MCC VR
