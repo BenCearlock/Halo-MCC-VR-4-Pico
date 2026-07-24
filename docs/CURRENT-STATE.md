@@ -4,6 +4,42 @@ Authoritative as of 2026-07-23. This file is the only active accepted-build
 pointer. Detailed pre-cleanup experiments remain available in Git history; they
 are evidence, not instructions.
 
+## Newest headset-accepted private cumulative source
+
+The current development pointer is commit
+`a5524d3fe58e4ed5507c27429ccca52a3d4fdf7d` on `reach/campaign-parity`.
+It descends from the accepted 0.2.2 runtime source and is an accepted private
+milestone, not a public release or tag. The public known-good product remains
+`MCC_VR_ALPHA_0.2.2`.
+
+| Identity | Value |
+| --- | --- |
+| Headset-tested runtime source | `a5524d3fe58e4ed5507c27429ccca52a3d4fdf7d` |
+| Build | Release x64, preset `release-reach-private`, ODST ON, Reach ON |
+| Candidate package | `out/candidates/a5524d3-reach-private-20260724-023052584Z` |
+| `halo3xr.dll` SHA-256 | `2BD8C0A8675C393715AD52F29301984B1A57CE45B5340070713F153E2CADE2A2` |
+| `halo3xr_launcher.exe` SHA-256 | `ED0540A7A6F758543F1E828E73C35435D0CA092D259BAE285472804276F8A441` |
+| Reach milestone | Shared virtual-controller transport only; Reach runtime hooks remain OFF |
+| Preserved test evidence | `out/test-runs/a5524d3-reach-h3-odst-headset-pass-20260724-023358Z` |
+
+### Reach controller and cross-title headset confirmation - 2026-07-23
+
+- The installed DLL and launcher were hashed separately after the manual copy
+  and matched the candidate manifest exactly.
+- The first runtime-log line reported source
+  `a5524d3fe58e4ed5507c27429ccca52a3d4fdf7d`, ODST ON, Reach ON, compiled
+  `Jul 23 2026 21:30:25`.
+- Title coverage in one MCC session was Reach, Halo 3, ODST, then Reach again.
+  The user confirmed Reach worked without breaking Halo 3 or ODST.
+- Reach was detected with controller-only admission. Its XInput
+  `reads`/`padValid`/`merged` counters continued rising while stereo remained
+  off, as required for this milestone.
+- Halo 3 subsequently armed stereo and its accepted first-person path. ODST
+  then completed preflight, armed stereo/6DOF, exercised native pause teardown,
+  and safely returned ownership before Reach regained controller transport.
+- This result does not authorize or claim Reach camera, stereo, 6DOF, aim,
+  movement, HUD, IK, haptics, or lifecycle hooks.
+
 ## Accepted cumulative release
 
 The current known-good product is the public
@@ -191,10 +227,11 @@ ODST on the accepted build:
 - `docs/ODST-WEAPON-IK-EVIDENCE.md`: ODST weapon and skeleton evidence.
 - `docs/REACH-EVIDENCE-MANIFEST.json`: pinned Reach retail/HREK identities and
   preliminary evidence-only RVAs; not an accepted runtime pointer.
-- `docs/REACH-SIGNATURE-EVIDENCE.md`: Reach proof ledger; all runtime hooks are
-  currently unauthorized and disabled.
-- `docs/TITLE-RUNTIME-OWNERSHIP.md`: unaccepted shared H3/ODST
-  heartbeat/generation candidate contract and required headset regression.
+- `docs/REACH-SIGNATURE-EVIDENCE.md`: Reach proof ledger; controller transport
+  is headset-accepted while all Reach runtime hooks remain unauthorized and
+  disabled.
+- `docs/TITLE-RUNTIME-OWNERSHIP.md`: accepted shared heartbeat/generation
+  ownership contract and its cross-title regression evidence.
 - `docs/HISTORY.md`: how to retrieve the full pre-cleanup ledger.
 - `releases/0.2.2/manifest.json`: current machine-readable release identity.
 - `releases/0.2.1/manifest.json`: protected rollback release identity.
