@@ -40,6 +40,23 @@ milestone, not a public release or tag. The public known-good product remains
 - This result does not authorize or claim Reach camera, stereo, 6DOF, aim,
   movement, HUD, IK, haptics, or lifecycle hooks.
 
+### Current unaccepted Reach two-arm IK candidate
+
+This source contains a production, no-probe Reach FP interpolation/palette
+candidate. It preserves the headset-passing camera/culling transaction, learns
+only exact Spartan/Elite body maps stock-only, rigidly carries the bounded live
+graph for markers and attachments, and articulates the exact body palette from
+one prepared-frame centre/right/left snapshot. `arm_ik=0` retains rigid
+controller parenting; it does not disable Reach tracking. The installed config
+is not rewritten, so full-arm headset testing requires `arm_ik=1` and
+`floating_hands=0` before testing floating hands separately.
+
+The Release build, core tests, and offline Reach evidence preflight must pass,
+and the clean package manifest supplies the exact commit and SHA-256. This entry
+does **not** advance the accepted pointer above. Reach campaign Spartan is the
+acceptance target; Elite is implemented fail-open but remains separately
+unclaimed. No install or launch is authorized by this entry.
+
 ### Unaccepted Reach camera headset result - 2026-07-24
 
 This result is evidence only and does not advance the accepted pointer above.

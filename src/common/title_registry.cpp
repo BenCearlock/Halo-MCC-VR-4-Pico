@@ -28,11 +28,13 @@ namespace
     constexpr uint32_t kHalo3AdmissionCapabilities =
         TitleCapability_ControllerInput;
     // Reach camera + motion core: stereo, tracked look/turn, locomotion input,
-    // room-scale translation, and haptics ride shared paths once Reach's proven
-    // camera owns the frame. Controller aim, HUD, and arm IK stay withheld until
-    // Reach-specific aim-forward, HUD-anchor, and skeleton evidence exists.
+    // room-scale translation, controller aim, articulated first-person arms,
+    // and haptics now have title-specific runtime/evidence paths. Native HUD
+    // remains withheld until Reach's final CHUD anchor is proven and wired.
     constexpr uint32_t kReachCapabilities =
         TitleCapability_Stereo |
+        TitleCapability_ControllerAim |
+        TitleCapability_ArmIk |
         TitleCapability_RuntimeModes |
         TitleCapability_RoomScale |
         TitleCapability_ControllerInput |

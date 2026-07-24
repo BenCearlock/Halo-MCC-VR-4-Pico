@@ -7,6 +7,7 @@
 #include <iostream>
 #include <iterator>
 #include <limits>
+#include <span>
 #include <string>
 #include <string_view>
 #include <windows.h>
@@ -230,6 +231,328 @@ int main()
                   !transactionGate.Observe(0) &&
                   transactionGate.Observe(playerArray + playerStride),
             "Reach continuity reset requires a new witnessed clear");
+    }
+
+    {
+        static_assert(kReachSpartanFpBodyBoneMap.size() == 47);
+        static_assert(kReachEliteFpBodyBoneMap.size() == 41);
+        static_assert(kReachFpMaxSourceNodeCount == 120);
+
+        // Independent evidence literals: do not derive these from the
+        // production constants, so any fingerprint drift fails this test.
+        constexpr std::array<int32_t, 47> expectedSpartan{{
+            0, 3, 1, 2, 5, 4, 6, 9, 10, 8, 7, 13, 12, 14, 11, 22,
+            26, 18, 21, 24, 19, 20, 15, 23, 16, 17, 25, 36, 35, 32,
+            28, 33, 29, 27, 34, 31, 30, 46, 38, 42, 37, 40, 39, 43,
+            45, 44, 41}};
+        constexpr std::array<int32_t, 41> expectedElite{{
+            0, 1, 2, 3, 5, 4, 6, 7, 8, 9, 10, 14, 12, 11, 13, 22,
+            20, 18, 21, 19, 16, 23, 24, 17, 15, 27, 28, 25, 31, 32,
+            30, 26, 29, 35, 34, 39, 33, 40, 36, 38, 37}};
+        Check(kReachSpartanFpBodyBoneMap == expectedSpartan &&
+                  kReachEliteFpBodyBoneMap == expectedElite,
+            "Reach production fingerprints match independent full evidence literals");
+        Check(expectedSpartan[6] == 6 && expectedSpartan[7] == 9 &&
+                  expectedSpartan[11] == 13 &&
+                  expectedSpartan[4] == 5 && expectedSpartan[10] == 7 &&
+                  expectedSpartan[14] == 11 && expectedSpartan[5] == 4 &&
+                  expectedElite[6] == 6 && expectedElite[9] == 9 &&
+                  expectedElite[14] == 13 &&
+                  expectedElite[4] == 5 && expectedElite[7] == 7 &&
+                  expectedElite[13] == 11 && expectedElite[5] == 4,
+            "Reach render-output chains map exactly to the shared source chains");
+
+        const std::span<const int32_t> spartanMap{
+            kReachSpartanFpBodyBoneMap};
+        ReachFpBodyLayout spartan{};
+        Check(ResolveReachFpBodyLayout(spartanMap, 65, spartan) &&
+                  spartan.Valid() &&
+                  spartan.kind == ReachFpBodyKind::Spartan &&
+                  spartan.paletteBodyNodeCount == 47 &&
+                  spartan.liveSourceNodeCount == 65,
+            "Reach Spartan keeps the 47-node body distinct from the 65-node source");
+        Check(spartan.rightShoulderSource == 6 &&
+                  spartan.rightElbowSource == 9 &&
+                  spartan.rightWristSource == 13 &&
+                  spartan.leftShoulderSource == 5 &&
+                  spartan.leftElbowSource == 7 &&
+                  spartan.leftWristSource == 11 &&
+                  spartan.cameraControlSource == 4,
+            "Reach Spartan resolves the exact source arm and camera anchors");
+        Check(spartan.leftHandSourceDescendants ==
+                      0x000003E0F81F8800ull &&
+                  spartan.rightHandSourceDescendants ==
+                      0x00007C1F07E02000ull,
+            "Reach Spartan maps exact hand descendants into source order");
+    }
+
+    {
+        const std::span<const int32_t> spartanMap{
+            kReachSpartanFpBodyBoneMap};
+        ReachFpBodyLayout spartan{};
+        Check(ResolveReachFpBodyLayout(spartanMap, 65, spartan) &&
+                  spartan.leftHandPaletteDescendants ==
+                      kReachSpartanLeftHandPaletteMask &&
+                  spartan.rightHandPaletteDescendants ==
+                      kReachSpartanRightHandPaletteMask &&
+                  !ReachFpSourceIndexIsHeldObject(spartan, -1) &&
+                  !ReachFpSourceIndexIsHeldObject(spartan, 46) &&
+                  ReachFpSourceIndexIsHeldObject(spartan, 47) &&
+                  ReachFpSourceIndexIsHeldObject(spartan, 64) &&
+                  !ReachFpSourceIndexIsHeldObject(spartan, 65),
+            "Reach Spartan held-object range covers appended indices 47 through 64");
+
+        ReachFpBodyLayout maximumSource{};
+        Check(ResolveReachFpBodyLayout(
+                  spartanMap, kReachFpMaxSourceNodeCount, maximumSource) &&
+                  maximumSource.paletteBodyNodeCount == 47 &&
+                  maximumSource.liveSourceNodeCount == 120 &&
+                  ReachFpSourceIndexIsHeldObject(maximumSource, 119),
+            "Reach body resolution accepts the bounded 120-node source span");
+
+        const std::span<const int32_t> eliteMap{kReachEliteFpBodyBoneMap};
+        ReachFpBodyLayout elite{};
+        Check(ResolveReachFpBodyLayout(eliteMap, 59, elite) &&
+                  elite.Valid() && elite.kind == ReachFpBodyKind::Elite &&
+                  elite.paletteBodyNodeCount == 41 &&
+                  elite.liveSourceNodeCount == 59 &&
+                  elite.rightShoulderSource == 6 &&
+                  elite.rightElbowSource == 9 &&
+                  elite.rightWristSource == 13 &&
+                  elite.leftShoulderSource == 5 &&
+                  elite.leftElbowSource == 7 &&
+                  elite.leftWristSource == 11 &&
+                  elite.cameraControlSource == 4,
+            "Reach Elite resolves its 41-node body over the shared arm prefix");
+        Check(elite.leftHandPaletteDescendants ==
+                      kReachEliteLeftHandPaletteMask &&
+                  elite.rightHandPaletteDescendants ==
+                      kReachEliteRightHandPaletteMask &&
+                  elite.leftHandSourceDescendants ==
+                      0x0000001E1E0F8800ull &&
+                  elite.rightHandSourceDescendants ==
+                      0x000001E1E1F02000ull &&
+                  !ReachFpSourceIndexIsHeldObject(elite, 40) &&
+                  ReachFpSourceIndexIsHeldObject(elite, 41) &&
+                  ReachFpSourceIndexIsHeldObject(elite, 58) &&
+                  !ReachFpSourceIndexIsHeldObject(elite, 59),
+            "Reach Elite maps exact hand sets and appended held-object range");
+    }
+
+    {
+        const std::span<const int32_t> spartanMap{
+            kReachSpartanFpBodyBoneMap};
+        auto wrongFingerprint = kReachSpartanFpBodyBoneMap;
+        const int32_t first = wrongFingerprint[0];
+        wrongFingerprint[0] = wrongFingerprint[1];
+        wrongFingerprint[1] = first;
+        ReachFpBodyLayout rejected{};
+        Check(!ResolveReachFpBodyLayout(
+                  std::span<const int32_t>{wrongFingerprint}, 65, rejected) &&
+                  !rejected.Valid() &&
+                  rejected.kind == ReachFpBodyKind::None &&
+                  rejected.paletteBodyNodeCount == 0 &&
+                  rejected.liveSourceNodeCount == 0,
+            "Reach rejects a full permutation with the wrong exact fingerprint");
+
+        auto duplicate = kReachSpartanFpBodyBoneMap;
+        duplicate[1] = duplicate[0];
+        auto negative = kReachSpartanFpBodyBoneMap;
+        negative[0] = -1;
+        auto appendedInBody = kReachSpartanFpBodyBoneMap;
+        appendedInBody[0] = 47;
+        Check(!ResolveReachFpBodyLayout(
+                  std::span<const int32_t>{duplicate}, 65, rejected) &&
+                  !ResolveReachFpBodyLayout(
+                      std::span<const int32_t>{negative}, 65, rejected) &&
+                  !ResolveReachFpBodyLayout(
+                      std::span<const int32_t>{appendedInBody}, 65,
+                      rejected),
+            "Reach rejects duplicate, negative, and appended body-map indices");
+
+        ReachFpBodyLayout accepted{};
+        Check(ResolveReachFpBodyLayout(spartanMap, 65, accepted),
+            "Reach prepares a valid layout before fail-closed reset testing");
+        rejected = accepted;
+        Check(!ResolveReachFpBodyLayout(
+                  spartanMap.first(46), 65, rejected) &&
+                  !rejected.Valid() &&
+                  rejected.rightShoulderSource == -1 &&
+                  rejected.rightHandSourceDescendants == 0,
+            "Reach rejects a wrong palette span and clears stale output");
+        Check(!ResolveReachFpBodyLayout(spartanMap, 46, rejected) &&
+                  !ResolveReachFpBodyLayout(
+                      spartanMap, kReachFpMaxSourceNodeCount + 1, rejected) &&
+                  !ResolveReachFpBodyLayout(
+                      std::span<const int32_t>{}, 65, rejected) &&
+                  !ResolveReachFpBodyLayout(
+                      std::span<const int32_t>{kReachEliteFpBodyBoneMap},
+                      40, rejected),
+            "Reach rejects unsafe live source counts and empty maps");
+    }
+
+    {
+        constexpr uint32_t kGeneration = 7;
+        constexpr uint64_t kDiscoverySerial = 100;
+        const auto decide = [](uint32_t learnedGeneration,
+                                uint64_t learnedSerial,
+                                uint32_t pairGeneration,
+                                uint64_t pairSerial,
+                                bool valid = true,
+                                bool invalidated = false) {
+            return DecideReachFpPairLayout(
+                valid, invalidated, learnedGeneration, learnedSerial,
+                pairGeneration, pairSerial);
+        };
+
+        Check(decide(
+                  kGeneration, kDiscoverySerial, kGeneration,
+                  kDiscoverySerial) == ReachFpPairLayoutDecision::Stock,
+            "Reach keeps the discovery pair stock");
+        Check(decide(
+                  kGeneration, kDiscoverySerial, kGeneration,
+                  kDiscoverySerial + 1) == ReachFpPairLayoutDecision::Active,
+            "Reach activates a learned layout on a later prepared serial");
+        Check(decide(
+                  kGeneration, kDiscoverySerial, kGeneration,
+                  kDiscoverySerial - 1) == ReachFpPairLayoutDecision::Stock &&
+                  decide(
+                      kGeneration, kDiscoverySerial, kGeneration,
+                      kDiscoverySerial) == ReachFpPairLayoutDecision::Stock,
+            "Reach rejects stale and same-serial layout activation");
+        Check(decide(
+                  kGeneration, kDiscoverySerial, kGeneration + 1,
+                  kDiscoverySerial + 1) == ReachFpPairLayoutDecision::Stock &&
+                  decide(
+                      0, kDiscoverySerial, 0, kDiscoverySerial + 1) ==
+                      ReachFpPairLayoutDecision::Stock,
+            "Reach rejects generation mismatch and zero-generation replay");
+        Check(decide(
+                  kGeneration, kDiscoverySerial, kGeneration,
+                  kDiscoverySerial + 1, true, true) ==
+                  ReachFpPairLayoutDecision::Stock &&
+                  decide(
+                      kGeneration, kDiscoverySerial, kGeneration,
+                      kDiscoverySerial + 1, false, false) ==
+                      ReachFpPairLayoutDecision::Stock &&
+                  decide(
+                      kGeneration, 0, kGeneration, 1) ==
+                      ReachFpPairLayoutDecision::Stock &&
+                  decide(
+                      kGeneration, kDiscoverySerial, kGeneration, 0) ==
+                      ReachFpPairLayoutDecision::Stock,
+            "Reach invalidation, missing learning, and zero serials remain stock");
+
+        const auto evaluateEyeOrder = [&](const std::array<int, 2>& eyeOrder) {
+            std::array<ReachFpPairLayoutDecision, 2> eyeDecisions{
+                ReachFpPairLayoutDecision::Stock,
+                ReachFpPairLayoutDecision::Stock};
+            for (int eye : eyeOrder)
+            {
+                eyeDecisions[static_cast<size_t>(eye)] = decide(
+                    kGeneration, kDiscoverySerial, kGeneration,
+                    kDiscoverySerial + 1);
+            }
+            return eyeDecisions;
+        };
+        const auto leftFirst = evaluateEyeOrder({0, 1});
+        const auto rightFirst = evaluateEyeOrder({1, 0});
+        Check(leftFirst == rightFirst &&
+                  leftFirst[0] == ReachFpPairLayoutDecision::Active &&
+                  leftFirst[1] == ReachFpPairLayoutDecision::Active,
+            "Reach pair activation is independent of stereo eye order");
+    }
+
+    {
+        using Action = ReachFpPaletteAction;
+        const auto decide = [](bool current, bool frozen, bool transformed,
+                               bool exactBody, bool exactMatch,
+                               bool learnedTag) {
+            return DecideReachFpPaletteAction(
+                current, frozen, transformed, exactBody, exactMatch,
+                learnedTag);
+        };
+        Check(decide(true, false, false, true, false, false) ==
+                  Action::LearnStockOnly,
+            "Reach first exact body discovery is stock-only");
+        const Action precedingWeapon =
+            decide(true, true, true, false, false, false);
+        const Action body = decide(true, true, true, true, true, true);
+        const Action followingWeapon =
+            decide(true, true, true, false, false, false);
+        Check(precedingWeapon == Action::PassThroughLive &&
+                  body == Action::ArticulateExactBody &&
+                  followingWeapon == Action::PassThroughLive,
+            "Reach body context survives preceding and following weapon palettes");
+        Check(decide(true, true, true, true, false, true) ==
+                  Action::RestoreStockAndInvalidate &&
+                  decide(true, true, true, true, false, false) ==
+                  Action::RestoreStockAndInvalidate &&
+                  decide(true, true, false, false, false, true) ==
+                  Action::RestoreStockAndInvalidate,
+            "Reach changed maps, body-tag transitions, and invalid known-body maps restore stock");
+        Check(decide(true, true, true, false, false, false) ==
+                  Action::PassThroughLive &&
+                  decide(false, true, true, true, true, true) ==
+                  Action::PassThroughLive,
+            "Reach unsupported palettes and stale contexts cannot consume the body path");
+    }
+
+    {
+        constexpr size_t kPlasmaLauncherNodes = 65;
+        constexpr size_t kFloats =
+            kPlasmaLauncherNodes * kReachFpBoneMatrixFloatCount;
+        std::array<float, kFloats> stock{};
+        for (size_t node = 0; node < kPlasmaLauncherNodes; ++node)
+            stock[node * kReachFpBoneMatrixFloatCount] = 1.0f;
+        auto candidate = stock;
+        candidate[12] = 3.5f;
+        candidate[kReachFpBoneMatrixFloatCount + 10] = -2.0f;
+        auto live = stock;
+        bool commitCalled = false;
+        const bool committed = ReachFpCommitGraphIfFinite(
+            std::span<const float>{candidate}, kPlasmaLauncherNodes, [&]() {
+                commitCalled = true;
+                live = candidate;
+                return true;
+            });
+        Check(committed && commitCalled && live == candidate &&
+                  ReachFpPackedGraphFinite(
+                      std::span<const float>{live}, kPlasmaLauncherNodes),
+            "Reach validates and atomically commits a real 65-node live graph");
+
+        const auto committedLive = live;
+        auto nanCandidate = candidate;
+        nanCandidate[3 * kReachFpBoneMatrixFloatCount + 6] =
+            std::numeric_limits<float>::quiet_NaN();
+        commitCalled = false;
+        Check(!ReachFpCommitGraphIfFinite(
+                  std::span<const float>{nanCandidate},
+                  kPlasmaLauncherNodes, [&]() {
+                      commitCalled = true;
+                      live = nanCandidate;
+                      return true;
+                  }) &&
+                  !commitCalled && live == committedLive,
+            "Reach NaN rejection leaves the stock/live graph byte-identical");
+
+        auto invalidRoot = candidate;
+        invalidRoot[0] = 0.0f;
+        commitCalled = false;
+        Check(!ReachFpCommitGraphIfFinite(
+                  std::span<const float>{invalidRoot},
+                  kPlasmaLauncherNodes, [&]() {
+                      commitCalled = true;
+                      return true;
+                  }) &&
+                  !commitCalled &&
+                  !ReachFpPackedGraphFinite(
+                      std::span<const float>{candidate}.first(kFloats - 1),
+                      kPlasmaLauncherNodes) &&
+                  !ReachFpPackedGraphFinite(
+                      std::span<const float>{candidate},
+                      kReachFpMaxSourceNodeCount + 1),
+            "Reach invalid roots, malformed spans, and over-120 graphs never commit");
     }
 
     {
@@ -2525,14 +2848,14 @@ int main()
     Check(reach && reach->runtimeSupported,
         "Reach is a permanent runtime-supported title");
     Check(reach && reach->capabilities ==
-              (TitleCapability_Stereo | TitleCapability_RuntimeModes |
+              (TitleCapability_Stereo | TitleCapability_ControllerAim |
+               TitleCapability_ArmIk | TitleCapability_RuntimeModes |
                TitleCapability_RoomScale |
                TitleCapability_ControllerInput | TitleCapability_Haptics),
-        "Reach advertises the 3D + motion core capabilities");
+        "Reach advertises controller aim and arm IK with its 3D motion core");
     Check(reach && (reach->capabilities &
-              (TitleCapability_ControllerAim | TitleCapability_Hud |
-               TitleCapability_ArmIk)) == 0u,
-        "Reach withholds aim, HUD, and arm IK until title-specific evidence exists");
+              TitleCapability_Hud) == 0u,
+        "Reach continues to withhold native HUD capability");
     Check(TitleRegistry_HookPlan(GameTitle::HaloReach) ==
               TitleHookPlan::ReachCameraCore,
         "Reach receives its permanent camera-core hook plan");

@@ -81,22 +81,23 @@ their exact proven retail value slots. Reach's `apply_distortions` pass divides
 maximum by scale, so the exact normal stereo boundary preserves/reasserts the
 positive authored scale and zeros only the maximum when the VR default
 `motion_blur=0` is active. `motion_blur=1` restores both authored values, and
-title teardown restores them only after both Reach hooks are quiescent.
+title teardown restores them only after all Reach hooks are quiescent.
 
 While the tracked camera is armed, XInput suppresses stock RX/RY so the game
 cannot create a competing look transform under the HMD view. The original
 pre-head camera direction is not reused as culling or claimed as projectile aim.
-Reach controller aim, weapon/body-heading integration, native HUD, and arm IK
-remain withheld until their title-specific contracts are proven; this camera
-candidate must not claim those behaviors.
+The current unaccepted candidate also carries Reach controller aim and guarded
+two-arm IK through the proven interpolation and visible-palette boundaries.
+Native HUD remains withheld. Reach aim/IK are not release-accepted until the
+exact packaged DLL passes the headset matrix and Halo 3/ODST regressions.
 
 Signature scanning, file hashing, resource allocation, critical sections, and
-candidate logging stay out of both Reach engine render callbacks. Exact tracking
+candidate logging stay out of all Reach engine render callbacks. Exact tracking
 is published with two fixed slots and lock-free pin/claim atomics; a changing or
 stale serial fails immediately. Present performs only the
 bounded identity/field snapshot plus `GetBuffer(0)`, device/descriptor capture,
 and COM retention described above; eye allocation and proof publication remain
-on the worker. Title teardown disables both Reach hooks, verifies callback and
+on the worker. Title teardown disables all four Reach hooks, verifies callback and
 MinHook relay/wrapper RIP quiescence, then removes trampolines and releases the
 retained title module; a failed proof retains state and retries without rearming.
 

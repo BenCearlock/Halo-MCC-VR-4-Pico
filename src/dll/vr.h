@@ -193,6 +193,15 @@ struct ReachVrRenderSnapshot
     uint64_t preparedSerial = 0;
     float headOrientation[4]{0.0f, 0.0f, 0.0f, 1.0f};
     float headPosition[3]{};
+    // The shared weapon aim after two-hand adjustment and controller-local
+    // mount calibration. Position remains the raw right-controller position.
+    bool rightAimValid = false;
+    float rightAimOrientation[4]{0.0f, 0.0f, 0.0f, 1.0f};
+    float rightAimPosition[3]{};
+    // Raw tracked left-controller pose for title-specific support-hand work.
+    bool leftControllerValid = false;
+    float leftControllerOrientation[4]{0.0f, 0.0f, 0.0f, 1.0f};
+    float leftControllerPosition[3]{};
     VrPadState pad{};
     ReachVrEyeSnapshot eyes[2]{};
 };

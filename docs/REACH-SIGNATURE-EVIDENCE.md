@@ -4,9 +4,10 @@ Status: **camera/culling and screen-aligned patchy-fog transaction headset-passe
 physical-scale calibration and cumulative regressions pending**. The proven
 signatures below are wired into a permanent,
 fail-open Reach per-eye camera core
-(`InstallReachCameraCore` in `src/dll/game.cpp`; see `BUILDING.md`). It installs
-the inner `player_view_render` and outer `main_render_view` hooks only after the
-loaded-image preflight and display proof pass, arms after the one-second
+(`InstallReachCameraCore` in `src/dll/game.cpp`; see `BUILDING.md`). The current
+unaccepted candidate installs the inner `player_view_render`, outer
+`main_render_view`, FP interpolation, and visible-palette hooks as one mandatory
+transaction only after the loaded-image preflight and display proof pass, arms after the one-second
 fresh-camera safety interval, and falls open on any unmet precondition, invalid
 camera, or fault. Halo 3 and ODST are not modified. The accepted product pointer
 does not move until an exact candidate passes in the headset.
@@ -129,17 +130,12 @@ approximately 0.584% too small in the reported direction.
 The forward calibration uses one Reach-only `kReachWorldUnitsPerMeter =
 1 / 3.048` constant in both physical transforms. It does not change Halo 3's
 independent calibration, ODST, FOV, culling, or eye orientation, and it never
-scales IPD without scaling room motion by the same amount. Reach controller aim
-is still withheld; future controller displacement, weapon standoff, support-hand
-IK, and world-space reticle/muzzle origins must consume this same title-specific
-conversion. This exact scale correction remains headset-pending.
-
-Reach controller-aim capability remains withheld because no Reach-specific
-projectile/reticle aim-forward or weapon/body-heading contract has been proven.
-The original pre-head camera direction is kept logically separate from the HMD
-culling camera and is not published as aim. This preserves the Halo 3/ODST
-ownership model for later motion-control evidence without guessing a Reach
-simulation offset. Per-eye rendering still uses the proven frustum helper
+scales IPD without scaling room motion by the same amount. The controller-driven
+weapon, marker graph, support hand, and wrist targets in the current unaccepted
+candidate consume this same title-specific conversion. The original pre-head
+gameplay camera position remains separate from the tracked head-centre shoulder
+root, preventing both head translation and gun calibration from being applied
+twice. Per-eye rendering still uses the proven frustum helper
 `0x287F58`, projection builder `0x2884BC`, camera-state updater `0x286F9C`, and
 projection/matrix builder `0x28AF8C` before each inner render.
 
@@ -255,24 +251,96 @@ The machine-readable copy of these identities is
 
 ## Preliminary function candidates
 
-Unless a row says otherwise, the names below remain hypotheses and call-graph
-hints rather than established ABIs or hook sites. The original foundation
-proved only that all four RVAs fall inside the retail file's executable `.text`
-section. The frustum-bounds entry has since passed the additional static gates
-recorded below; the other three have not.
+Unless a row says otherwise, names below remain hypotheses rather than hook
+sites. The frustum, FP interpolation, and visible-palette entries now have the
+additional title-specific evidence recorded here. The camera-upload candidate
+remains unproven, and the special composer is a preserved negative result.
 
 | Candidate | RVA | Loaded-image unique | Executable range | ABI | Callers | Data flow | HREK semantics | Layout fields | Status |
 | --- | ---: | --- | --- | --- | --- | --- | --- | --- | --- |
 | Camera-derived frustum bounds (original viewport hypothesis) | `0x287F58` | Exact stock observer passed the unique loaded-image check twice; production must repeat it | Yes, `.text`, `0x287F58`-`0x2881CC` | Yes | Nine direct callers | Yes | Yes | Static consumers and producer proven; live lifetime still open | Static role proven; hook forbidden |
 | First-person camera upload | `0x282D60` | No | Offline file only | No | No | No | No | No | Unproven |
-| Visible palette | `0x2B4EB0` | No | Offline file only | No | No | No | No | No | Unproven |
-| Special-bone composer | `0x213224` | No | Offline file only | No | No | No | No | No | Unproven |
+| FP interpolation | `0x0CF1A4` | Exact-one production AOB required | Yes | `bool __fastcall(int view,int id,int slot,BoneMatrix** out,int* count)` | Direct edges recorded below | Yes | Exact HREK/live graph correlation | 120-node bound | Production candidate; headset pending |
+| Visible palette | `0x2B4EB0` | Exact-one production AOB required | Yes | `void __fastcall(uint16_t tag,const BoneMatrix* root,BoneMatrix* dst,uintptr_t,const BoneMatrix* source,const int32_t* boneMap)` | Wrapper/call edges recorded below | Yes | Exact HREK/live body maps | 47/41 output layouts | Production candidate; headset pending |
+| Special-bone composer | `0x213224` | N/A | Offline file and headset negative result | N/A | N/A | Did not drive visible FP pose | N/A | N/A | Disproven for this feature |
 
 No candidate may become a runtime hook until all columns are independently
 proven against HREK and MCC's x64 loaded image. A usable AOB must match exactly
 once in the expected executable range and fail open on zero or multiple
 matches. Every consumed field needs finite-value, bounds, index, and count
 guards plus an understood teardown boundary.
+
+## First-person interpolation and palette production candidate
+
+This path is implemented but remains **unaccepted until the exact packaged DLL
+passes in-headset**. No further probe build is part of the candidate.
+
+The pinned retail interpolation entry is `haloreach.dll+0x0CF1A4`. Its unique
+47-byte AOB is:
+
+```text
+48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 57 41 54 41 55 41 56 41 57 48 83 EC 20 33 DB 49 63 F8 38 1D ?? ?? ?? ?? 4D 8B E1 8B EA 4C 63 D9
+```
+
+The ABI is `bool __fastcall(int view, int id, int slot, BoneMatrix** outBones,
+int* outCount)`. Proven direct call edges include `0x2AF85A` (return
+`0x2AF85F`), `0x2AF8F6` (return `0x2AF8FB`), `0x2AFEB4` (return `0x2AFEB9`),
+and `0x2B0ADB` (return `0x2B0AE0`). The first two are immediately followed by
+separate palette builds, establishing that one live interpolated graph can feed
+the body and held-weapon/attachment palettes. The hook copies the untouched
+graph before rigidly applying the right-wrist delta to every live source node,
+bounded to 120, so marker, muzzle-flash, and attachment consumers remain on the
+same prepared-frame pose.
+
+The visible-palette consumer remains at `haloreach.dll+0x2B4EB0`. Its production
+AOB is:
+
+```text
+48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 57 41 56 41 57 48 83 EC 20 48 8B 05 ?? ?? ?? ?? 49 8B F0 0F B7 C9 4C 8B F2
+```
+
+The body palette is classified only by the complete exact `boneMap` fingerprint.
+Spartan has 47 palette outputs with render chains R `6/7/11`, L `4/10/14`,
+camera `5`; Elite has 41 with R `6/9/14`, L `4/7/13`, camera `5`. Mapping those
+validated outputs into animation-source order gives both layouts R `6/9/13`, L
+`5/7/11`, camera `4`. Spartan weapon graphs range through 65 live source nodes
+(the plasma-launcher case), so palette output count and source count are never
+conflated and output indices are never transplanted into source space.
+
+The complete ordered output-to-source fingerprints are pinned verbatim:
+
+```text
+Spartan[47] = 0,3,1,2,5,4,6,9,10,8,7,13,12,14,11,22,26,18,21,24,19,20,15,23,16,17,25,36,35,32,28,33,29,27,34,31,30,46,38,42,37,40,39,43,45,44,41
+Elite[41]   = 0,1,2,3,5,4,6,7,8,9,10,14,12,11,13,22,20,18,21,19,16,23,24,17,15,27,28,25,31,32,30,26,29,35,34,39,33,40,36,38,37
+```
+
+A newly observed exact layout is recorded stock-only with its prepared serial.
+It may activate only on a later stereo pair; the frozen pair selection and
+explicit head-centre/right/left targets are shared by both eyes. Unknown,
+altered, stale-generation, non-finite, out-of-range, or unsupported palettes
+remain stock. Only the exact body palette receives articulated scratch data;
+held-weapon and attachment palettes consume the coherently rigid live graph.
+The cache key includes the interpolation view/id/slot, source pointer, live
+count, title generation, and learned body tag. A known body-tag mismatch restores
+the complete untouched live graph immediately and invalidates activation only at
+the next pair boundary; unrelated palettes, including equal-count attachments,
+do not consume or invalidate the body context.
+`arm_ik=1` solves both shoulder-elbow-wrist chains, while `arm_ik=0` retains rigid
+controller parenting. Missing left tracking leaves the authored left arm.
+
+The `f19f39e` root-only assumption is rejected. It called a locking pose getter
+from the palette path, reapplied mount trim already present in the shared aim
+pose, anchored controller displacement on a head-translated root, and emitted a
+hot node dump. The installed test configuration also had `arm_ik=0`, which
+explains why that gated root substitution appeared disabled. The production
+candidate removes the dump and root builder, snapshots corrected right aim and
+raw left tracking during prepared-frame publication, and logs only worker-read
+atomic status.
+
+Both FP detours participate in callback accounting, relay/wrapper ingress scans,
+disable/quiesce/remove rollback, and generation invalidation. Installation
+requires exact-one AOB matches at both expected RVAs in executable memory; any
+failure leaves stock Reach active.
 
 ## Camera-derived frustum-bounds proof
 

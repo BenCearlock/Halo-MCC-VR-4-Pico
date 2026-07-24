@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <span>
 
 // Reach-only render evidence and allocation-free policy. This file contains no
 // Windows, COM, MinHook, logging, or engine writes, so the exact routing and
@@ -72,19 +73,287 @@ inline constexpr uintptr_t kReachMotionBlurMaxEntryRva = 0x00B3A1C8;
 inline constexpr uintptr_t kReachMotionBlurScaleEntryRva = 0x00B3A1E0;
 inline constexpr uintptr_t kReachMotionBlurMaxValueRva = 0x00B44600;
 inline constexpr uintptr_t kReachMotionBlurScaleValueRva = 0x00B44604;
-// First-person skeleton PROBE anchors (passive, log-only). 0x2B4EB0 is the final
-// visible first-person palette consumer (prologue byte-identical to the accepted
-// Halo 3 consumer; unique in the pinned image). Its own body decodes the render
-// model: modelHandle = *(u32*)(kReachRenderModelTableRva + tag*8 + 4);
-// blockBase = *(void**)(kReachNodeRecordBlockTableRva + (modelHandle>>28)*8);
-// descriptor = blockBase + modelHandle*4; node count = *(u32*)(descriptor+0x30)
+// Proven first-person production anchors. 0x2B4EB0 is the final visible body
+// palette consumer and 0x0CF1A4 publishes the live interpolation graph used by
+// body, marker, and held-object consumers. The palette decodes the render model
+// as modelHandle = *(u32*)(table + tag*8 + 4), then reads its bounded node count
+// from descriptor+0x30.
 // clamped to 120. It builds dest[i] = root(arg2) ∘ source[boneMap[i]] over count
-// bones (BoneMatrix stride 0x34). See docs/REACH-SIGNATURE-EVIDENCE.md
-// (first-person facts remain runtime-pending). 0x213224 (special-bone composer)
-// proved to NOT run on the FP path in a headset test and was abandoned.
+// bones (BoneMatrix stride 0x34). The former 0x213224 special-bone composer
+// experiment is a preserved negative result and is not part of this path.
 inline constexpr uintptr_t kReachFpVisiblePaletteRva = 0x002B4EB0;
+inline constexpr uintptr_t kReachFpInterpolateRva = 0x000CF1A4;
 inline constexpr uintptr_t kReachRenderModelTableRva = 0x00C1A600;
 inline constexpr uintptr_t kReachNodeRecordBlockTableRva = 0x04E39F20;
+
+// Pinned HREK first-person body layouts. The visible-palette count describes
+// the render_model output only; it is not the animation graph's live source
+// count. Official weapon graphs retain the exact body prefix and append held
+// object nodes (Spartan reaches 65 nodes), while the retail palette consumer
+// permits a bounded source span through 120.
+inline constexpr size_t kReachFpMaxSourceNodeCount = 120;
+inline constexpr size_t kReachSpartanFpBodyNodeCount = 47;
+inline constexpr size_t kReachEliteFpBodyNodeCount = 41;
+inline constexpr size_t kReachFpBoneMatrixFloatCount = 13;
+
+inline bool ReachFpPackedGraphFinite(
+    std::span<const float> packedRecords, size_t recordCount) noexcept
+{
+    if (!recordCount || recordCount > kReachFpMaxSourceNodeCount ||
+        packedRecords.size() != recordCount * kReachFpBoneMatrixFloatCount)
+        return false;
+    for (size_t record = 0; record < recordCount; ++record)
+    {
+        const size_t begin = record * kReachFpBoneMatrixFloatCount;
+        const float scale = packedRecords[begin];
+        if (!std::isfinite(scale) || std::fabs(scale) <= 0.001f)
+            return false;
+        for (size_t component = 1;
+             component < kReachFpBoneMatrixFloatCount; ++component)
+            if (!std::isfinite(packedRecords[begin + component]))
+                return false;
+    }
+    return true;
+}
+
+// Validate the complete candidate before invoking the caller's commit. This
+// keeps the live engine graph byte-identical on NaNs, invalid roots/scales, or
+// a partial transform failure. The commit callback is deliberately supplied by
+// the runtime so the shared policy performs no engine memory access itself.
+template <typename Commit>
+inline bool ReachFpCommitGraphIfFinite(
+    std::span<const float> packedCandidate, size_t recordCount,
+    Commit&& commit)
+{
+    if (!ReachFpPackedGraphFinite(packedCandidate, recordCount))
+        return false;
+    return static_cast<bool>(commit());
+}
+
+// Render-model output index -> animation-graph source index. The Spartan
+// fingerprint is confirmed by the live 47-node retail call and matches the
+// official HREK render_model/animation graph names exactly. The Elite
+// fingerprint is the corresponding exact HREK name mapping.
+inline constexpr std::array<int32_t, kReachSpartanFpBodyNodeCount>
+    kReachSpartanFpBodyBoneMap{{
+        0, 3, 1, 2, 5, 4, 6, 9, 10, 8, 7, 13, 12, 14, 11, 22,
+        26, 18, 21, 24, 19, 20, 15, 23, 16, 17, 25, 36, 35, 32,
+        28, 33, 29, 27, 34, 31, 30, 46, 38, 42, 37, 40, 39, 43,
+        45, 44, 41,
+    }};
+inline constexpr std::array<int32_t, kReachEliteFpBodyNodeCount>
+    kReachEliteFpBodyBoneMap{{
+        0, 1, 2, 3, 5, 4, 6, 7, 8, 9, 10, 14, 12, 11, 13, 22,
+        20, 18, 21, 19, 16, 23, 24, 17, 15, 27, 28, 25, 31, 32,
+        30, 26, 29, 35, 34, 39, 33, 40, 36, 38, 37,
+    }};
+
+// Hand descendants expressed first in render-model output order. The resolver
+// maps these through the validated boneMap to source-space masks; callers must
+// not apply a palette-order mask directly to the animation source.
+inline constexpr uint64_t kReachSpartanLeftHandPaletteMask =
+    0x0000475B43724000ull;
+inline constexpr uint64_t kReachSpartanRightHandPaletteMask =
+    0x000038A4BC8D8800ull;
+inline constexpr uint64_t kReachEliteLeftHandPaletteMask =
+    0x000000568F9A2000ull;
+inline constexpr uint64_t kReachEliteRightHandPaletteMask =
+    0x000001A97065C000ull;
+
+enum class ReachFpBodyKind : uint8_t
+{
+    None = 0,
+    Spartan,
+    Elite,
+};
+
+struct ReachFpBodyLayout
+{
+    ReachFpBodyKind kind = ReachFpBodyKind::None;
+    size_t paletteBodyNodeCount = 0;
+    size_t liveSourceNodeCount = 0;
+    int32_t rightShoulderSource = -1;
+    int32_t rightElbowSource = -1;
+    int32_t rightWristSource = -1;
+    int32_t leftShoulderSource = -1;
+    int32_t leftElbowSource = -1;
+    int32_t leftWristSource = -1;
+    int32_t cameraControlSource = -1;
+    uint64_t rightHandPaletteDescendants = 0;
+    uint64_t leftHandPaletteDescendants = 0;
+    uint64_t rightHandSourceDescendants = 0;
+    uint64_t leftHandSourceDescendants = 0;
+
+    constexpr bool Valid() const noexcept
+    {
+        const bool kindMatchesBody =
+            (kind == ReachFpBodyKind::Spartan &&
+             paletteBodyNodeCount == kReachSpartanFpBodyNodeCount) ||
+            (kind == ReachFpBodyKind::Elite &&
+             paletteBodyNodeCount == kReachEliteFpBodyNodeCount);
+        return kindMatchesBody &&
+            liveSourceNodeCount >= paletteBodyNodeCount &&
+            liveSourceNodeCount <= kReachFpMaxSourceNodeCount;
+    }
+};
+
+inline bool ResolveReachFpBodyLayout(
+    std::span<const int32_t> paletteBoneMap,
+    size_t liveSourceNodeCount,
+    ReachFpBodyLayout& out) noexcept
+{
+    out = {};
+    const size_t paletteBodyNodeCount = paletteBoneMap.size();
+    if ((paletteBodyNodeCount != kReachSpartanFpBodyNodeCount &&
+         paletteBodyNodeCount != kReachEliteFpBodyNodeCount) ||
+        liveSourceNodeCount < paletteBodyNodeCount ||
+        liveSourceNodeCount > kReachFpMaxSourceNodeCount)
+    {
+        return false;
+    }
+
+    // A body fingerprint is a complete permutation of its fixed source prefix.
+    // Validate that invariant separately from exact equality so duplicates and
+    // appended/out-of-range source indices always fail closed.
+    std::array<bool, kReachFpMaxSourceNodeCount> seen{};
+    for (int32_t source : paletteBoneMap)
+    {
+        if (source < 0 ||
+            static_cast<size_t>(source) >= paletteBodyNodeCount ||
+            seen[static_cast<size_t>(source)])
+        {
+            return false;
+        }
+        seen[static_cast<size_t>(source)] = true;
+    }
+
+    ReachFpBodyKind kind = ReachFpBodyKind::None;
+    uint64_t leftPaletteMask = 0;
+    uint64_t rightPaletteMask = 0;
+    if (paletteBodyNodeCount == kReachSpartanFpBodyNodeCount)
+    {
+        for (size_t i = 0; i < paletteBodyNodeCount; ++i)
+            if (paletteBoneMap[i] != kReachSpartanFpBodyBoneMap[i])
+                return false;
+        kind = ReachFpBodyKind::Spartan;
+        leftPaletteMask = kReachSpartanLeftHandPaletteMask;
+        rightPaletteMask = kReachSpartanRightHandPaletteMask;
+    }
+    else
+    {
+        for (size_t i = 0; i < paletteBodyNodeCount; ++i)
+            if (paletteBoneMap[i] != kReachEliteFpBodyBoneMap[i])
+                return false;
+        kind = ReachFpBodyKind::Elite;
+        leftPaletteMask = kReachEliteLeftHandPaletteMask;
+        rightPaletteMask = kReachEliteRightHandPaletteMask;
+    }
+
+    uint64_t leftSourceMask = 0;
+    uint64_t rightSourceMask = 0;
+    for (size_t output = 0; output < paletteBodyNodeCount; ++output)
+    {
+        const uint64_t outputBit = uint64_t{1} << output;
+        const uint64_t sourceBit =
+            uint64_t{1} << static_cast<uint32_t>(paletteBoneMap[output]);
+        if (leftPaletteMask & outputBit)
+            leftSourceMask |= sourceBit;
+        if (rightPaletteMask & outputBit)
+            rightSourceMask |= sourceBit;
+    }
+
+    ReachFpBodyLayout layout{};
+    layout.kind = kind;
+    layout.paletteBodyNodeCount = paletteBodyNodeCount;
+    layout.liveSourceNodeCount = liveSourceNodeCount;
+    // The official Spartan and Elite animation graphs share this exact
+    // first-person arm/camera prefix.
+    layout.rightShoulderSource = 6;
+    layout.rightElbowSource = 9;
+    layout.rightWristSource = 13;
+    layout.leftShoulderSource = 5;
+    layout.leftElbowSource = 7;
+    layout.leftWristSource = 11;
+    layout.cameraControlSource = 4;
+    layout.rightHandPaletteDescendants = rightPaletteMask;
+    layout.leftHandPaletteDescendants = leftPaletteMask;
+    layout.rightHandSourceDescendants = rightSourceMask;
+    layout.leftHandSourceDescendants = leftSourceMask;
+    out = layout;
+    return true;
+}
+
+inline constexpr bool ReachFpSourceIndexIsHeldObject(
+    const ReachFpBodyLayout& layout, int32_t sourceIndex) noexcept
+{
+    return layout.Valid() && sourceIndex >= 0 &&
+        static_cast<size_t>(sourceIndex) >= layout.paletteBodyNodeCount &&
+        static_cast<size_t>(sourceIndex) < layout.liveSourceNodeCount;
+}
+
+enum class ReachFpPairLayoutDecision : uint8_t
+{
+    Stock = 0,
+    Active,
+};
+
+// Layout discovery is deliberately stock-only. A generation-tagged layout may
+// enter a frozen stereo pair only after its discovery serial, and invalidation
+// takes effect at the next pair boundary. The decision is pair-scoped and has
+// no eye input, so left-first and right-first rendering select identically.
+inline constexpr ReachFpPairLayoutDecision DecideReachFpPairLayout(
+    bool learnedLayoutValid,
+    bool invalidateNextPair,
+    uint32_t learnedGeneration,
+    uint64_t learnedPreparedSerial,
+    uint32_t pairGeneration,
+    uint64_t pairPreparedSerial) noexcept
+{
+    return learnedLayoutValid &&
+            !invalidateNextPair &&
+            learnedGeneration != 0 &&
+            learnedGeneration == pairGeneration &&
+            learnedPreparedSerial != 0 &&
+            pairPreparedSerial > learnedPreparedSerial
+        ? ReachFpPairLayoutDecision::Active
+        : ReachFpPairLayoutDecision::Stock;
+}
+
+enum class ReachFpPaletteAction : uint8_t
+{
+    PassThroughLive = 0,
+    LearnStockOnly,
+    ArticulateExactBody,
+    RestoreStockAndInvalidate,
+};
+
+// Palette calls may surround the body with held-weapon/attachment palettes.
+// Those unrelated calls pass through without consuming the body context. Only
+// an exact supported body fingerprint learns/articulates, while a changed exact
+// body or an invalid map on the already learned body tag rolls the graph back.
+inline constexpr ReachFpPaletteAction DecideReachFpPaletteAction(
+    bool contextCurrent,
+    bool frozenLayoutValid,
+    bool graphTransformed,
+    bool exactSupportedBody,
+    bool exactBodyMatchesFrozen,
+    bool learnedBodyTagMatches) noexcept
+{
+    if (!contextCurrent)
+        return ReachFpPaletteAction::PassThroughLive;
+    if (exactSupportedBody && !frozenLayoutValid)
+        return ReachFpPaletteAction::LearnStockOnly;
+    if (exactSupportedBody && frozenLayoutValid)
+        return exactBodyMatchesFrozen && graphTransformed
+            ? ReachFpPaletteAction::ArticulateExactBody
+            : exactBodyMatchesFrozen
+                ? ReachFpPaletteAction::PassThroughLive
+                : ReachFpPaletteAction::RestoreStockAndInvalidate;
+    if (frozenLayoutValid && learnedBodyTagMatches)
+        return ReachFpPaletteAction::RestoreStockAndInvalidate;
+    return ReachFpPaletteAction::PassThroughLive;
+}
+
 // Retail apply_distortions divides the maximum by the scale at both sites.
 // The scale must therefore remain positive even when the maximum is zeroed.
 inline constexpr uintptr_t kReachMotionBlurMaxOverScaleDivideRva = 0x00287561;

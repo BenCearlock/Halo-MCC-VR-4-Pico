@@ -13,6 +13,7 @@
 #include "vr.h"
 #include "ik.h"
 #include "title_adapter.h"
+#include "../common/reach_render_logic.h"
 #ifndef HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE
 #define HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE 0
 #endif
@@ -433,6 +434,23 @@ namespace
         int lShoulder = -1;
         uint64_t lWristDescendants = 0;
         bool valid = false;
+    };
+
+    // Optional immutable inputs for title adapters whose render hooks already
+    // own one exact prepared-frame controller/head snapshot. Halo 3 and ODST
+    // continue through DesiredWristWorld and the accepted camera atomics when
+    // this is null; Reach supplies all three world poses explicitly so neither
+    // eye can re-read tracking or solve from a per-eye root.
+    struct FpExplicitPoseTargets
+    {
+        BoneMatrix centerRoot{};
+        BoneMatrix rightWrist{};
+        BoneMatrix leftWrist{};
+        float rightScale = 1.0f;
+        float leftScale = 1.0f;
+        bool centerRootValid = false;
+        bool rightWristValid = false;
+        bool leftWristValid = false;
     };
     // One context per held-weapon slot: slot 0 is the primary (right-hand)
     // weapon, slot 1 is the dual-wield secondary (left-hand) weapon. The
@@ -2983,6 +3001,60 @@ namespace
     // Same single same-frame rigid transform as the visible palette (wrist ->
     // controller), applied to the live interpolation buffer that feeds
     // markers/muzzle effects, so the flash and the gun cannot diverge.
+    bool ApplyControllerToMarkerBonesWithTarget(
+        const BoneMatrix& root, const BoneMatrix& desiredWristWorld,
+        float meshScale, BoneMatrix* bones, int count, int transformAnchor)
+    {
+        if (!bones || count<=0 || count>120 ||
+            transformAnchor<0 || transformAnchor>=count ||
+            !isfinite(meshScale) || meshScale<=0.0f)
+        {
+            return false;
+        }
+        BoneMatrix candidate[120]{};
+        memcpy(candidate,bones,static_cast<size_t>(count)*sizeof(BoneMatrix));
+        BoneMatrix wristWorld{},inverseWristWorld{},t{},inverseRoot{},tRoot{},m{};
+        if (!ComposeBoneMatrices(root,candidate[transformAnchor],wristWorld) ||
+            !InvertBoneMatrix(wristWorld,inverseWristWorld) ||
+            !ComposeBoneMatrices(desiredWristWorld,inverseWristWorld,t) ||
+            !InvertBoneMatrix(root,inverseRoot) ||
+            !ComposeBoneMatrices(t,root,tRoot) ||
+            !ComposeBoneMatrices(inverseRoot,tRoot,m)) return false;
+        for (int i=0;i<count;++i)
+        {
+            BoneMatrix transformed{};
+            if (!ComposeBoneMatrices(m,candidate[i],transformed)) return false;
+            candidate[i]=transformed;
+        }
+        if (meshScale!=1.0f)
+        {
+            const float anchor[3]={candidate[transformAnchor].translation[0],
+                                   candidate[transformAnchor].translation[1],
+                                   candidate[transformAnchor].translation[2]};
+            for (int i=0;i<count;++i)
+            {
+                for (int r=0;r<3;++r)
+                    candidate[i].translation[r]=anchor[r]+
+                        (candidate[i].translation[r]-anchor[r])*meshScale;
+                candidate[i].scale*=meshScale;
+                if (!isfinite(candidate[i].scale) ||
+                    !isfinite(candidate[i].translation[0]) ||
+                    !isfinite(candidate[i].translation[1]) ||
+                    !isfinite(candidate[i].translation[2]))
+                {
+                    return false;
+                }
+            }
+        }
+        const std::span<const float> packed{
+            reinterpret_cast<const float*>(candidate),
+            static_cast<size_t>(count)*kReachFpBoneMatrixFloatCount};
+        return ReachFpCommitGraphIfFinite(packed,static_cast<size_t>(count),[&]() {
+            memcpy(bones,candidate,static_cast<size_t>(count)*sizeof(BoneMatrix));
+            return true;
+        });
+    }
+
     bool ApplyControllerToMarkerBonesFromRoot(
         BoneMatrix root, BoneMatrix* bones, int count, int wrist,
         int leftWrist, bool dual)
@@ -3014,32 +3086,9 @@ namespace
         float meshScale=1.0f;
         BoneMatrix desiredWristWorld{};
         if (!DesiredWristWorld(dual,desiredWristWorld,meshScale)) return false;
-        BoneMatrix wristWorld{},inverseWristWorld{},t{},inverseRoot{},tRoot{},m{};
-        if (!ComposeBoneMatrices(root,bones[transformAnchor],wristWorld) ||
-            !InvertBoneMatrix(wristWorld,inverseWristWorld) ||
-            !ComposeBoneMatrices(desiredWristWorld,inverseWristWorld,t) ||
-            !InvertBoneMatrix(root,inverseRoot) ||
-            !ComposeBoneMatrices(t,root,tRoot) ||
-            !ComposeBoneMatrices(inverseRoot,tRoot,m)) return false;
-        for (int i=0;i<count;++i)
-        {
-            BoneMatrix transformed{};
-            if (!ComposeBoneMatrices(m,bones[i],transformed)) return false;
-            bones[i]=transformed;
-        }
-        if (meshScale!=1.0f)
-        {
-            const float anchor[3]={bones[transformAnchor].translation[0],
-                                   bones[transformAnchor].translation[1],
-                                   bones[transformAnchor].translation[2]};
-            for (int i=0;i<count;++i)
-            {
-                for (int r=0;r<3;++r)
-                    bones[i].translation[r]=anchor[r]+
-                        (bones[i].translation[r]-anchor[r])*meshScale;
-                bones[i].scale*=meshScale;
-            }
-        }
+        if (!ApplyControllerToMarkerBonesWithTarget(
+                root,desiredWristWorld,meshScale,bones,count,transformAnchor))
+            return false;
         static std::atomic<bool> logged{false};
         if (!logged.exchange(true))
             LOG("M3: marker/muzzle bones rigid-parented with the same transform as the gun");
@@ -3228,7 +3277,9 @@ namespace
                                          const FpInterpolationContext& context,
                                          const BoneMatrix& root,
                                          const BoneMatrix* source,
-                                         const BoneMatrix*& replacement)
+                                         const BoneMatrix*& replacement,
+                                         const FpExplicitPoseTargets* explicitTargets = nullptr,
+                                         const BoneMatrix* unmodifiedOverride = nullptr)
     {
         if (!context.valid || context.slot<0 || context.slot>1 ||
             source!=context.source ||
@@ -3240,7 +3291,9 @@ namespace
         // hand's rigid delta; it is never independently seated on a controller.
         // Slot-1 failures never touch the primary arm diagnostics.
         const bool dual=(context.slot==1);
-        const BoneMatrix* const unmodified=g_fpUnmodifiedInterpolations[context.slot];
+        const BoneMatrix* const unmodified=unmodifiedOverride
+            ? unmodifiedOverride
+            : g_fpUnmodifiedInterpolations[context.slot];
         const size_t paletteBytes = static_cast<size_t>(context.count) *
             sizeof(BoneMatrix);
 
@@ -3318,13 +3371,45 @@ namespace
 
         float meshScale=1.0f;
         BoneMatrix desiredWristWorld{};
-        if (!DesiredWristWorld(dual,desiredWristWorld,meshScale))
+        bool haveDesiredWrist=false;
+        if (explicitTargets)
+        {
+            if (dual && explicitTargets->leftWristValid)
+            {
+                desiredWristWorld=explicitTargets->leftWrist;
+                meshScale=explicitTargets->leftScale;
+                haveDesiredWrist=true;
+            }
+            else if (!dual && explicitTargets->rightWristValid)
+            {
+                desiredWristWorld=explicitTargets->rightWrist;
+                meshScale=explicitTargets->rightScale;
+                haveDesiredWrist=true;
+            }
+        }
+        else
+        {
+            haveDesiredWrist=DesiredWristWorld(
+                dual,desiredWristWorld,meshScale);
+        }
+        if (!haveDesiredWrist)
         {
             if (dual) return false;
             g_armFailurePublished.store("right-controller-pose",std::memory_order_relaxed);
             g_armFailureSide.store(1,std::memory_order_release);
             return false;
         }
+        auto loadLeftWristTarget = [&](BoneMatrix& desired, float& scale) {
+            if (explicitTargets)
+            {
+                if (!explicitTargets->leftWristValid)
+                    return false;
+                desired=explicitTargets->leftWrist;
+                scale=explicitTargets->leftScale;
+                return true;
+            }
+            return DesiredWristWorld(true,desired,scale);
+        };
         // CENTER-ROOT WORLD SOLVE (2026-07-19): this function runs once per
         // EYE, and the palette consumer's `root` is that eye's camera. Any
         // world position built from it (the planted shoulder, the solved
@@ -3334,6 +3419,13 @@ namespace
         // final record conversion (invRoot) may use the eye root, which makes
         // the rendered world pose eye-independent and the stereo fuse.
         BoneMatrix centerRoot=root;
+        if (explicitTargets)
+        {
+            if (!explicitTargets->centerRootValid)
+                return false;
+            centerRoot=explicitTargets->centerRoot;
+        }
+        else
         {
             float camBasis[9];
             if (g_camValid.load() && LoadCameraBasis(camBasis))
@@ -3363,8 +3455,10 @@ namespace
             if (NormalizedBasis(centerRoot,cb))
             {
                 // MEASURED world-up (not assumed) — see g_worldUp / CamCopyHook.
-                const float U[3]={g_worldUp[0].load(),g_worldUp[1].load(),
-                                  g_worldUp[2].load()};
+                const float U[3]={
+                    explicitTargets ? 0.0f : g_worldUp[0].load(),
+                    explicitTargets ? 0.0f : g_worldUp[1].load(),
+                    explicitTargets ? 1.0f : g_worldUp[2].load()};
                 float fwd[3]={cb[0],cb[1],cb[2]};           // camera forward, world
                 const float d=fwd[0]*U[0]+fwd[1]*U[1]+fwd[2]*U[2];
                 float fH[3]={fwd[0]-U[0]*d,fwd[1]-U[1]*d,fwd[2]-U[2]*d};
@@ -3409,6 +3503,21 @@ namespace
             BoneMatrix invRoot{};
             if (InvertBoneMatrix(root,invRoot))
             {
+                // Reach supplies an explicit head-centre root.  Convert every
+                // authored record through that centre before modifying either
+                // arm, so the cached world pose cannot inherit whichever eye
+                // happened to render first.  Halo 3/ODST retain their existing
+                // per-title path when explicitTargets is null.
+                if (explicitTargets)
+                {
+                    BoneMatrix centerToEye{};
+                    if (!ComposeBoneMatrices(invRoot,centerRoot,centerToEye))
+                        return false;
+                    for (int i=0;i<context.count;++i)
+                        if (!ComposeBoneMatrices(centerToEye,unmod[i],
+                                                 g_fpPaletteScratch[i]))
+                            return false;
+                }
                 // IK divergence probe (log-only): capture the per-eye solve
                 // inputs so a single desktop/headset session names WHICH input
                 // differs between the two eye passes (root by design; anything
@@ -3561,7 +3670,7 @@ namespace
                                                      g_fpPaletteScratch[i])) return false;
                         }
                         static std::atomic<bool> loggedDualIk{false};
-                        if (!loggedDualIk.exchange(true))
+                        if (!explicitTargets && !loggedDualIk.exchange(true))
                             LOG("DUAL VRIK: slot 1 arm IK active on the LEFT "
                                 "controller (wrist %d, elbow %d, shoulder %d)",
                                 context.lWrist,context.lElbow,context.lShoulder);
@@ -3591,12 +3700,13 @@ namespace
                             context.lWrist>=0 && context.lWrist<context.count)
                         {
                             BoneMatrix desiredL{}; float leftScale=1.0f;
-                            if (DesiredWristWorld(true,desiredL,leftScale))
+                            if (loadLeftWristTarget(desiredL,leftScale))
                             {
                                 static std::atomic<bool> loggedDualArm{false};
                                 if (applyArm(context.lShoulder,context.lElbow,
                                              context.lWrist,context.lWristDescendants,
                                              desiredL,1.0f,nullptr,0.0f) &&
+                                    !explicitTargets &&
                                     !loggedDualArm.exchange(true))
                                     LOG("DUAL VRIK: secondary VISIBLE hand bound to "
                                         "the left controller (wrist %d, elbow %d, "
@@ -3610,7 +3720,7 @@ namespace
                         context.lWrist>=0 && context.lWrist<context.count)
                     {
                         BoneMatrix desiredLeft{}; float leftScale=1.0f;
-                        if (DesiredWristWorld(true,desiredLeft,leftScale))
+                        if (loadLeftWristTarget(desiredLeft,leftScale))
                         {
                             static std::atomic<bool> loggedLeft{false};
                             if (applyArm(context.lShoulder,context.lElbow,context.lWrist,
@@ -3620,21 +3730,23 @@ namespace
                                 probeLeftValid=true;
                                 g_armFailurePublished.store(nullptr,std::memory_order_relaxed);
                                 g_armFailureSide.store(0,std::memory_order_release);
-                                if (!loggedLeft.exchange(true))
+                                if (!explicitTargets &&
+                                    !loggedLeft.exchange(true))
                                     LOG("M3 VRIK: LEFT arm on the left controller "
                                         "(wrist %d, elbow %d, shoulder %d)",
                                         context.lWrist,context.lElbow,context.lShoulder);
                             }
                             else publishLeftFailure(g_armFailWhy?g_armFailWhy:"apply-arm");
                         }
-                        else publishLeftFailure("left-controller-pose");
+                        else if (!explicitTargets)
+                            publishLeftFailure("left-controller-pose");
                     }
                     else publishLeftFailure("left-chain-indices");
                     // Compare this eye's LEFT-arm solve inputs to the other
                     // eye's. dRoot large is expected (eye offset). Any nonzero
                     // dCenterRoot / dWrist / dLens / dDesired names the leaking
                     // per-eye input behind the left-arm split. Rate-limited.
-                    if (probeLeftValid)
+                    if (probeLeftValid && !explicitTargets)
                     {
                         static ArmProbe eyeProbe[2]{};
                         static BoneMatrix eyeRoot[2]{}, eyeCenterRoot[2]{};
@@ -3690,7 +3802,9 @@ namespace
                             bone.scale*=scale;
                         }
                     };
-                    const float leftScale=Clamp(g_config.left_hand_scale,0.3f,3.0f);
+                    const float leftScale=explicitTargets
+                        ? explicitTargets->leftScale
+                        : Clamp(g_config.left_hand_scale,0.3f,3.0f);
                     if (dual)
                     {
                         // The dual-wield carrier IS the left hand; its own gun
@@ -3718,13 +3832,14 @@ namespace
                     replacement=g_fpPaletteScratch;
                     cacheSolvedPalette(g_fpPaletteScratch);
                     static std::atomic<bool> loggedIk{false};
-                    if (!loggedIk.exchange(true))
+                    if (!explicitTargets && !loggedIk.exchange(true))
                         LOG("M3 VRIK: arm IK active — shoulder %d planted, elbow %d solved, "
                             "wrist %d + %lld subtree bones to controller",
                             context.shoulder,context.elbow,context.wrist,
                             (long long)__popcnt64(context.wristDescendants));
                     // Full-solve cache misses. Exact duplicate palettes inside
                     // this stereo pair return above without repeating arm IK.
+                    if (!explicitTargets)
                     {
                         static std::atomic<uint32_t> solves{0};
                         static std::atomic<DWORD> lastLog{GetTickCount()};
@@ -3791,7 +3906,9 @@ namespace
         // here — the left hand ends up at left_hand_scale either way, and the
         // slider behaves the same with arm IK on or off.
         {
-            const float leftScale=Clamp(g_config.left_hand_scale,0.3f,3.0f);
+            const float leftScale=explicitTargets
+                ? explicitTargets->leftScale
+                : Clamp(g_config.left_hand_scale,0.3f,3.0f);
             const float relative=leftScale/meshScale;
             if (context.lWristDescendants && context.lWrist>=0 &&
                 context.lWrist<context.count &&
@@ -3815,7 +3932,7 @@ namespace
         replacement=g_fpPaletteScratch;
         cacheSolvedPalette(g_fpPaletteScratch);
         static std::atomic<bool> logged{false};
-        if (!logged.exchange(true))
+        if (!explicitTargets && !logged.exchange(true))
             LOG("M3: FP palette rigid-parented to the controller "
                 "(player %d, %d bones, wrist %d, single same-frame transform)",
                 context.player,context.count,context.wrist);
@@ -9558,6 +9675,8 @@ namespace
         int32_t cameraStackDepthBefore = -1;
         uint64_t preparedSerial = 0;
         ReachVrRenderAccess* renderAccess = nullptr;
+        float gameplayBasePosition[3]{};
+        FpExplicitPoseTargets fpTargets{};
         alignas(16) unsigned char headCenter[kReachCompactCameraBytes]{};
         ReachEyeRenderInput eyes[2]{};
     };
@@ -9576,8 +9695,8 @@ namespace
         std::atomic<bool> installed{false};
         std::atomic<bool> armed{false};
         std::atomic<bool> teardownRequested{false};
-        // Counts both Reach detours from wrapper entry until every
-        // trampoline/original call has returned. Teardown disables both hooks,
+        // Counts all four Reach detours from wrapper entry until every
+        // trampoline/original call has returned. Teardown disables all hooks,
         // then proves that neither a callback nor a MinHook relay ingress
         // remains before freeing either trampoline or the retained title DLL.
         std::atomic<int> activeCallbacks{0};
@@ -9592,10 +9711,8 @@ namespace
         bool motionBlurResolved = false;
         bool motionBlurSuppressed = false;
         uint8_t* patchyFogFlags = nullptr;
-        // Optional passive FP palette probe (log-only). Null when the probe
-        // prologue check or MinHook install failed; the camera core is
-        // unaffected either way. Torn down with the two render hooks.
-        void* fpPaletteProbeTarget = nullptr;
+        void* fpInterpolateTarget = nullptr;
+        void* fpPaletteTarget = nullptr;
     } g_reachCamera;
     static_assert(std::atomic<int>::is_always_lock_free);
 
@@ -9608,13 +9725,73 @@ namespace
 
     ReachPlayerViewRenderFn g_reachOrigPlayerViewRender = nullptr;
     ReachMainRenderViewFn g_reachOrigMainRenderView = nullptr;
-    // Passive first-person palette probe trampoline (log-only; see
-    // ReachFpPaletteProbe). ABI verified against the pinned Reach image at
-    // 0x2B4EB0 and matching the accepted Halo 3 visible-palette consumer.
+    using ReachFpInterpolateFn = bool(__fastcall*)(
+        int, int, int, BoneMatrix**, int*);
+    ReachFpInterpolateFn g_reachOrigFpInterpolate = nullptr;
+    // Production first-person palette trampoline. ABI verified against the
+    // pinned Reach image at 0x2B4EB0.
     using ReachFpPaletteFn = void(__fastcall*)(
         uint16_t, const BoneMatrix*, BoneMatrix*, uintptr_t,
         const BoneMatrix*, const int32_t*);
     ReachFpPaletteFn g_reachOrigFpPalette = nullptr;
+
+    constexpr size_t kReachFpLayoutCacheCapacity = 4;
+    struct ReachFpLayoutCacheEntry
+    {
+        bool valid = false;
+        bool invalidateNextPair = false;
+        uint32_t generation = 0;
+        const BoneMatrix* source = nullptr;
+        int liveSourceCount = 0;
+        int interpolationView = 0;
+        int interpolationId = 0;
+        int interpolationSlot = 0;
+        uint16_t bodyTag = 0;
+        uint64_t learnedPreparedSerial = 0;
+        ReachFpBodyLayout layout{};
+    };
+    struct ReachFpPairScope
+    {
+        bool armed = false;
+        uint32_t generation = 0;
+        uint64_t preparedSerial = 0;
+        FpExplicitPoseTargets targets{};
+        ReachFpLayoutCacheEntry layouts[kReachFpLayoutCacheCapacity]{};
+    };
+    struct ReachFpInterpolationContext
+    {
+        bool valid = false;
+        bool transformed = false;
+        uint32_t generation = 0;
+        uint64_t preparedSerial = 0;
+        BoneMatrix* source = nullptr;
+        int liveSourceCount = 0;
+        int interpolationView = 0;
+        int interpolationId = 0;
+        int interpolationSlot = 0;
+        uint16_t bodyTag = 0;
+        ReachFpBodyLayout layout{};
+        FpExplicitPoseTargets targets{};
+        BoneMatrix untouchedLive[kReachFpMaxSourceNodeCount]{};
+    };
+    thread_local ReachFpLayoutCacheEntry
+        g_reachFpLayoutCache[kReachFpLayoutCacheCapacity];
+    thread_local ReachFpPairScope g_reachFpPairScope;
+    thread_local ReachFpInterpolationContext g_reachFpInterpolation;
+
+    struct ReachFpStatus
+    {
+        std::atomic<uint64_t> key{0};
+        std::atomic<uint32_t> generation{0};
+        std::atomic<int> code{0};
+        std::atomic<int> bodyCount{0};
+        std::atomic<int> liveCount{0};
+    } g_reachFpStatus;
+    std::atomic<uint64_t> g_reachFpLoggedStatusKey{0};
+
+    void ReachBeginFpPairScope(uint32_t generation, uint64_t preparedSerial,
+                               const FpExplicitPoseTargets& targets);
+    void ReachEndFpPairScope();
 
     // Reach's apply_distortions pass divides motion_blur_max by
     // motion_blur_scale. Zeroing both controls creates 0/0 NaNs in the
@@ -10121,6 +10298,9 @@ namespace
         bool completed = false;
         bool transactionValid = true;
         uint32_t capturedEyes = 0;
+        ReachBeginFpPairScope(
+            g_reachCamera.generation,access.preparedSerial,
+            g_reachOwnerScope.fpTargets);
         __try
         {
             for (uint32_t pass = 0; pass < 2; ++pass)
@@ -10132,6 +10312,8 @@ namespace
                     transactionValid = false;
                     break;
                 }
+                g_stereoEye.store(
+                    static_cast<int>(policy.eye),std::memory_order_release);
                 // Head-tracked centre plus this eye's exact OpenXR separation,
                 // cant, and symmetric covering FOV, stamped into the primary
                 // compact camera.
@@ -10250,6 +10432,7 @@ namespace
         }
         __finally
         {
+            ReachEndFpPairScope();
             ReachRestoreScope(workspace, playerView, savedWorkspace, savedPv);
         }
         return completed;
@@ -10373,20 +10556,10 @@ namespace
         }
     }
 
-    // ---- First-person palette hook: gun-follows-controller + diagnostics ----
-    // Hooks the stock visible-palette consumer 0x2B4EB0 (Reach's FP path; the
-    // special-bone composer 0x213224 proved silent in a headset test). Two jobs:
-    //   (1) BEHAVIOR: substitute a controller-aligned render root so the whole
-    //       first-person gun+arms assembly points where the right controller
-    //       aims (ReachBuildControllerFpRoot; gated on arm_ik, fail-open to the
-    //       stock root). This is the accepted Reach FP-IK bringup step.
-    //   (2) DIAGNOSTIC: a rate-limited, SEH-guarded, read-only dump of the
-    //       render model + root that produced the rig (below). Never writes game
-    //       memory, allocates nothing. All addressing was read from that
-    //       function's OWN code (see reach_render_logic.h): modelHandle =
-    //       (*table)[tag].+4, blockBase = blockTable[modelHandle>>28], count =
-    //       *(u32)(blockBase+modelHandle*4+0x30). Project law: only a runtime
-    //       dump is trusted -- the rig (47 bones, root basis) was confirmed live.
+    // Reach production first-person path. The interpolation hook preserves a
+    // bounded untouched graph and rigidly moves the live marker/attachment
+    // graph; only an exact learned body palette enters the articulated solver.
+    // Hot hooks perform bounded reads and atomic status publication only.
     static int SafeReadBytes(const void* src, void* dst, size_t n)
     {
         __try { memcpy(dst, src, n); }
@@ -10394,303 +10567,534 @@ namespace
         return 1;
     }
 
-    void ReachFpPaletteProbeDump(uint16_t tag, const BoneMatrix* root,
-                                 const BoneMatrix* source, const int32_t* boneMap)
+    static int SafeWriteBytes(void* dst, const void* src, size_t n)
     {
-        const uintptr_t base = g_reachCamera.base;
-        const DWORD now = GetTickCount();
-        // Entry diagnostic (rate-limited to 1 s, ungated): proves the FP palette
-        // consumer runs and with which model tag / render root.
-        static std::atomic<DWORD> lastEntryMs{0};
-        const bool logEntry =
-            now - lastEntryMs.load(std::memory_order_relaxed) >= 1000;
-        if (logEntry)
-        {
-            lastEntryMs.store(now, std::memory_order_relaxed);
-            LOG("REACH FPPROBE entry: armed=%d tag=%u root=%p source=%p boneMap=%p",
-                static_cast<int>(g_reachCamera.armed.load(
-                    std::memory_order_acquire)),
-                static_cast<unsigned>(tag), root, source, boneMap);
-        }
-        if (!base || !source || !boneMap)
-            return;
-        // Only dump while the Reach camera is armed (the FP path also runs once
-        // pre-arm with garbage) and rate-limit the dump on its OWN timer so it
-        // re-emits periodically instead of being suppressed after a stale call.
-        if (!g_reachCamera.armed.load(std::memory_order_acquire))
-            return;
-        static std::atomic<DWORD> lastDumpMs{0};
-        if (now - lastDumpMs.load(std::memory_order_relaxed) < 1000)
-            return;
-        lastDumpMs.store(now, std::memory_order_relaxed);
-        static std::atomic<int> dumped{0};
-        if (dumped.fetch_add(1, std::memory_order_relaxed) >= 16)
-            return;
-
-        // Resolve the render model exactly as 0x2B4EB0 does, to read the node
-        // count. NOTE the leading dereference: the function loads a GLOBAL
-        // POINTER at kReachRenderModelTableRva first (mov rax,[rip+..]) and only
-        // then indexes it -- omitting that deref is what produced modelHandle=
-        // FFFFFFFF in probe v3. modelHandle = (*table)[tag].+4;
-        // blockBase = blockTable[hi]; count = *(u32)(blockBase+modelHandle*4+0x30).
-        const uint8_t* modelTable = nullptr;
-        if (!SafeReadBytes(reinterpret_cast<const void*>(
-                    base + kReachRenderModelTableRva),
-                &modelTable, sizeof(modelTable)) ||
-            !modelTable)
-            return;
-        uint32_t modelHandle = 0;
-        if (!SafeReadBytes(
-                modelTable + static_cast<size_t>(tag) * 8u + 4u,
-                &modelHandle, sizeof(modelHandle)))
-            return;
-        const uint8_t* blockBase = nullptr;
-        if (!SafeReadBytes(reinterpret_cast<const uint8_t*>(
-                    base + kReachNodeRecordBlockTableRva) +
-                    static_cast<size_t>(modelHandle >> 28) * 8u,
-                &blockBase, sizeof(blockBase)) ||
-            !blockBase)
-            return;
-        uint32_t rawCount = 0;
-        if (!SafeReadBytes(
-                blockBase + static_cast<size_t>(modelHandle) * 4u + 0x30,
-                &rawCount, sizeof(rawCount)))
-            return;
-        int count = static_cast<int>(rawCount);
-        if (count < 0) count = 0;
-        if (count > 120) count = 120;
-
-        // ONE-TIME node-record dump to identify the wrist/hands. The palette fn
-        // itself NEVER reads node names/parents (verified by full disasm of
-        // 0x2B4EB0: it only uses count+boneMap+source+root), so the skeleton
-        // identity lives in the render_model's node block, reached via the
-        // descriptor. Probe the layout Codex derived from the sibling composer
-        // 0x213224 for this SAME render_model struct: node-block handle at
-        // descriptor+0x4C, same block table (kReachNodeRecordBlockTableRva),
-        // record i at nodeBlock+(nodeHandle+i*11)*4, string-id@+0, parent@+8
-        // (i16). Also dumps the raw descriptor header + raw node words so the
-        // true field offsets are recoverable from ONE log if this layout is off.
-        // Read-only, SEH-guarded, emitted once. This is what Halo 3's IK matches
-        // (r_hand=0xA6/l_hand=0xA2/camera_control=0xD9) to seat the wrist.
-        static std::atomic<bool> nodesDumped{false};
-        if (count > 0 && !nodesDumped.exchange(true))
-        {
-            const uint8_t* descriptor =
-                blockBase + static_cast<size_t>(modelHandle) * 4u;
-            for (int r = 0; r < 0x60; r += 0x10)
-            {
-                uint32_t w[4] = {0, 0, 0, 0};
-                if (!SafeReadBytes(descriptor + r, w, sizeof(w)))
-                    break;
-                LOG("REACH FPPROBE desc+%02X: %08X %08X %08X %08X",
-                    r, w[0], w[1], w[2], w[3]);
-            }
-            uint32_t nodeHandle = 0;
-            const bool haveNodeHandle = SafeReadBytes(
-                descriptor + 0x4C, &nodeHandle, sizeof(nodeHandle));
-            const uint8_t* nodeBlock = nullptr;
-            bool haveNodeBlock = false;
-            if (haveNodeHandle)
-                haveNodeBlock =
-                    SafeReadBytes(reinterpret_cast<const uint8_t*>(
-                                      base + kReachNodeRecordBlockTableRva) +
-                                      static_cast<size_t>(nodeHandle >> 28) * 8u,
-                                  &nodeBlock, sizeof(nodeBlock)) &&
-                    nodeBlock;
-            LOG("REACH FPPROBE nodes: modelHandle=%08X nodeHandle=%08X "
-                "haveBlock=%d count=%d",
-                modelHandle, nodeHandle, static_cast<int>(haveNodeBlock), count);
-            if (haveNodeBlock)
-                for (int i = 0; i < count && i < 64; ++i)
-                {
-                    const uint8_t* rec =
-                        nodeBlock + (static_cast<size_t>(nodeHandle) +
-                                     static_cast<size_t>(i) * 11u) * 4u;
-                    uint32_t w0 = 0, w1 = 0, w2 = 0, w10 = 0;
-                    int16_t p8 = -1;
-                    SafeReadBytes(rec + 0x00, &w0, 4);
-                    SafeReadBytes(rec + 0x04, &w1, 4);
-                    SafeReadBytes(rec + 0x08, &w2, 4);
-                    SafeReadBytes(rec + 0x08, &p8, 2);
-                    SafeReadBytes(rec + 0x28, &w10, 4);
-                    LOG("REACH FPPROBE node[%d]: id=%08X w1=%08X w2=%08X "
-                        "parent16=%d w10=%08X",
-                        i, w0, w1, w2, static_cast<int>(p8), w10);
-                }
-        }
-
-        // Dump the render root's FULL transform (scale, 3x3 rotation, xlate).
-        // This is the coordinate-space ground truth for the IK candidate: the
-        // palette fn premultiplies EVERY first-person bone by this one matrix
-        // (destination[i] = root (X) source[boneMap[i]]), so substituting root
-        // with a controller pose rigidly carries the whole gun+arms assembly.
-        // Then, per output bone, the boneMap source index + that source bone's
-        // translation + scale so hand/gun bones are identifiable by geometry.
-        BoneMatrix rootM{};
-        const bool haveRoot =
-            root && SafeReadBytes(root, &rootM, sizeof(rootM));
-        LOG("REACH FPPROBE dump: tag=%u modelHandle=%08X count=%d haveRoot=%d",
-            static_cast<unsigned>(tag), modelHandle, count,
-            static_cast<int>(haveRoot));
-        if (haveRoot)
-        {
-            LOG("REACH FPPROBE root: sc=%.4f T=(%.3f,%.3f,%.3f)",
-                rootM.scale, rootM.translation[0], rootM.translation[1],
-                rootM.translation[2]);
-            LOG("REACH FPPROBE root: R0=(%.4f,%.4f,%.4f) R1=(%.4f,%.4f,%.4f) "
-                "R2=(%.4f,%.4f,%.4f)",
-                rootM.rotation[0], rootM.rotation[1], rootM.rotation[2],
-                rootM.rotation[3], rootM.rotation[4], rootM.rotation[5],
-                rootM.rotation[6], rootM.rotation[7], rootM.rotation[8]);
-        }
-        for (int i = 0; i < count && i < 48; ++i)
-        {
-            int32_t src = -1;
-            if (!SafeReadBytes(boneMap + i, &src, sizeof(src)))
-                break;
-            float t[3] = {0, 0, 0};
-            float scale = 0.0f;
-            bool ok = false;
-            if (src >= 0 && src < 120)
-            {
-                const BoneMatrix* sb = source + src;
-                ok = SafeReadBytes(sb->translation, t, sizeof(t)) &&
-                    SafeReadBytes(&sb->scale, &scale, sizeof(scale));
-            }
-            LOG("REACH FPPROBE dump: bone[%d] src=%d ok=%d t=(%.3f,%.3f,%.3f) "
-                "sc=%.3f",
-                i, src, static_cast<int>(ok), t[0], t[1], t[2], scale);
-        }
+        __try { memcpy(dst, src, n); }
+        __except (EXCEPTION_EXECUTE_HANDLER) { return 0; }
+        return 1;
     }
 
-    // Build a substitute first-person render root that follows the right
-    // controller in BOTH orientation and POSITION, so the whole gun+arms
-    // assembly points where you aim AND moves with your hand through space
-    // (the earlier build only rotated at a fixed head anchor -- "only rotation,
-    // not location"). ORIENTATION: the basis convention was read live from this
-    // exact haloreach.dll (rows R0=forward, R1=right=cross(worldUp,fwd),
-    // R2=up=cross(fwd,right); confirmed against the logged render root to 3
-    // decimals). The controller ray is mapped into Halo world yaw/pitch exactly
-    // as Game_ComputeAimStick does (g_gameYawRef + yawSign*(ctrlYaw-headYawRef);
-    // pitchSign*ctrlPitch), the same world frame g_aimFwd/root use. LOCATION:
-    // the assembly is translated by the controller's world displacement from
-    // the recenter head reference, using the SAME room->world mapping the
-    // confirmed Halo 3/ODST hands use (ControllerWorldPoseEx), scaled by Reach's
-    // own kReachWorldUnitsPerMeter, plus a forward standoff along the aim ray.
-    // Bounded by hand reach, so it can carry the gun with your hand but never
-    // fling it; still fail-open to the stock root. This is the whole assembly
-    // moving rigidly -- the per-hand wrist anchoring (grip exactly in the hand,
-    // independent left hand for two-handed weapons) needs the Reach wrist bone
-    // name and comes next. Reuses gun_yaw/pitch/roll_deg + gun_forward_m only;
-    // no new config. Deterministic, no allocation.
-    bool ReachBuildControllerFpRoot(const BoneMatrix* root, BoneMatrix& out)
+    bool ReachBoneMatrixFinite(const BoneMatrix& matrix)
     {
-        if (!root)
-            return false;
-        float q[4], p[3];
-        if (!VR_GetAimPose(q, p))
-            return false;
-        const float localFwd[3] = {0.0f, 0.0f, -1.0f};
-        float vf[3];
-        RotateByQuat(q, localFwd, vf);
-        const float cyRaw = atan2f(vf[0], -vf[2]);
-        const float cpRaw = asinf(Clamp(vf[1], -1.0f, 1.0f));
-        const float kDeg = 0.01745329252f;
-        const float worldYaw = g_gameYawRef +
-            g_yawSign.load() * WrapPi(cyRaw - g_headYawRef) +
-            g_config.gun_yaw_deg * kDeg;
-        const float worldPitch = Clamp(
-            g_pitchSign.load() * cpRaw + g_config.gun_pitch_deg * kDeg,
-            -1.45f, 1.45f);
-        const float cp = cosf(worldPitch), sp = sinf(worldPitch);
-        const float cyw = cosf(worldYaw), syw = sinf(worldYaw);
-        float F[3] = {cp * cyw, cp * syw, sp};        // world forward (row R0)
-        // Right = normalize(cross(worldUp=(0,0,1), F)); guard near-vertical aim.
-        float R[3] = {-F[1], F[0], 0.0f};
-        float rl = sqrtf(R[0] * R[0] + R[1] * R[1] + R[2] * R[2]);
-        if (rl < 1e-4f) { R[0] = 1.0f; R[1] = 0.0f; R[2] = 0.0f; rl = 1.0f; }
-        R[0] /= rl; R[1] /= rl; R[2] /= rl;
-        // Up = cross(F, R) (unit for orthonormal F,R).
-        float U[3] = {
-            F[1] * R[2] - F[2] * R[1],
-            F[2] * R[0] - F[0] * R[2],
-            F[0] * R[1] - F[1] * R[0]};
-        if (g_config.gun_roll_deg != 0.0f)                // roll about forward
-        {
-            const float rr = g_config.gun_roll_deg * kDeg;
-            const float cr = cosf(rr), sr = sinf(rr);
-            float Rn[3], Un[3];
-            for (int i = 0; i < 3; ++i)
-            {
-                Rn[i] = R[i] * cr + U[i] * sr;
-                Un[i] = -R[i] * sr + U[i] * cr;
-            }
-            for (int i = 0; i < 3; ++i) { R[i] = Rn[i]; U[i] = Un[i]; }
-        }
-        out = *root;                                   // keep scale
-        out.rotation[0] = F[0]; out.rotation[1] = F[1]; out.rotation[2] = F[2];
-        out.rotation[3] = R[0]; out.rotation[4] = R[1]; out.rotation[5] = R[2];
-        out.rotation[6] = U[0]; out.rotation[7] = U[1]; out.rotation[8] = U[2];
-        // LOCATION: translate the assembly to follow the controller's WORLD
-        // position. p (from the aim pose read above) is the controller position
-        // in meters; g_headPosRef/g_headYawRef/g_gameYawRef are the same recenter
-        // references the Reach camera + aim already use. This mirrors the
-        // headset-confirmed ControllerWorldPoseEx displacement, Reach-scaled.
-        const float dx = p[0] - g_headPosRef[0];
-        const float dy = p[1] - g_headPosRef[1];
-        const float dz = p[2] - g_headPosRef[2];
-        const float sh = sinf(g_headYawRef), ch = cosf(g_headYawRef);
-        const float roomFwd = dx * sh - dz * ch;
-        const float roomRight = dx * ch + dz * sh;
-        const float cg = cosf(g_gameYawRef), sg = sinf(g_gameYawRef);
-        const float sMeters = kReachWorldUnitsPerMeter;
-        const float offX = (cg * roomFwd + sg * roomRight) * sMeters;
-        const float offY = (sg * roomFwd - cg * roomRight) * sMeters;
-        const float offZ = dy * sMeters;
-        // Forward standoff seats the gun at arm's length along the aim ray
-        // (reuses gun_forward_m; same clamp as ControllerWorldPoseEx).
-        const float standoff = Clamp(g_config.gun_forward_m, -0.3f, 0.5f) * sMeters;
-        out.translation[0] = root->translation[0] + offX + F[0] * standoff;
-        out.translation[1] = root->translation[1] + offY + F[1] * standoff;
-        out.translation[2] = root->translation[2] + offZ + F[2] * standoff;
-        if (!isfinite(out.translation[0]) || !isfinite(out.translation[1]) ||
-            !isfinite(out.translation[2]))
-        {   // fail-safe: never emit a NaN position -- fall back to the anchor
-            out.translation[0] = root->translation[0];
-            out.translation[1] = root->translation[1];
-            out.translation[2] = root->translation[2];
-        }
+        return ReachFpPackedGraphFinite(
+            std::span<const float>{reinterpret_cast<const float*>(&matrix),
+                                   kReachFpBoneMatrixFloatCount},1);
+    }
+
+    void PublishReachFpStatus(int code, int bodyCount, int liveCount)
+    {
+        const uint32_t generation=g_reachCamera.generation;
+        const uint64_t key=(static_cast<uint64_t>(generation)<<32) |
+            (static_cast<uint64_t>(code&0xFF)<<24) |
+            (static_cast<uint64_t>(bodyCount&0xFFF)<<12) |
+            static_cast<uint64_t>(liveCount&0xFFF);
+        if (g_reachFpStatus.key.load(std::memory_order_relaxed)==key)
+            return;
+        g_reachFpStatus.generation.store(generation,std::memory_order_relaxed);
+        g_reachFpStatus.code.store(code,std::memory_order_relaxed);
+        g_reachFpStatus.bodyCount.store(bodyCount,std::memory_order_relaxed);
+        g_reachFpStatus.liveCount.store(liveCount,std::memory_order_relaxed);
+        g_reachFpStatus.key.store(key,std::memory_order_release);
+    }
+
+    bool ReachLayoutsEqual(const ReachFpBodyLayout& a,
+                           const ReachFpBodyLayout& b)
+    {
+        return a.Valid() && b.Valid() && a.kind==b.kind &&
+            a.paletteBodyNodeCount==b.paletteBodyNodeCount &&
+            a.liveSourceNodeCount==b.liveSourceNodeCount &&
+            a.rightShoulderSource==b.rightShoulderSource &&
+            a.rightElbowSource==b.rightElbowSource &&
+            a.rightWristSource==b.rightWristSource &&
+            a.leftShoulderSource==b.leftShoulderSource &&
+            a.leftElbowSource==b.leftElbowSource &&
+            a.leftWristSource==b.leftWristSource &&
+            a.cameraControlSource==b.cameraControlSource &&
+            a.rightHandSourceDescendants==b.rightHandSourceDescendants &&
+            a.leftHandSourceDescendants==b.leftHandSourceDescendants;
+    }
+
+    bool ReachResolvePaletteNodeCount(uint16_t tag, int& count)
+    {
+        count=0;
+        const uintptr_t base=g_reachCamera.base;
+        if (!base) return false;
+        const uint8_t* modelTable=nullptr;
+        if (!SafeReadBytes(reinterpret_cast<const void*>(
+                base+kReachRenderModelTableRva),&modelTable,sizeof(modelTable)) ||
+            !modelTable) return false;
+        uint32_t modelHandle=0;
+        if (!SafeReadBytes(modelTable+static_cast<size_t>(tag)*8u+4u,
+                           &modelHandle,sizeof(modelHandle))) return false;
+        const uint8_t* blockBase=nullptr;
+        if (!SafeReadBytes(reinterpret_cast<const uint8_t*>(
+                base+kReachNodeRecordBlockTableRva)+
+                static_cast<size_t>(modelHandle>>28)*8u,
+                &blockBase,sizeof(blockBase)) || !blockBase) return false;
+        uint32_t rawCount=0;
+        if (!SafeReadBytes(blockBase+static_cast<size_t>(modelHandle)*4u+0x30,
+                           &rawCount,sizeof(rawCount)) ||
+            rawCount==0 || rawCount>kReachFpMaxSourceNodeCount) return false;
+        count=static_cast<int>(rawCount);
         return true;
     }
 
-    __declspec(noinline) void __fastcall ReachFpPaletteProbe(
-        uint16_t tag, const BoneMatrix* root, BoneMatrix* destination,
-        uintptr_t unused, const BoneMatrix* source, const int32_t* boneMap)
+    const ReachFpLayoutCacheEntry* ReachFindFrozenLayout(
+        const BoneMatrix* source, int liveCount, int view, int id, int slot)
     {
-        g_reachCamera.activeCallbacks.fetch_add(1, std::memory_order_acq_rel);
+        for (const ReachFpLayoutCacheEntry& entry : g_reachFpPairScope.layouts)
+            if (entry.valid && entry.source==source &&
+                entry.liveSourceCount==liveCount &&
+                entry.interpolationView==view &&
+                entry.interpolationId==id &&
+                entry.interpolationSlot==slot && entry.layout.Valid())
+                return &entry;
+        return nullptr;
+    }
+
+    void ReachLearnLayout(uint16_t bodyTag, const BoneMatrix* source,
+                          int liveCount, const ReachFpBodyLayout& layout)
+    {
+        if (!source || !layout.Valid() || !g_reachFpPairScope.armed)
+            return;
+        ReachFpLayoutCacheEntry* destination=nullptr;
+        for (ReachFpLayoutCacheEntry& entry : g_reachFpLayoutCache)
+        {
+            if (entry.valid && entry.generation==g_reachFpPairScope.generation &&
+                entry.source==source && entry.liveSourceCount==liveCount &&
+                entry.interpolationView==g_reachFpInterpolation.interpolationView &&
+                entry.interpolationId==g_reachFpInterpolation.interpolationId &&
+                entry.interpolationSlot==g_reachFpInterpolation.interpolationSlot)
+            {
+                if (!entry.invalidateNextPair && entry.bodyTag==bodyTag &&
+                    ReachLayoutsEqual(entry.layout,layout))
+                    return;
+                destination=&entry;
+                break;
+            }
+            if (!entry.valid && !destination)
+                destination=&entry;
+        }
+        if (!destination)
+            destination=&g_reachFpLayoutCache[0];
+        *destination={};
+        destination->valid=true;
+        destination->generation=g_reachFpPairScope.generation;
+        destination->source=source;
+        destination->liveSourceCount=liveCount;
+        destination->interpolationView=g_reachFpInterpolation.interpolationView;
+        destination->interpolationId=g_reachFpInterpolation.interpolationId;
+        destination->interpolationSlot=g_reachFpInterpolation.interpolationSlot;
+        destination->bodyTag=bodyTag;
+        destination->learnedPreparedSerial=g_reachFpPairScope.preparedSerial;
+        destination->layout=layout;
+        PublishReachFpStatus(1,static_cast<int>(layout.paletteBodyNodeCount),
+                             liveCount);
+    }
+
+    void ReachInvalidateLayoutNextPair(const BoneMatrix* source, int liveCount)
+    {
+        for (ReachFpLayoutCacheEntry& entry : g_reachFpLayoutCache)
+            if (entry.valid && entry.generation==g_reachFpPairScope.generation &&
+                entry.source==source && entry.liveSourceCount==liveCount &&
+                entry.interpolationView==g_reachFpInterpolation.interpolationView &&
+                entry.interpolationId==g_reachFpInterpolation.interpolationId &&
+                entry.interpolationSlot==g_reachFpInterpolation.interpolationSlot)
+                entry.invalidateNextPair=true;
+        PublishReachFpStatus(3,0,liveCount);
+    }
+
+    void ReachBeginFpPairScope(uint32_t generation, uint64_t preparedSerial,
+                               const FpExplicitPoseTargets& targets)
+    {
+        g_reachFpPairScope={};
+        g_reachFpInterpolation={};
+        g_reachFpPairScope.armed=true;
+        g_reachFpPairScope.generation=generation;
+        g_reachFpPairScope.preparedSerial=preparedSerial;
+        g_reachFpPairScope.targets=targets;
+        size_t frozen=0;
+        for (ReachFpLayoutCacheEntry& entry : g_reachFpLayoutCache)
+        {
+            if (entry.valid && (entry.generation!=generation ||
+                                entry.invalidateNextPair))
+                entry={};
+            if (DecideReachFpPairLayout(
+                    entry.valid,entry.invalidateNextPair,entry.generation,
+                    entry.learnedPreparedSerial,generation,preparedSerial)==
+                    ReachFpPairLayoutDecision::Active &&
+                frozen<kReachFpLayoutCacheCapacity)
+                g_reachFpPairScope.layouts[frozen++]=entry;
+        }
+        g_fpStereoSolveScope={};
+        g_fpStereoSolveScope.armed=true;
+        if (targets.centerRootValid)
+        {
+            g_fpStereoSolveScope.centerRootValid=true;
+            g_fpStereoSolveScope.centerRoot=targets.centerRoot;
+        }
+    }
+
+    void ReachEndFpPairScope()
+    {
+        g_stereoEye.store(-1,std::memory_order_release);
+        g_fpStereoSolveScope={};
+        g_reachFpInterpolation={};
+        g_reachFpPairScope={};
+    }
+
+    bool ReachBuildCenterFpRoot(const unsigned char* compact, BoneMatrix& out)
+    {
+        if (!compact) return false;
+        const float* pos=reinterpret_cast<const float*>(compact+0x00);
+        const float* fwdIn=reinterpret_cast<const float*>(compact+0x0C);
+        const float* upIn=reinterpret_cast<const float*>(compact+0x18);
+        float fwd[3]={fwdIn[0],fwdIn[1],fwdIn[2]};
+        float up[3]={upIn[0],upIn[1],upIn[2]};
+        const float fl=sqrtf(fwd[0]*fwd[0]+fwd[1]*fwd[1]+fwd[2]*fwd[2]);
+        if (!isfinite(fl) || fl<1e-4f) return false;
+        for (float& component : fwd) component/=fl;
+        float left[3]={up[1]*fwd[2]-up[2]*fwd[1],
+                       up[2]*fwd[0]-up[0]*fwd[2],
+                       up[0]*fwd[1]-up[1]*fwd[0]};
+        const float ll=sqrtf(left[0]*left[0]+left[1]*left[1]+left[2]*left[2]);
+        if (!isfinite(ll) || ll<1e-4f) return false;
+        for (float& component : left) component/=ll;
+        up[0]=fwd[1]*left[2]-fwd[2]*left[1];
+        up[1]=fwd[2]*left[0]-fwd[0]*left[2];
+        up[2]=fwd[0]*left[1]-fwd[1]*left[0];
+        out={};
+        out.scale=1.0f;
+        memcpy(out.rotation,fwd,sizeof(fwd));
+        memcpy(out.rotation+3,left,sizeof(left));
+        memcpy(out.rotation+6,up,sizeof(up));
+        memcpy(out.translation,pos,sizeof(out.translation));
+        return ReachBoneMatrixFinite(out);
+    }
+
+    bool ReachBuildPreparedControllerTarget(
+        const ReachVrRenderSnapshot& tracking, bool left,
+        const float gameplayBase[3], BoneMatrix& out, float& meshScale)
+    {
+        const bool valid=left ? tracking.leftControllerValid
+                              : tracking.rightAimValid;
+        if (!valid || !gameplayBase) return false;
+        float q[4],p[3];
+        if (left)
+        {
+            memcpy(q,tracking.leftControllerOrientation,sizeof(q));
+            memcpy(p,tracking.leftControllerPosition,sizeof(p));
+        }
+        else
+        {
+            memcpy(q,tracking.rightAimOrientation,sizeof(q));
+            memcpy(p,tracking.rightAimPosition,sizeof(p));
+        }
+        float ql=0.0f;
+        for (float component : q)
+        {
+            if (!isfinite(component)) return false;
+            ql+=component*component;
+        }
+        ql=sqrtf(ql);
+        if (!isfinite(ql) || ql<1e-5f) return false;
+        for (float& component : q) component/=ql;
+        float basis[9];
+        BuildTrackedGameBasis(q,false,basis);
+        if (left)
+        {
+            float mount[9],trimmed[9];
+            BasisFromAngles(-g_config.gun_yaw_deg*0.0174533f,
+                             g_config.gun_pitch_deg*0.0174533f,
+                            -g_config.gun_roll_deg*0.0174533f,mount);
+            MultiplyBases(basis,mount,trimmed);
+            memcpy(basis,trimmed,sizeof(basis));
+        }
+        const float dx=p[0]-g_headPosRef[0];
+        const float dy=p[1]-g_headPosRef[1];
+        const float dz=p[2]-g_headPosRef[2];
+        const float sh=sinf(g_headYawRef),ch=cosf(g_headYawRef);
+        const float roomForward=dx*sh-dz*ch;
+        const float roomRight=dx*ch+dz*sh;
+        const float cg=cosf(g_gameYawRef),sg=sinf(g_gameYawRef);
+        const float scale=kReachWorldUnitsPerMeter;
+        const float offset[3]={
+            (cg*roomForward+sg*roomRight)*scale,
+            (sg*roomForward-cg*roomRight)*scale,
+            dy*scale};
+        const float standoff=(left
+            ? Clamp(g_config.left_hand_forward_m,-0.15f,0.30f)
+            : Clamp(g_config.gun_forward_m,-0.3f,0.5f))*scale;
+        out={};
+        out.scale=1.0f;
+        memcpy(out.rotation,basis,sizeof(basis));
+        for (int axis=0;axis<3;++axis)
+            out.translation[axis]=gameplayBase[axis]+offset[axis]+
+                basis[axis]*standoff;
+        meshScale=left
+            ? Clamp(g_config.left_hand_scale,0.3f,3.0f)
+            : Clamp(g_config.gun_scale,0.3f,3.0f);
+        return ReachBoneMatrixFinite(out) && isfinite(meshScale);
+    }
+
+    bool ReachAlignRightTargetToAuthoredBarrel(
+        const BoneMatrix& baseTarget, const BoneMatrix& authoredWrist,
+        BoneMatrix& alignedTarget)
+    {
+        float barrelLocal[3]={authoredWrist.rotation[0],
+                              authoredWrist.rotation[3],
+                              authoredWrist.rotation[6]};
+        const float length=sqrtf(barrelLocal[0]*barrelLocal[0]+
+                                 barrelLocal[1]*barrelLocal[1]+
+                                 barrelLocal[2]*barrelLocal[2]);
+        if (!isfinite(length) || length<1e-4f) return false;
+        for (float& component : barrelLocal) component/=length;
+        float worldBarrel[3]={0.0f,0.0f,0.0f};
+        for (int column=0;column<3;++column)
+            for (int row=0;row<3;++row)
+                worldBarrel[row]+=baseTarget.rotation[column*3+row]*
+                    barrelLocal[column];
+        const float ray[3]={baseTarget.rotation[0],baseTarget.rotation[1],
+                            baseTarget.rotation[2]};
+        float swing[9],rotated[9];
+        ShortestArcRotation(worldBarrel,ray,swing);
+        MultiplyBases(swing,baseTarget.rotation,rotated);
+        alignedTarget=baseTarget;
+        memcpy(alignedTarget.rotation,rotated,sizeof(rotated));
+        return ReachBoneMatrixFinite(alignedTarget);
+    }
+
+    void ReachCaptureFpInterpolation(
+        int view, int id, int slot, bool result,
+        BoneMatrix** outBones, int* outCount)
+    {
+        if (slot!=0) return;
+        g_reachFpInterpolation={};
+        if (!result || !outBones || !outCount || !*outBones ||
+            !g_reachFpPairScope.armed ||
+            g_reachFpPairScope.generation!=g_reachCamera.generation ||
+            !g_reachCamera.armed.load(std::memory_order_acquire) ||
+            !g_enabled.load(std::memory_order_relaxed) ||
+            !g_vrAim.load(std::memory_order_relaxed)) return;
+        const int count=*outCount;
+        if (count<=0 || count>static_cast<int>(kReachFpMaxSourceNodeCount))
+            return;
+        ReachFpInterpolationContext& context=g_reachFpInterpolation;
+        context.valid=true;
+        context.generation=g_reachFpPairScope.generation;
+        context.preparedSerial=g_reachFpPairScope.preparedSerial;
+        context.source=*outBones;
+        context.liveSourceCount=count;
+        context.interpolationView=view;
+        context.interpolationId=id;
+        context.interpolationSlot=slot;
+        const ReachFpLayoutCacheEntry* frozen=
+            ReachFindFrozenLayout(context.source,count,view,id,slot);
+        if (!frozen) return;
+        context.layout=frozen->layout;
+        context.bodyTag=frozen->bodyTag;
+        if (!context.layout.Valid() ||
+            context.layout.paletteBodyNodeCount>64 ||
+            !g_reachFpPairScope.targets.centerRootValid ||
+            !g_reachFpPairScope.targets.rightWristValid ||
+            !ReachBoneMatrixFinite(g_reachFpPairScope.targets.centerRoot) ||
+            !ReachBoneMatrixFinite(g_reachFpPairScope.targets.rightWrist) ||
+            !isfinite(g_reachFpPairScope.targets.rightScale) ||
+            g_reachFpPairScope.targets.rightScale<=0.0f ||
+            (g_reachFpPairScope.targets.leftWristValid &&
+             (!ReachBoneMatrixFinite(g_reachFpPairScope.targets.leftWrist) ||
+              !isfinite(g_reachFpPairScope.targets.leftScale) ||
+              g_reachFpPairScope.targets.leftScale<=0.0f))) return;
+        const size_t liveBytes=static_cast<size_t>(count)*sizeof(BoneMatrix);
+        if (!SafeReadBytes(context.source,context.untouchedLive,liveBytes))
+            return;
+        for (int node=0;node<count;++node)
+            if (!ReachBoneMatrixFinite(context.untouchedLive[node]))
+                return;
+        context.targets=g_reachFpPairScope.targets;
+        BoneMatrix alignedRight{};
+        if (!ReachAlignRightTargetToAuthoredBarrel(
+                context.targets.rightWrist,
+                context.untouchedLive[context.layout.rightWristSource],
+                alignedRight)) return;
+        context.targets.rightWrist=alignedRight;
+        if (!ApplyControllerToMarkerBonesWithTarget(
+                context.targets.centerRoot,context.targets.rightWrist,
+                context.targets.rightScale,context.source,count,
+                context.layout.rightWristSource))
+        {
+            SafeWriteBytes(context.source,context.untouchedLive,liveBytes);
+            return;
+        }
+        for (int node=0;node<count;++node)
+        {
+            BoneMatrix checked{};
+            if (!SafeReadBytes(context.source+node,&checked,sizeof(checked)) ||
+                !ReachBoneMatrixFinite(checked))
+            {
+                SafeWriteBytes(context.source,context.untouchedLive,liveBytes);
+                return;
+            }
+        }
+        context.transformed=true;
+    }
+
+    __declspec(noinline) bool __fastcall ReachFpInterpolate(
+        int view, int id, int slot, BoneMatrix** outBones, int* outCount)
+    {
+        g_reachCamera.activeCallbacks.fetch_add(1,std::memory_order_acq_rel);
+        bool result=false;
         __try
         {
-            // Gun-follows-controller: substitute a controller-aligned root when
-            // armed + VR aim on + arm_ik enabled. Fail-open -- any failure (no
-            // controller, disabled) falls back to the game's own render root, so
-            // the FP model renders exactly as stock. Reach-only hook; Halo 3 /
-            // ODST have their own FP path and are untouched.
-            const BoneMatrix* useRoot = root;
-            BoneMatrix controllerRoot;
-            if (root &&
-                g_reachCamera.armed.load(std::memory_order_acquire) &&
-                g_enabled.load() && g_vrAim.load() && g_config.arm_ik &&
-                ReachBuildControllerFpRoot(root, controllerRoot))
-            {
-                useRoot = &controllerRoot;
-            }
-            g_reachOrigFpPalette(
-                tag, useRoot, destination, unused, source, boneMap);
-            ReachFpPaletteProbeDump(tag, root, source, boneMap);
+            ReachFpInterpolateFn original=g_reachOrigFpInterpolate;
+            if (original)
+                result=original(view,id,slot,outBones,outCount);
+            ReachCaptureFpInterpolation(view,id,slot,result,outBones,outCount);
         }
         __finally
         {
-            g_reachCamera.activeCallbacks.fetch_sub(1, std::memory_order_acq_rel);
+            g_reachCamera.activeCallbacks.fetch_sub(1,std::memory_order_acq_rel);
+        }
+        return result;
+    }
+
+    bool ReachRestoreFpLiveGraph(ReachFpInterpolationContext& context)
+    {
+        if (!context.transformed)
+            return true;
+        if (!context.source || context.liveSourceCount<=0 ||
+            context.liveSourceCount>static_cast<int>(kReachFpMaxSourceNodeCount))
+            return false;
+        const size_t bytes=static_cast<size_t>(context.liveSourceCount)*
+            sizeof(BoneMatrix);
+        if (!SafeWriteBytes(context.source,context.untouchedLive,bytes))
+            return false;
+        context.transformed=false;
+        return true;
+    }
+
+    void ReachProcessFpPalette(
+        uint16_t tag, const BoneMatrix* root, BoneMatrix* destination,
+        uintptr_t unused, const BoneMatrix* source, const int32_t* boneMap)
+    {
+        const BoneMatrix* selectedSource=source;
+        ReachFpInterpolationContext& context=g_reachFpInterpolation;
+        const bool contextCurrent=context.valid && source &&
+            context.source==source && g_reachFpPairScope.armed &&
+            context.generation==g_reachCamera.generation &&
+            context.generation==g_reachFpPairScope.generation &&
+            context.preparedSerial==g_reachFpPairScope.preparedSerial;
+        int paletteCount=0;
+        int32_t mapCopy[64]{};
+        ReachFpBodyLayout observed{};
+        bool bodyLayout=false;
+        if (contextCurrent && boneMap &&
+            ReachResolvePaletteNodeCount(tag,paletteCount) &&
+            paletteCount>0 && paletteCount<=64 &&
+            SafeReadBytes(boneMap,mapCopy,
+                static_cast<size_t>(paletteCount)*sizeof(int32_t)))
+        {
+            bodyLayout=ResolveReachFpBodyLayout(
+                std::span<const int32_t>{mapCopy,
+                    static_cast<size_t>(paletteCount)},
+                static_cast<size_t>(context.liveSourceCount),observed);
+        }
+        const bool frozenLayoutValid=context.layout.Valid();
+        const bool exactBodyMatchesFrozen=bodyLayout && frozenLayoutValid &&
+            tag==context.bodyTag && ReachLayoutsEqual(context.layout,observed);
+        const ReachFpPaletteAction action=DecideReachFpPaletteAction(
+            contextCurrent,frozenLayoutValid,context.transformed,bodyLayout,
+            exactBodyMatchesFrozen,tag==context.bodyTag);
+        auto restoreStockAndInvalidate=[&](bool relearnExactBody) {
+            if (context.transformed)
+            {
+                selectedSource=context.untouchedLive;
+                ReachRestoreFpLiveGraph(context);
+            }
+            ReachInvalidateLayoutNextPair(source,context.liveSourceCount);
+            if (relearnExactBody)
+                ReachLearnLayout(tag,source,context.liveSourceCount,observed);
+        };
+        if (action==ReachFpPaletteAction::LearnStockOnly)
+        {
+            ReachLearnLayout(tag,source,context.liveSourceCount,observed);
+        }
+        else if (action==ReachFpPaletteAction::RestoreStockAndInvalidate)
+        {
+            restoreStockAndInvalidate(bodyLayout);
+        }
+        else if (action==ReachFpPaletteAction::ArticulateExactBody)
+        {
+            if (!root || !context.targets.rightWristValid ||
+                !ReachBoneMatrixFinite(*root))
+            {
+                restoreStockAndInvalidate(false);
+            }
+            else
+            {
+                FpInterpolationContext fp{};
+                fp.source=source;
+                fp.count=static_cast<int>(observed.paletteBodyNodeCount);
+                fp.player=0;
+                fp.slot=0;
+                fp.wrist=observed.rightWristSource;
+                fp.cameraControl=observed.cameraControlSource;
+                fp.elbow=observed.rightElbowSource;
+                fp.shoulder=observed.rightShoulderSource;
+                fp.wristDescendants=observed.rightHandSourceDescendants;
+                fp.lWrist=observed.leftWristSource;
+                fp.lElbow=observed.leftElbowSource;
+                fp.lShoulder=observed.leftShoulderSource;
+                fp.lWristDescendants=observed.leftHandSourceDescendants;
+                fp.valid=true;
+                selectedSource=context.untouchedLive;
+                const BoneMatrix* replacement=selectedSource;
+                FpExplicitPoseTargets targets=context.targets;
+                targets.centerRoot.scale=root->scale;
+                const bool reconstructed=ReconstructVisiblePaletteSource(
+                    tag,fp,*root,source,replacement,&targets,
+                    context.untouchedLive);
+                selectedSource=replacement;
+                bool outputFinite=reconstructed;
+                for (int i=0;outputFinite && i<fp.count;++i)
+                    outputFinite=ReachBoneMatrixFinite(g_fpPaletteScratch[i]);
+                if (!outputFinite)
+                {
+                    restoreStockAndInvalidate(false);
+                }
+                else
+                {
+                    if (g_config.floating_hands &&
+                        selectedSource==g_fpPaletteScratch)
+                    {
+                        const uint64_t keep=fp.wristDescendants|
+                            fp.lWristDescendants;
+                        for (int i=0;i<fp.count;++i)
+                            if (!(keep&(uint64_t{1}<<i)))
+                                g_fpPaletteScratch[i].scale=0.0001f;
+                    }
+                    PublishReachFpStatus(2,fp.count,context.liveSourceCount);
+                }
+            }
+        }
+        ReachFpPaletteFn original=g_reachOrigFpPalette;
+        if (original)
+            original(tag,root,destination,unused,selectedSource,boneMap);
+    }
+
+    __declspec(noinline) void __fastcall ReachFpPalette(
+        uint16_t tag, const BoneMatrix* root, BoneMatrix* destination,
+        uintptr_t unused, const BoneMatrix* source, const int32_t* boneMap)
+    {
+        g_reachCamera.activeCallbacks.fetch_add(1,std::memory_order_acq_rel);
+        __try
+        {
+            ReachProcessFpPalette(
+                tag,root,destination,unused,source,boneMap);
+        }
+        __finally
+        {
+            g_reachCamera.activeCallbacks.fetch_sub(1,std::memory_order_acq_rel);
         }
     }
 
@@ -10806,6 +11210,8 @@ namespace
         candidate.playerView = playerView;
         candidate.cameraStackDepthBefore = stackDepthBefore;
         candidate.preparedSerial = prepared.Serial();
+        memcpy(candidate.gameplayBasePosition,primaryCompact+0x00,
+               sizeof(candidate.gameplayBasePosition));
         ReachSymmetricFovCover cullCover{};
         if (!ReachCollectEyeInputs(
                 observedPrimary.renderBounds, tracking,
@@ -10842,6 +11248,20 @@ namespace
             return g_reachOrigMainRenderView(
                 workspace, playerView, windowIndex);
         }
+
+        candidate.fpTargets={};
+        candidate.fpTargets.centerRootValid=ReachBuildCenterFpRoot(
+            candidate.headCenter,candidate.fpTargets.centerRoot);
+        candidate.fpTargets.rightWristValid=
+            ReachBuildPreparedControllerTarget(
+                tracking,false,candidate.gameplayBasePosition,
+                candidate.fpTargets.rightWrist,
+                candidate.fpTargets.rightScale);
+        candidate.fpTargets.leftWristValid=
+            ReachBuildPreparedControllerTarget(
+                tracking,true,candidate.gameplayBasePosition,
+                candidate.fpTargets.leftWrist,
+                candidate.fpTargets.leftScale);
 
         alignas(16) unsigned char savedWorkspace[kReachCameraPairDataSize];
         alignas(16) unsigned char savedPv[kReachPvSnapshotBytes];
@@ -11139,13 +11559,14 @@ namespace
     bool ScanForReachDetourIngress(bool& busy)
     {
         static bool rangesResolved = false;
-        static ReachDetourCodeRange ranges[3]{};
+        static ReachDetourCodeRange ranges[4]{};
         if (!rangesResolved)
         {
             const void* functions[] = {
                 reinterpret_cast<const void*>(&ReachMainRenderViewDetour),
                 reinterpret_cast<const void*>(&ReachPlayerViewRenderDetour),
-                reinterpret_cast<const void*>(&ReachFpPaletteProbe),
+                reinterpret_cast<const void*>(&ReachFpInterpolate),
+                reinterpret_cast<const void*>(&ReachFpPalette),
             };
             static_assert(_countof(functions) == _countof(ranges));
             bool resolved = true;
@@ -11161,11 +11582,13 @@ namespace
         void* const targets[] = {
             g_reachCamera.outerTarget,
             g_reachCamera.innerTarget,
-            g_reachCamera.fpPaletteProbeTarget,
+            g_reachCamera.fpInterpolateTarget,
+            g_reachCamera.fpPaletteTarget,
         };
         void* const trampolines[] = {
             reinterpret_cast<void*>(g_reachOrigMainRenderView),
             reinterpret_cast<void*>(g_reachOrigPlayerViewRender),
+            reinterpret_cast<void*>(g_reachOrigFpInterpolate),
             reinterpret_cast<void*>(g_reachOrigFpPalette),
         };
         static_assert(_countof(targets) == _countof(ranges));
@@ -11263,7 +11686,8 @@ namespace
         void* const targets[] = {
             g_reachCamera.outerTarget,
             g_reachCamera.innerTarget,
-            g_reachCamera.fpPaletteProbeTarget,
+            g_reachCamera.fpInterpolateTarget,
+            g_reachCamera.fpPaletteTarget,
         };
         for (void* target : targets)
         {
@@ -11281,20 +11705,37 @@ namespace
             return false;
 
         bool removedAll = true;
-        if (g_reachCamera.fpPaletteProbeTarget)
+        if (g_reachCamera.fpPaletteTarget)
         {
             const MH_STATUS status =
-                MH_RemoveHook(g_reachCamera.fpPaletteProbeTarget);
+                MH_RemoveHook(g_reachCamera.fpPaletteTarget);
             if (status == MH_OK || status == MH_ERROR_NOT_CREATED)
             {
-                g_reachCamera.fpPaletteProbeTarget = nullptr;
+                g_reachCamera.fpPaletteTarget = nullptr;
                 g_reachOrigFpPalette = nullptr;
             }
             else
             {
                 removedAll = false;
-                LOG("Reach FP probe cleanup: remove failed for %p (%d)",
-                    g_reachCamera.fpPaletteProbeTarget,
+                LOG("Reach FP palette cleanup: remove failed for %p (%d)",
+                    g_reachCamera.fpPaletteTarget,
+                    static_cast<int>(status));
+            }
+        }
+        if (g_reachCamera.fpInterpolateTarget)
+        {
+            const MH_STATUS status =
+                MH_RemoveHook(g_reachCamera.fpInterpolateTarget);
+            if (status == MH_OK || status == MH_ERROR_NOT_CREATED)
+            {
+                g_reachCamera.fpInterpolateTarget = nullptr;
+                g_reachOrigFpInterpolate = nullptr;
+            }
+            else
+            {
+                removedAll = false;
+                LOG("Reach FP interpolation cleanup: remove failed for %p (%d)",
+                    g_reachCamera.fpInterpolateTarget,
                     static_cast<int>(status));
             }
         }
@@ -11376,6 +11817,8 @@ namespace
         HMODULE moduleReference = g_reachCamera.moduleReference;
         g_reachCamera.innerTarget = nullptr;
         g_reachCamera.outerTarget = nullptr;
+        g_reachCamera.fpInterpolateTarget = nullptr;
+        g_reachCamera.fpPaletteTarget = nullptr;
         g_reachCamera.moduleReference = nullptr;
         g_reachCamera.base = 0;
         g_reachCamera.size = 0;
@@ -11388,6 +11831,10 @@ namespace
         g_reachCamera.patchyFogFlags = nullptr;
         g_reachOrigPlayerViewRender = nullptr;
         g_reachOrigMainRenderView = nullptr;
+        g_reachOrigFpInterpolate = nullptr;
+        g_reachOrigFpPalette = nullptr;
+        g_reachFpStatus.key.store(0,std::memory_order_release);
+        g_reachFpLoggedStatusKey.store(0,std::memory_order_release);
         g_reachHelpers = {};
         if (moduleReference)
             FreeLibrary(moduleReference);
@@ -11396,6 +11843,31 @@ namespace
         g_reachCamera.installed.store(false, std::memory_order_release);
         LOG("Reach camera core removed; stock Reach owns the title");
         return true;
+    }
+
+    bool ReachColdExecutableAddress(uintptr_t address)
+    {
+        MEMORY_BASIC_INFORMATION info{};
+        if (!address || !VirtualQuery(reinterpret_cast<const void*>(address),
+                                      &info,sizeof(info)) ||
+            info.State!=MEM_COMMIT || (info.Protect&PAGE_GUARD)) return false;
+        const DWORD protection=info.Protect&0xFFu;
+        return protection==PAGE_EXECUTE || protection==PAGE_EXECUTE_READ ||
+            protection==PAGE_EXECUTE_READWRITE ||
+            protection==PAGE_EXECUTE_WRITECOPY;
+    }
+
+    bool ReachColdExactSignatureAt(uintptr_t base, size_t size,
+                                   uintptr_t expectedRva,
+                                   const char* pattern)
+    {
+        if (!base || !pattern || expectedRva>=size) return false;
+        const uintptr_t first=sig::Find(base,size,pattern);
+        if (first!=base+expectedRva || !ReachColdExecutableAddress(first))
+            return false;
+        const uintptr_t next=first+1;
+        const uintptr_t end=base+size;
+        return next>=end || sig::Find(next,static_cast<size_t>(end-next),pattern)==0;
     }
 
     bool InstallReachCameraCore(uintptr_t base, size_t size, uint32_t generation)
@@ -11413,6 +11885,19 @@ namespace
         if (!preflight.Complete() ||
             !ReachRenderCandidate_IsPreflightCurrent(preflight))
             return false;
+
+        static constexpr char kFpInterpolateAob[] =
+            "48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 57 41 54 41 55 41 56 41 57 48 83 EC 20 33 DB 49 63 F8 38 1D ?? ?? ?? ?? 4D 8B E1 8B EA 4C 63 D9";
+        static constexpr char kFpPaletteAob[] =
+            "48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 57 41 56 41 57 48 83 EC 20 48 8B 05 ?? ?? ?? ?? 49 8B F0 0F B7 C9 4C 8B F2";
+        if (!ReachColdExactSignatureAt(
+                base,size,kReachFpInterpolateRva,kFpInterpolateAob) ||
+            !ReachColdExactSignatureAt(
+                base,size,kReachFpVisiblePaletteRva,kFpPaletteAob))
+        {
+            LOG("Reach FP install: exact interpolation/palette signatures failed; stock Reach remains active");
+            return false;
+        }
 
         // Resolve the four stock camera-rebuild helpers. The preflight already
         // pinned the exact module SHA-256, so base+RVA is exact; additionally
@@ -11472,21 +11957,60 @@ namespace
 
         void* inner = reinterpret_cast<void*>(base + kReachPlayerViewRenderRva);
         void* outer = reinterpret_cast<void*>(base + kReachMainRenderViewRva);
+        void* fpInterpolate =
+            reinterpret_cast<void*>(base + kReachFpInterpolateRva);
+        void* fpPalette =
+            reinterpret_cast<void*>(base + kReachFpVisiblePaletteRva);
         const bool innerCreated = MH_CreateHook(inner,
                 reinterpret_cast<void*>(&ReachPlayerViewRenderDetour),
                 reinterpret_cast<void**>(&g_reachOrigPlayerViewRender)) == MH_OK;
         const bool outerCreated = innerCreated && MH_CreateHook(outer,
                 reinterpret_cast<void*>(&ReachMainRenderViewDetour),
                 reinterpret_cast<void**>(&g_reachOrigMainRenderView)) == MH_OK;
-        if (!innerCreated || !outerCreated)
+        const bool fpInterpolateCreated = outerCreated && MH_CreateHook(
+                fpInterpolate,reinterpret_cast<void*>(&ReachFpInterpolate),
+                reinterpret_cast<void**>(&g_reachOrigFpInterpolate)) == MH_OK;
+        const bool fpPaletteCreated = fpInterpolateCreated && MH_CreateHook(
+                fpPalette,reinterpret_cast<void*>(&ReachFpPalette),
+                reinterpret_cast<void**>(&g_reachOrigFpPalette)) == MH_OK;
+        if (!innerCreated || !outerCreated ||
+            !fpInterpolateCreated || !fpPaletteCreated)
         {
-            if (outerCreated)
-                MH_RemoveHook(outer);
-            if (innerCreated)
-                MH_RemoveHook(inner);
-            FreeLibrary(moduleReference);
-            g_reachOrigPlayerViewRender = nullptr;
-            g_reachOrigMainRenderView = nullptr;
+            bool cleanupOk=true;
+            auto removeCreated=[&](bool created,void* target) {
+                if (!created) return;
+                const MH_STATUS status=MH_RemoveHook(target);
+                cleanupOk=(status==MH_OK || status==MH_ERROR_NOT_CREATED) &&
+                    cleanupOk;
+            };
+            removeCreated(fpPaletteCreated,fpPalette);
+            removeCreated(fpInterpolateCreated,fpInterpolate);
+            removeCreated(outerCreated,outer);
+            removeCreated(innerCreated,inner);
+            if (cleanupOk)
+            {
+                FreeLibrary(moduleReference);
+                g_reachOrigPlayerViewRender = nullptr;
+                g_reachOrigMainRenderView = nullptr;
+                g_reachOrigFpInterpolate = nullptr;
+                g_reachOrigFpPalette = nullptr;
+            }
+            else
+            {
+                g_reachCamera.base=base;
+                g_reachCamera.size=size;
+                g_reachCamera.generation=generation;
+                g_reachCamera.moduleReference=moduleReference;
+                g_reachCamera.innerTarget=innerCreated?inner:nullptr;
+                g_reachCamera.outerTarget=outerCreated?outer:nullptr;
+                g_reachCamera.fpInterpolateTarget=
+                    fpInterpolateCreated?fpInterpolate:nullptr;
+                g_reachCamera.fpPaletteTarget=fpPaletteCreated?fpPalette:nullptr;
+                g_reachCamera.armed.store(false,std::memory_order_release);
+                g_reachCamera.teardownRequested.store(
+                    true,std::memory_order_release);
+                g_reachCamera.installed.store(true,std::memory_order_release);
+            }
             LOG("Reach camera install: MinHook failed; stock Reach remains active");
             return false;
         }
@@ -11505,6 +12029,8 @@ namespace
         g_reachCamera.moduleReference = moduleReference;
         g_reachCamera.innerTarget = inner;
         g_reachCamera.outerTarget = outer;
+        g_reachCamera.fpInterpolateTarget = fpInterpolate;
+        g_reachCamera.fpPaletteTarget = fpPalette;
         g_reachCamera.installedAtMs = GetTickCount64();
         g_reachCamera.motionBlurVars[0] = {
             reachMotionBlurScale, reachMotionBlurScaleOriginal};
@@ -11527,7 +12053,10 @@ namespace
             false, std::memory_order_release);
         g_reachCamera.installed.store(true, std::memory_order_release);
         g_needRecenter.store(true, std::memory_order_release);
-        if (MH_EnableHook(inner) != MH_OK || MH_EnableHook(outer) != MH_OK)
+        if (MH_EnableHook(inner) != MH_OK ||
+            MH_EnableHook(outer) != MH_OK ||
+            MH_EnableHook(fpInterpolate) != MH_OK ||
+            MH_EnableHook(fpPalette) != MH_OK)
         {
             // State was published before the first enable, so even a partial
             // MinHook failure can use the same disable/quiesce/remove proof as
@@ -11538,9 +12067,7 @@ namespace
             RemoveReachCameraCore();
             return false;
         }
-        LOG("Reach camera core installed: inner player_view_render + outer "
-            "main_render_view hooked; waiting one-second fresh-camera interval "
-            "before arming per-eye stereo");
+        LOG("Reach camera core installed: outer/inner stereo + FP interpolation/palette transaction hooked; waiting one-second fresh-camera interval before arming");
         LOG("Reach comfort evidence: blurScale=%llX blurMax=%llX "
             "(authored %.4f/%.4f); VR default keeps scale finite and zeros max",
             static_cast<unsigned long long>(
@@ -11554,53 +12081,33 @@ namespace
             static_cast<unsigned long long>(kReachPatchyFogFlagsRva),
             static_cast<unsigned>(kReachPatchyFogSkipMask));
 
-        // First-person palette hook (experimental): substitutes a controller-
-        // aligned render root so the FP gun+arms follow the right controller
-        // (ReachBuildControllerFpRoot, gated on arm_ik) and dumps the rig for
-        // diagnostics. Fail-open: a mismatched prologue or a MinHook failure
-        // just skips it and leaves the camera core fully intact; at runtime any
-        // per-frame failure falls back to the stock root. The pinned-image
-        // preflight already proved the module SHA, so base+RVA is exact; the
-        // 40-byte prologue is re-verified here as a belt-and-suspenders guard.
-        {
-            void* const probeTarget =
-                reinterpret_cast<void*>(base + kReachFpVisiblePaletteRva);
-            static constexpr uint8_t kProbePrologue[] = {
-                0x48,0x89,0x5C,0x24,0x08,0x48,0x89,0x6C,0x24,0x10,0x48,0x89,0x74,
-                0x24,0x18,0x57,0x41,0x56,0x41,0x57,0x48,0x83,0xEC,0x20,0x48,0x8B,
-                0x05,0x31,0x57,0x96,0x00,0x49,0x8B,0xF0,0x0F,0xB7,0xC9,0x4C,0x8B,
-                0xF2};
-            uint8_t prologue[sizeof(kProbePrologue)];
-            const bool prologueOk =
-                kReachFpVisiblePaletteRva < size &&
-                SafeReadBytes(probeTarget, prologue, sizeof(prologue)) &&
-                memcmp(prologue, kProbePrologue, sizeof(prologue)) == 0;
-            if (prologueOk &&
-                MH_CreateHook(probeTarget,
-                    reinterpret_cast<void*>(&ReachFpPaletteProbe),
-                    reinterpret_cast<void**>(&g_reachOrigFpPalette)) == MH_OK &&
-                MH_EnableHook(probeTarget) == MH_OK)
-            {
-                g_reachCamera.fpPaletteProbeTarget = probeTarget;
-                LOG("Reach FP palette hook installed: gun-follows-controller "
-                    "(arm_ik) + diagnostics on visible-palette consumer at "
-                    "haloreach.dll+0x%llX",
-                    static_cast<unsigned long long>(
-                        kReachFpVisiblePaletteRva));
-            }
-            else
-            {
-                if (g_reachOrigFpPalette)
-                {
-                    MH_RemoveHook(probeTarget);
-                    g_reachOrigFpPalette = nullptr;
-                }
-                g_reachCamera.fpPaletteProbeTarget = nullptr;
-                LOG("Reach FP probe: prologue/hook unavailable; palette dump "
-                    "inactive (camera core unaffected)");
-            }
-        }
         return true;
+    }
+
+    void LogReachFpStatusIfNew()
+    {
+        const uint64_t key=g_reachFpStatus.key.load(std::memory_order_acquire);
+        if (!key || key==g_reachFpLoggedStatusKey.load(
+                std::memory_order_relaxed)) return;
+        const uint32_t generation=
+            g_reachFpStatus.generation.load(std::memory_order_relaxed);
+        const int code=g_reachFpStatus.code.load(std::memory_order_relaxed);
+        const int bodyCount=
+            g_reachFpStatus.bodyCount.load(std::memory_order_relaxed);
+        const int liveCount=
+            g_reachFpStatus.liveCount.load(std::memory_order_relaxed);
+        if (generation!=g_reachCamera.generation) return;
+        g_reachFpLoggedStatusKey.store(key,std::memory_order_release);
+        if (code==1)
+            LOG("Reach FP layout learned stock-only: body=%d live=%d; eligible next prepared pair",
+                bodyCount,liveCount);
+        else if (code==2)
+            LOG("Reach FP two-arm path active: body=%d live=%d arm_ik=%d floating_hands=%d",
+                bodyCount,liveCount,static_cast<int>(g_config.arm_ik),
+                static_cast<int>(g_config.floating_hands));
+        else if (code==3)
+            LOG("Reach FP layout changed or failed validation at live=%d; next pair remains stock",
+                liveCount);
     }
 
     // Called from the 50 ms title worker's Reach block. Self-contained: it never
@@ -11608,6 +12115,7 @@ namespace
     void ReachCameraCore_Poll(
         uintptr_t base, size_t size, uint32_t generation, bool soleReachTitle)
     {
+        LogReachFpStatusIfNew();
         const bool installed =
             g_reachCamera.installed.load(std::memory_order_acquire);
         if (installed && g_reachCamera.teardownRequested.load(

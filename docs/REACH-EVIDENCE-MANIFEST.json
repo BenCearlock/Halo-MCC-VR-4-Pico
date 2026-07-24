@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "status": "CAMERA_CULLING_PATCHY_FOG_HEADSET_PASS_WORLD_SCALE_PERFORMANCE_H3_ODST_PENDING_UNACCEPTED",
+  "status": "CAMERA_CULLING_PATCHY_FOG_HEADSET_PASS_REACH_TWO_ARM_IK_CANDIDATE_UNACCEPTED",
   "hook_eligible": false,
   "hook_eligibility_scope": "PRELIMINARY_HELPER_CANDIDATES_ONLY; permanent main_render_view/player_view_render transaction is described separately below",
   "accepted_baseline": {
@@ -432,7 +432,8 @@
         "exact_normal_screenshot_unknown_outer_return_classification",
         "slot0_workspace_player_view_and_pre_push_depth_validation",
         "opaque_epoch_bound_preflight_freshness_prepared_frame_and_direct_copy_tokens",
-        "worker_only_exact_backing_file_loaded_pe_three_signature_two_body_hash_seven_edge_and_fixed_range_preflight",
+        "worker_only_exact_backing_file_loaded_pe_camera_signature_body_hash_edge_and_fixed_range_preflight",
+        "exact_one_expected_rva_executable_fp_interpolation_and_palette_aobs",
         "cold_present_buffer0_specialization0_record0_structural_device_context_and_exact_copy_shape_validation",
         "monotonic_display_resource_revision_nonce_and_live_continuity_gate",
         "resize_view_drift_title_exit_and_module_generation_invalidation",
@@ -443,8 +444,10 @@
         "halo3_compatible_configurable_eye_pass_order",
         "checked_first_pass_false_final_pass_original_last_window_policy",
         "bounded_workspace_camera_state_and_matrix_rollback_layout_and_owner_coupled_cleanup_tokens",
-        "outer_main_render_view_and_inner_player_view_render_detours",
-        "exact_prepared_serial_lock_free_head_pad_and_two_eye_snapshot",
+        "outer_main_render_view_inner_player_view_render_fp_interpolation_and_fp_palette_detours",
+        "exact_prepared_serial_lock_free_head_pad_two_eye_corrected_right_aim_and_raw_left_pose_snapshot",
+        "stock_only_exact_spartan_elite_layout_learning_then_later_pair_activation",
+        "bounded_120_node_live_graph_rigid_marker_attachment_parenting_and_exact_body_only_articulation",
         "pre_visibility_head_center_binocular_angular_union_camera_commit",
         "coherent_head_center_player_view_fallback",
         "reach_native_motion_blur_exact_slot_resolution_positive_scale_max_only_zero_and_quiescent_restore",
@@ -453,8 +456,8 @@
         "callback_wrapper_and_minhook_relay_rip_quiescent_teardown"
       ],
       "withheld_or_headset_pending": [
-        "reach_controller_projectile_reticle_and_weapon_body_aim",
-        "reach_native_hud_and_arm_ik",
+        "reach_native_hud",
+        "reach_controller_projectile_reticle_and_two_arm_ik_exact_dll_headset_acceptance",
         "exact_finite_distance_cull_coverage_for_translated_eye_origins",
         "reach_exact_physical_world_scale_headset_result",
         "reach_performance_cadence_headroom_followup",
@@ -466,6 +469,8 @@
       "title_hook_plan": "REACH_CAMERA_CORE",
       "runtime_capabilities": [
         "STEREO",
+        "CONTROLLER_AIM",
+        "ARM_IK",
         "RUNTIME_MODES",
         "ROOM_SCALE",
         "CONTROLLER_INPUT",
@@ -719,16 +724,35 @@
       "proof_complete": false
     },
     {
+      "id": "fp_interpolation",
+      "description": "production first-person interpolation source and marker boundary",
+      "rva": "0x000CF1A4",
+      "aob": "48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 57 41 54 41 55 41 56 41 57 48 83 EC 20 33 DB 49 63 F8 38 1D ?? ?? ?? ?? 4D 8B E1 8B EA 4C 63 D9",
+      "static_image_match_count": 1,
+      "abi": "bool __fastcall(int view,int id,int slot,BoneMatrix** outBones,int* outCount)",
+      "source_node_bound": 120,
+      "proof_complete": true,
+      "headset_accepted": false
+    },
+    {
       "id": "visible_palette",
-      "description": "visible palette candidate",
+      "description": "production exact first-person body palette boundary",
       "rva": "0x002B4EB0",
-      "proof_complete": false
+      "aob": "48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 57 41 56 41 57 48 83 EC 20 48 8B 05 ?? ?? ?? ?? 49 8B F0 0F B7 C9 4C 8B F2",
+      "static_image_match_count": 1,
+      "spartan_body_outputs": 47,
+      "elite_body_outputs": 41,
+      "spartan_output_to_source_bone_map": [0, 3, 1, 2, 5, 4, 6, 9, 10, 8, 7, 13, 12, 14, 11, 22, 26, 18, 21, 24, 19, 20, 15, 23, 16, 17, 25, 36, 35, 32, 28, 33, 29, 27, 34, 31, 30, 46, 38, 42, 37, 40, 39, 43, 45, 44, 41],
+      "elite_output_to_source_bone_map": [0, 1, 2, 3, 5, 4, 6, 7, 8, 9, 10, 14, 12, 11, 13, 22, 20, 18, 21, 19, 16, 23, 24, 17, 15, 27, 28, 25, 31, 32, 30, 26, 29, 35, 34, 39, 33, 40, 36, 38, 37],
+      "proof_complete": true,
+      "headset_accepted": false
     },
     {
       "id": "special_bone_composer",
-      "description": "special-bone composer candidate",
+      "description": "headset-disproven non-visible-FP special-bone composer",
       "rva": "0x00213224",
-      "proof_complete": false
+      "proof_complete": false,
+      "disposition": "REJECTED_FOR_VISIBLE_FIRST_PERSON_IK"
     }
   ]
 }

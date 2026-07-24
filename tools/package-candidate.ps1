@@ -86,7 +86,7 @@ try {
     }
 
     $createdUtc = [DateTime]::UtcNow
-    $packageId = '{0}-{1}-{2}' -f $commit.Substring(0, 7), 'reach-camera',
+    $packageId = '{0}-{1}-{2}' -f $commit.Substring(0, 7), 'reach-two-arm-ik',
         $createdUtc.ToString("yyyyMMdd-HHmmssfff'Z'")
     $packageDir = Join-Path $candidateRoot $packageId
     if (Test-Path -LiteralPath $packageDir) {
@@ -139,6 +139,9 @@ try {
         reach_loaded_image_preflight_enabled = $true
         reach_display_copy_readiness_enabled = $true
         reach_camera_core_enabled = $true
+        reach_controller_aim_enabled = $true
+        reach_two_arm_ik_guarded = $true
+        reach_fp_interpolation_palette_transaction = $true
         reach_copyresource_enabled = $true
         reach_engine_memory_writes_enabled = $true
         reach_runtime_hooks_enabled = $true
@@ -153,7 +156,7 @@ try {
                 sha256 = $launcherHash
             }
         }
-        note = 'Not accepted until this exact DLL hash passes the required headset tests (Reach 3D plus a Halo 3 + ODST regression).'
+        note = 'Not accepted until this exact DLL hash passes the Reach Spartan two-arm IK/headset matrix plus Halo 3 and ODST regressions.'
     }
 
     $manifestPath = Join-Path $packageDir 'CANDIDATE-MANIFEST.json'

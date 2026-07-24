@@ -463,11 +463,13 @@ if ($sizeOfImage -ne $expectedImageSize) {
     throw ('Reach SizeOfImage mismatch: 0x{0:X8}' -f $sizeOfImage)
 }
 
-if (@($manifest.preliminary_candidates).Count -ne 4) {
-    throw 'Reach evidence manifest must contain the four preliminary candidates.'
+if (@($manifest.preliminary_candidates).Count -ne 5) {
+    throw 'Reach evidence manifest must contain the five recorded candidates.'
 }
 foreach ($candidate in $manifest.preliminary_candidates) {
-    if ($candidate.proof_complete -ne $false) {
+    $productionFp = $candidate.id -eq 'fp_interpolation' -or
+        $candidate.id -eq 'visible_palette'
+    if ($candidate.proof_complete -ne $productionFp) {
         throw "Preliminary Reach candidate is incorrectly proof-complete: $($candidate.id)"
     }
     $candidateRva = [uint64](Convert-HexUInt32 $candidate.rva `
@@ -479,8 +481,10 @@ foreach ($candidate in $manifest.preliminary_candidates) {
     if ($executableOwners.Count -ne 1) {
         throw "Candidate $($candidate.id) is not in exactly one executable PE section."
     }
-    Write-Host ('Candidate {0}: RVA 0x{1:X8}, offline section {2}, runtime proof incomplete' -f
-        $candidate.id, $candidateRva, $executableOwners[0].Name)
+    $proofLabel = if ($productionFp) { 'production proof recorded; headset pending' }
+        else { 'runtime proof incomplete' }
+    Write-Host ('Candidate {0}: RVA 0x{1:X8}, offline section {2}, {3}' -f
+        $candidate.id, $candidateRva, $executableOwners[0].Name, $proofLabel)
 }
 
 $moduleBytes = [IO.File]::ReadAllBytes($ModulePath)
@@ -507,6 +511,24 @@ if ($frustumMatches.Count -ne 1 -or $frustumMatches[0] -ne $frustumRva) {
 }
 Write-Host ('Function frustum helper: exact 25-byte AOB at RVA 0x{0:X8}' -f `
     $frustumRva)
+foreach ($fpId in @('fp_interpolation', 'visible_palette')) {
+    $evidence = @($manifest.preliminary_candidates | Where-Object {
+        $_.id -eq $fpId
+    })
+    if ($evidence.Count -ne 1) {
+        throw "Reach evidence manifest must contain exactly one $fpId candidate."
+    }
+    $pattern = [int[]]@(Convert-AobTokens ([string]$evidence[0].aob) $fpId)
+    $matches = @(Find-ExecutableAobMatches $moduleBytes $sections $pattern)
+    $expectedRva = [uint64](Convert-HexUInt32 `
+        ([string]$evidence[0].rva) "$fpId RVA")
+    if ($matches.Count -ne 1 -or $matches[0] -ne $expectedRva) {
+        $rendered = ($matches | ForEach-Object { '0x{0:X8}' -f $_ }) -join ', '
+        throw "$fpId AOB mismatch: expected one match at 0x$('{0:X8}' -f $expectedRva), got [$rendered]."
+    }
+    Write-Host ('Function {0}: exact {1}-byte AOB at RVA 0x{2:X8}' -f `
+        $fpId, $pattern.Count, $expectedRva)
+}
 Test-FunctionEvidence -Bytes $moduleBytes -Sections $sections `
     -Evidence $manifest.player_view_transaction.retail.main_render_view `
     -Label 'main_render_view'
