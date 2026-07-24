@@ -273,7 +273,7 @@
         "accepted_odst_world_units_per_meter": 0.32808399,
         "candidate_reach_world_units_per_meter": 0.32808399,
         "candidate_formula": "1.0 / 3.048",
-        "prior_tracked_position_excess_percent": 0.5806,
+        "prior_tracked_position_excess_percent": 0.584,
         "apparent_world_size_correction_percent": 0.584,
         "head_and_eye_invariant": "SAME_REACH_TITLE_CONSTANT_FOR_ROOM_SCALE_TRANSLATION_AND_EXACT_OPENXR_EYE_POSITION",
         "halo3_odst_changed": false,

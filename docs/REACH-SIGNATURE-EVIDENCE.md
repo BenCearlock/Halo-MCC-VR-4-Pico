@@ -122,7 +122,7 @@ user reported that Reach's world felt slightly too small relative to Halo 3 and
 ODST. Reach used the shared rounded `0.33` world-units-per-meter value for both
 room-scale head displacement and exact OpenXR eye separation. The accepted ODST
 adapter uses the authored ten-foot world-unit conversion `1 / 3.048`, or
-approximately `0.32808399`. Reach therefore scaled tracked positions 0.5806%
+approximately `0.32808399`. Reach therefore scaled tracked positions 0.584%
 too far relative to that exact physical baseline, making the perceived world
 approximately 0.584% too small in the reported direction.
 
