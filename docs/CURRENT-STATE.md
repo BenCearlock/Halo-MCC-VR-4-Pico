@@ -56,7 +56,7 @@ and does not change either accepted source pointer.
 | Observer result | `OBSERVATIONS_RECORDED_UNASSESSED`, reviewed as limited runtime corroboration |
 
 - Two exact loaded-image preflights passed. Across two admitted sessions the
-  observer recorded 29,507 normal transactions, 29,496 valid camera samples,
+  observer recorded 29,507 accepted exact-slot transactions, 29,496 valid camera samples,
   seven one-second stable windows, zero invalid cameras, zero multi-owner
   intervals, and zero module-snapshot failures.
 - The external observer paused and reset sampling during multi-title
@@ -64,8 +64,16 @@ and does not change either accepted source pointer.
   unload/title exit.
 - Every transaction was slot 0, so the run corroborates the array base but not
   the `0xA40` stride or split-screen behavior.
-- Exact normal-versus-alternate caller scope, the owning capture target,
-  broader lifecycle/device-loss behavior, callback quiescence and teardown,
+- Subsequent pinned retail/HREK analysis resolved the second caller as Reach's
+  screenshot tile/bloom path, established its exact stock-only routing
+  requirement, bounded the synchronous camera workspace and its `0x2B0`
+  render-scope snapshot, and identified surface group 1 as the swapchain
+  display target written by late
+  native CHUD. It also selected exact inner candidate `player_view_render`,
+  proved its identity and active-scope lifetime, and bounded the stock
+  pre-scope camera rebuild. Production outer-owner propagation, live serial
+  reuse, inside-scope/OpenXR camera mutation, live target identity/copy, broader
+  lifecycle/device-loss behavior, callback quiescence and teardown,
   stereo/OpenXR, and headset behavior remain unproven. All Reach runtime hooks
   remain unauthorized and disabled.
 

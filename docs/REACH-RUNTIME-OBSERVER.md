@@ -107,6 +107,13 @@ camera at `+0x154` independently pass the Reach-specific checks below:
 - ordered client bounds at `+0x5C`, with zero origin and both extents at least
   eight pixels.
 
+The observer intentionally stops at the camera bytes. The separately proven
+render-scope snapshot extent is `0x2B0` because the engine's active
+camera-stack push uses the following callback qword at workspace `+0x2A8`;
+that control slot must be validated and preserved, not treated as camera
+mutation input. Safe rollback inside the active scope remains an
+implementation/runtime gate.
+
 The observer also compares the two validated compact-camera byte ranges.
 Equality is counted as evidence but is not required, because sampling can
 overlap an engine update.
@@ -180,7 +187,7 @@ runtime corroboration stated here.
 
 - Aggregate: two passing loaded-image preflights, one observed Reach
   unload/title exit, three ambiguity entries, zero module-snapshot failures,
-  29,507 normal transactions, 29,496 valid cameras, zero invalid cameras,
+  29,507 accepted exact-slot transactions, 29,496 valid cameras, zero invalid cameras,
   zero outside-array pointers, zero multiple-owner intervals, and seven stable
   windows.
 - Generation 1 ended on ambiguous title residency with 11,248 transactions,
@@ -219,8 +226,9 @@ actually observed. An exact nonzero slot address can also runtime-corroborate
 the static `0xA40` slot stride. Slot 0 alone corroborates only the array base,
 not the stride. It cannot prove:
 
-- which static caller produced a sampled pulse, or the unresolved alternate
-  caller's semantics;
+- which of the two static callers produced a sampled pulse (the alternate
+  caller's screenshot semantics were resolved separately in the pinned
+  retail/HREK proof ledger);
 - that every transaction was observed;
 - that every unload/reload was observed, including a complete same-base reload
   between 100 ms module polls;
@@ -232,7 +240,8 @@ not the stride. It cannot prove:
   Reach VR behavior.
 
 Those remain separate gates. The reviewed pass above closes only the pinned
-stock loaded-image and observed-freshness portions. Exact caller scope, the
-capture target, broader lifecycle and split-screen behavior, production
-failure guards and teardown, stereo, OpenXR, headset validation, and Halo 3
-regression remain unproven.
+stock loaded-image and observed-freshness portions. Separate static analysis
+has since resolved the two caller semantics and the final display owner, but
+production caller routing, live target-copy proof, broader lifecycle and
+split-screen behavior, failure guards and teardown, stereo, OpenXR, headset
+validation, and Halo 3 regression remain unproven.

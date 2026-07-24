@@ -66,6 +66,247 @@ function Get-PeIdentity {
     }
 }
 
+function Get-PeRawSections {
+    param(
+        [Parameter(Mandatory)] [string]$Path,
+        [Parameter(Mandatory)] [string]$Label
+    )
+
+    $sections = @()
+    $stream = [IO.File]::OpenRead($Path)
+    try {
+        $reader = [IO.BinaryReader]::new($stream)
+        if ($reader.ReadUInt16() -ne 0x5A4D) {
+            throw "$Label is not an MZ executable."
+        }
+        $stream.Position = 0x3C
+        $peOffset = $reader.ReadInt32()
+        if ($peOffset -lt 0x40 -or $peOffset -gt $stream.Length - 256) {
+            throw "$Label has an invalid PE header offset."
+        }
+        $stream.Position = $peOffset
+        if ($reader.ReadUInt32() -ne 0x00004550) {
+            throw "$Label has no PE signature."
+        }
+        $stream.Position = $peOffset + 6
+        $sectionCount = $reader.ReadUInt16()
+        $stream.Position = $peOffset + 20
+        $optionalHeaderSize = $reader.ReadUInt16()
+        $optionalHeaderOffset = $peOffset + 24
+        $stream.Position = $optionalHeaderOffset
+        if ($reader.ReadUInt16() -ne 0x020B) {
+            throw "$Label is not PE32+ (x64)."
+        }
+        if ($sectionCount -lt 1 -or $sectionCount -gt 96 -or
+                $optionalHeaderSize -lt 64) {
+            throw "$Label has invalid PE section metadata."
+        }
+        $sectionTable = $optionalHeaderOffset + $optionalHeaderSize
+        if ($sectionTable + 40 * $sectionCount -gt $stream.Length) {
+            throw "$Label section table exceeds the file."
+        }
+        for ($index = 0; $index -lt $sectionCount; ++$index) {
+            $sectionOffset = $sectionTable + 40 * $index
+            $stream.Position = $sectionOffset
+            $nameBytes = $reader.ReadBytes(8)
+            $name = ([Text.Encoding]::ASCII.GetString($nameBytes)).Trim([char]0)
+            $virtualSize = $reader.ReadUInt32()
+            $virtualAddress = $reader.ReadUInt32()
+            $rawSize = $reader.ReadUInt32()
+            $rawOffset = $reader.ReadUInt32()
+            $stream.Position = $sectionOffset + 36
+            $characteristics = $reader.ReadUInt32()
+            if ([uint64]$rawOffset + [uint64]$rawSize -gt
+                    [uint64]$stream.Length) {
+                throw "$Label section $name exceeds the file."
+            }
+            $span = [Math]::Max([uint64]$virtualSize, [uint64]$rawSize)
+            $sections += [pscustomobject]@{
+                Name = $name
+                StartRva = [uint64]$virtualAddress
+                EndRva = [uint64]$virtualAddress + $span
+                RawOffset = [uint64]$rawOffset
+                RawSize = [uint64]$rawSize
+                Executable = ($characteristics -band 0x20000000) -ne 0
+            }
+        }
+    }
+    finally {
+        $stream.Dispose()
+    }
+    return $sections
+}
+
+function Convert-AobTokens {
+    param(
+        [Parameter(Mandatory)] [string]$Pattern,
+        [Parameter(Mandatory)] [string]$Label
+    )
+
+    $tokens = @()
+    foreach ($token in ($Pattern -split '\s+' | Where-Object { $_ })) {
+        if ($token -eq '??') {
+            $tokens += -1
+        }
+        elseif ($token -match '^[0-9A-Fa-f]{2}$') {
+            $tokens += [Convert]::ToInt32($token, 16)
+        }
+        else {
+            throw "Invalid AOB token for $Label`: $token"
+        }
+    }
+    if ($tokens.Count -eq 0) {
+        throw "Empty AOB for $Label."
+    }
+    return $tokens
+}
+
+function Find-ExecutableAobMatches {
+    param(
+        [Parameter(Mandatory)] [byte[]]$Bytes,
+        [Parameter(Mandatory)] [object[]]$Sections,
+        [Parameter(Mandatory)] [int[]]$Pattern
+    )
+
+    $matches = @()
+    foreach ($section in $Sections) {
+        if (-not $section.Executable -or $section.RawSize -lt $Pattern.Count) {
+            continue
+        }
+        $first = [int64]$section.RawOffset
+        $lastExclusive = [Math]::Min(
+            [int64]$Bytes.LongLength,
+            [int64]$section.RawOffset + [int64]$section.RawSize)
+        $lastStart = $lastExclusive - $Pattern.Count
+        for ($offset = $first; $offset -le $lastStart; ++$offset) {
+            if ($Pattern[0] -ge 0 -and $Bytes[$offset] -ne $Pattern[0]) {
+                continue
+            }
+            $matched = $true
+            for ($index = 1; $index -lt $Pattern.Count; ++$index) {
+                if ($Pattern[$index] -ge 0 -and
+                        $Bytes[$offset + $index] -ne $Pattern[$index]) {
+                    $matched = $false
+                    break
+                }
+            }
+            if ($matched) {
+                $matches += [uint64]$section.StartRva +
+                    ([uint64]$offset - [uint64]$section.RawOffset)
+            }
+        }
+    }
+    return $matches
+}
+
+function Test-FunctionEvidence {
+    param(
+        [Parameter(Mandatory)] [byte[]]$Bytes,
+        [Parameter(Mandatory)] [object[]]$Sections,
+        [Parameter(Mandatory)] [object]$Evidence,
+        [Parameter(Mandatory)] [string]$Label
+    )
+
+    $rva = [uint64](Convert-HexUInt32 ([string]$Evidence.function_rva) "$Label RVA")
+    $end = [uint64](Convert-HexUInt32 `
+        ([string]$Evidence.function_end_rva_exclusive) "$Label end RVA")
+    $size = [uint64]$Evidence.function_size
+    if ($end -le $rva -or $end - $rva -ne $size) {
+        throw "$Label function boundary/size is inconsistent."
+    }
+    $pattern = [int[]]@(Convert-AobTokens ([string]$Evidence.entry_aob) $Label)
+    $matches = @(Find-ExecutableAobMatches $Bytes $Sections $pattern)
+    $expectedCount = [int]$Evidence.static_executable_match_count
+    if ($matches.Count -ne $expectedCount -or $expectedCount -ne 1 -or
+            $matches[0] -ne $rva) {
+        $rendered = ($matches | ForEach-Object { '0x{0:X8}' -f $_ }) -join ', '
+        throw "$Label AOB mismatch: expected one at 0x$('{0:X8}' -f $rva), got [$rendered]."
+    }
+    $owners = @($Sections | Where-Object {
+        $_.Executable -and $rva -ge $_.StartRva -and
+            $rva + $size -le $_.StartRva + $_.RawSize
+    })
+    if ($owners.Count -ne 1) {
+        throw "$Label body is not contained in exactly one raw executable PE section."
+    }
+    $owner = $owners[0]
+    $range = [pscustomobject]@{
+        Offset = [uint64]$owner.RawOffset + ($rva - $owner.StartRva)
+        Size = $size
+    }
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try {
+        $digest = $sha.ComputeHash($Bytes, [int]$range.Offset, [int]$range.Size)
+    }
+    finally {
+        $sha.Dispose()
+    }
+    $actualBodyHash = ([BitConverter]::ToString($digest)).Replace('-', '')
+    if ($actualBodyHash -ine [string]$Evidence.body_sha256) {
+        throw "$Label body SHA-256 mismatch: $actualBodyHash"
+    }
+    Write-Host ("Function {0}: exact AOB/body at RVA 0x{1:X8}" -f $Label, $rva)
+}
+
+function Test-FunctionBodyEvidence {
+    param(
+        [Parameter(Mandatory)] [string]$Path,
+        [Parameter(Mandatory)] [object[]]$Sections,
+        [Parameter(Mandatory)] [object]$Evidence,
+        [Parameter(Mandatory)] [string]$Label
+    )
+
+    $rva = [uint64](Convert-HexUInt32 ([string]$Evidence.player_view_render_rva) `
+        "$Label RVA")
+    $end = [uint64](Convert-HexUInt32 `
+        ([string]$Evidence.player_view_render_end_rva_exclusive) "$Label end RVA")
+    $size = [uint64]$Evidence.player_view_render_size
+    if ($end -le $rva -or $end - $rva -ne $size -or
+            $size -gt [int]::MaxValue) {
+        throw "$Label function boundary/size is inconsistent."
+    }
+    $owners = @($Sections | Where-Object {
+        $_.Executable -and $rva -ge $_.StartRva -and
+            $rva + $size -le $_.StartRva + $_.RawSize
+    })
+    if ($owners.Count -ne 1) {
+        throw "$Label body is not contained in exactly one raw executable PE section."
+    }
+    $owner = $owners[0]
+    $range = [pscustomobject]@{
+        Offset = [uint64]$owner.RawOffset + ($rva - $owner.StartRva)
+        Size = $size
+    }
+    $body = [byte[]]::new([int]$range.Size)
+    $stream = [IO.File]::OpenRead($Path)
+    try {
+        $stream.Position = [int64]$range.Offset
+        $read = 0
+        while ($read -lt $body.Length) {
+            $count = $stream.Read($body, $read, $body.Length - $read)
+            if ($count -le 0) {
+                throw "$Label body read was truncated."
+            }
+            $read += $count
+        }
+    }
+    finally {
+        $stream.Dispose()
+    }
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try {
+        $digest = $sha.ComputeHash($body)
+    }
+    finally {
+        $sha.Dispose()
+    }
+    $actualBodyHash = ([BitConverter]::ToString($digest)).Replace('-', '')
+    if ($actualBodyHash -ine [string]$Evidence.player_view_render_body_sha256) {
+        throw "$Label body SHA-256 mismatch: $actualBodyHash"
+    }
+    Write-Host ("Function {0}: exact body at RVA 0x{1:X8}" -f $Label, $rva)
+}
+
 foreach ($requiredFile in @($ModulePath, $ManifestPath)) {
     if (-not (Test-Path -LiteralPath $requiredFile -PathType Leaf)) {
         throw "Required Reach evidence file is missing: $requiredFile"
@@ -137,6 +378,16 @@ if ($cameraEvidenceIdentity.Machine -ne 0x8664 -or
         $cameraEvidenceIdentity.SizeOfImage)
 }
 
+$hrekHomolog = $manifest.player_view_transaction.hrek_homolog
+if ([IO.Path]::GetFileName([string]$hrekHomolog.binary) -cne
+        [string]$cameraEvidence.name) {
+    throw 'HREK homolog binary does not match the pinned camera evidence binary.'
+}
+$hrekSections = @(Get-PeRawSections `
+    -Path $cameraEvidencePath -Label 'HREK camera evidence binary')
+Test-FunctionBodyEvidence -Path $cameraEvidencePath -Sections $hrekSections `
+    -Evidence $hrekHomolog -Label 'HREK player_view_render'
+
 $expectedTimestamp = Convert-HexUInt32 `
     $manifest.retail_module.pe_timestamp 'PE timestamp'
 $expectedImageSize = Convert-HexUInt32 `
@@ -187,6 +438,7 @@ try {
         $virtualSize = $reader.ReadUInt32()
         $virtualAddress = $reader.ReadUInt32()
         $rawSize = $reader.ReadUInt32()
+        $rawOffset = $reader.ReadUInt32()
         $stream.Position = $sectionOffset + 36
         $characteristics = $reader.ReadUInt32()
         $span = [Math]::Max([uint64]$virtualSize, [uint64]$rawSize)
@@ -194,6 +446,8 @@ try {
             Name = $name
             StartRva = [uint64]$virtualAddress
             EndRva = [uint64]$virtualAddress + $span
+            RawOffset = [uint64]$rawOffset
+            RawSize = [uint64]$rawSize
             Executable = ($characteristics -band 0x20000000) -ne 0
         }
     }
@@ -228,6 +482,14 @@ foreach ($candidate in $manifest.preliminary_candidates) {
     Write-Host ('Candidate {0}: RVA 0x{1:X8}, offline section {2}, runtime proof incomplete' -f
         $candidate.id, $candidateRva, $executableOwners[0].Name)
 }
+
+$moduleBytes = [IO.File]::ReadAllBytes($ModulePath)
+Test-FunctionEvidence -Bytes $moduleBytes -Sections $sections `
+    -Evidence $manifest.player_view_transaction.retail.main_render_view `
+    -Label 'main_render_view'
+Test-FunctionEvidence -Bytes $moduleBytes -Sections $sections `
+    -Evidence $manifest.player_view_transaction.retail.player_view_render `
+    -Label 'player_view_render'
 
 Write-Host 'Reach evidence preflight passed.'
 Write-Host "Module SHA-256: $actualHash"

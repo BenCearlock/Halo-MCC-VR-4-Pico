@@ -154,11 +154,12 @@ Therefore `proof_complete` and `hook_eligible` remain false.
 
 ## Player-view prepare/render transaction
 
-The stock player-view owner, object stride, same-call freshness, late native
-CHUD order, and transaction-scoped active-view clear are now statically
-identified. This closes the corresponding static questions only. Stock Reach
-has output-user/player-view transactions, not VR-eye transactions, and no
-Reach hook or eye capture exists yet.
+The stock player-view owner, object stride, same-call freshness, exact normal
+and screenshot caller scopes, camera-workspace lifetime, final display target,
+late native-CHUD order, and transaction-scoped active-view clear are now
+statically identified. This closes the corresponding static questions only.
+Stock Reach has output-user/player-view transactions, not VR-eye transactions,
+and no Reach hook or eye capture exists yet.
 
 ### Retail owner and boundary
 
@@ -187,11 +188,27 @@ bytes:
 48 8B 05 05 6E A3 00 48 33 C4 48 89 44 24 68 41
 ```
 
-That is offline identity evidence, not loaded-image authorization. A second
-direct caller at `0x1D3864`, in `0x1D3784`-`0x1D3892`, passes a camera at
-`[RSI+8]`, a view at `[RSI+0x10]`, and index zero. Its screenshot/alternate
-render semantics are not yet fully resolved, so future routing must prove
-caller scope rather than treating every `main_render_view` call as gameplay.
+That is offline identity evidence, not loaded-image authorization. The pinned
+retail image has exactly two direct rel32 callers:
+
+- normal player rendering at `0x0C3730`, return RVA `0x0C3735`;
+- screenshot rendering at `0x1D3864`, return RVA `0x1D3869`.
+
+The second call is inside helper `0x1D3784`-`0x1D3892`. It passes workspace
+`[RSI+8]`, player view `[RSI+0x10]`, and index zero, so parameter checks cannot
+distinguish it from a normal slot-0 transaction by ABI/index alone. Its owners are Reach's
+screenshot dispatcher and high-resolution tile/bloom loops. The pinned HREK
+independently labels the matching paths `screenshot bloom`, `screenshot tile`,
+`render screenshot`, and `display tile`; its corresponding calls to
+source-named `main_render_view` `0x1CC690` are at `0x50AC49` and `0x50D481`.
+The retained `main_screenshot.cpp` warning that multi-view screenshots capture
+only the first player explains the hard-coded index zero.
+
+Future production routing must therefore whitelist exact return RVA
+`0x0C3735`. Return RVA `0x1D3869` and every unknown caller must execute the
+stock original exactly once, without camera mutation, capture, or stereo
+duplication. This resolves the alternate caller's semantics; implementing and
+validating that routing remains a hook gate.
 
 ### Four player views and the `0xA40` stride
 
@@ -225,11 +242,54 @@ copies:
 - compact camera `+0x000..+0x08F` to secondary `+0x154..+0x1E3`;
 - derived block `+0x090..+0x153` to secondary `+0x1E4..+0x2A7`.
 
-The owner calls setup at `0x0C36D6` and `main_render_view` at `0x0C3730`
-without a loop or frame boundary between them. `main_render_view` stores the
-current `player_view*` in global RVA `0x04E389A8` at `0x0C323C`, renders it,
-runs paired end calls at `0x0C33C9` and `0x0C33CE`, then clears the global at
-`0x0C33D3`.
+The owner calls setup at `0x0C36D6`. From setup's return at `0x0C36DB` to the
+`main_render_view` call at `0x0C3730` there are exactly 16 instructions and no
+call or branch: four viewport-global writes, the last-window byte write at
+player view `+0xA30`, and argument setup. This proves the hook entry receives
+the same-iteration workspace. The one global workspace is reused for every
+player iteration, so no future eye path may retain it beyond the synchronous
+normal render call.
+
+The camera-only workspace occupies `+0x000..+0x2A7`, but the exact render-scope
+snapshot is `0x2B0` bytes:
+
+| Offset | Size | Static role |
+| ---: | ---: | --- |
+| `+0x000` | `0x90` | primary/rasterizer compact camera |
+| `+0x090` | `0xC4` | primary derived block |
+| `+0x154` | `0x90` | secondary/render compact camera |
+| `+0x1E4` | `0xC4` | secondary derived block |
+| `+0x2A8` | `0x08` | camera-stack callback written by the render-scope push |
+
+HREK independently repeats that `0x2B0` layout at
+`0x04D86C10`-`0x04D86EC0`, and retained assertions name the primary and
+secondary members `get_rasterizer_camera()` and `get_render_camera()`.
+Normal setup mirrors both compact cameras and both derived blocks. The
+screenshot path proves a second intentional policy: it retains the base
+secondary compact camera while applying a custom projection to the primary,
+then mirrors the rebuilt derived block. Static evidence therefore does not yet
+choose the correct secondary-camera policy for OpenXR; every block still has
+to be accounted for explicitly.
+
+`main_render_view` stores the current `player_view*` in global RVA
+`0x04E389A8` at `0x0C323C`, pushes the workspace/callback scope at
+`0x0C3246 -> 0x251C08`, renders at `0x0C33C4`, begins its post-render
+continuation at `0x0C33C9`, pops the camera scope at
+`0x0C33CE -> 0x251C50`, then clears the active view at `0x0C33D3`. The normal
+CFG has no return that bypasses the paired pop and clear after the set.
+
+The push is a bounded stack, not an unconditional assignment. Retail depth is
+RVA `0x00B43ABC`, pointer slots begin at RVA `0x00C878A8`, and valid pushed
+depths are 0 through 3. `0x251C08` silently skips the push when the prior depth
+is already at least 3. The exact normal call supplies callback
+`module+0x0026BFD4`, which a successful push stores at workspace `+0x2A8`.
+The outer token must capture the pre-push depth. Production inner admission
+must require the active-view global to equal the candidate `player_view*`,
+current depth to equal captured pre-push depth plus one and remain at most 3,
+the new top slot to point to the admitted normal workspace, and its callback
+qword to equal `module+0x0026BFD4`. This detects a silently skipped push even
+if a prior top slot happens to alias the workspace. Overflow, nested-owner,
+callback, depth, or top-pointer mismatch remains stock-once.
 
 HREK supplies the semantic proof. Inside `main_render_game`
 `0x1CB8D0`-`0x1CC001`, the retained `main_render_view` profile envelope is
@@ -243,8 +303,111 @@ rasterizer-camera position/up/forward vectors.
 
 This proves fresh setup relative to the immediately following stock
 transaction and proves its engine-owned set/use/clear bracket. It does not
-prove a continuously fresh camera heartbeat, the required one-second safety
-interval, or transition/device-loss/thread teardown.
+authorize a whole-function double call. For slot zero, `main_render_view`
+executes a frame-once block at `0x0C3251`-`0x0C3296`; calling the whole function
+twice would execute that block twice. It would also pop and clear the
+engine-owned active scope after the first call. A future stereo boundary must
+stay inside the existing scope and account for all transitive player-view and
+global side effects. The observed continuous heartbeat and one-second interval
+must still be enforced by production, and transition/device-loss/thread
+teardown remain open.
+
+### Inner stereo candidate and coherent rebuild constraints
+
+PE exception metadata bounds retail `player_view_render` at
+`0x26C6DC`-`0x26CFE6`: `0x90A` bytes, with body SHA-256
+`2628D1189621EACED7C95A1F295815D70E7783054F1C3CBA46799F838CC33C60`.
+The following entry AOB matches exactly once in the pinned retail executable;
+only the RIP-relative security-cookie displacement is wildcarded, and no base
+relocation overlaps it:
+
+```text
+48 8B C4 48 89 58 10 48 89 70 18 48 89 78 20 55
+41 54 41 55 41 56 41 57 48 8D A8 28 FF FF FF 48 81
+EC B0 01 00 00 0F 29 70 C8 0F 29 78 B8 48 8B 05
+?? ?? ?? ?? 48 33 C4 48 89 85 80 00 00 00 8B 81
+A4 03 00 00
+```
+
+Its ABI is `void __fastcall player_view_render(player_view*)`. Retail has
+exactly one direct rel32 caller, `0x0C33C4`; the HREK source-named homolog is
+`0x834490`-`0x835598`. HREK has exactly two direct calls to that homolog: normal
+`0x1CBF22` and alternate `0x1CC790`. An inner loop here structurally avoids
+repeating the slot-zero block, frame-texture/visibility preparation,
+active-view set, and camera-stack push. Stock post-render, pop, and clear still
+execute exactly once after the hook returns.
+
+This inner call cannot determine outer ownership by its own immediate return:
+normal `0x0C3730` and screenshot `0x1D3864` both funnel through the same
+`0x0C33C4` call. Production must validate the exact outer normal return and
+propagate a bounded TLS owner token into this inner scope. A screenshot,
+unknown, nested, or token-mismatched call must remain stock-once.
+
+The stock-observed pre-scope camera rebuild sequence is:
+
+1. mutate the primary compact camera;
+2. call frustum helper `0x287F58` with `RCX = compact`, `RDX = float[4]`;
+3. call projection builder `0x2884BC` with `RCX = compact`,
+   `RDX = float[4]`, `R8 = primary derived`, and `XMM3 = 0.0f`;
+4. explicitly make the required primary/secondary compact and derived blocks
+   coherent;
+5. call camera-state updater `0x286F9C` with
+   `RCX = player_view+0x3B0`, `RDX = primary compact`;
+6. call projection/matrix builder `0x28AF8C` with
+   `RCX = player_view+0x490`, `RDX = primary derived`,
+   `R8 = primary derived+0x78`, `R9 = compact+0x4C`, and stack argument 5
+   pointing to the zero projection-offset pair at `player_view+0x470`;
+7. enter the active-view/camera-stack render scope.
+
+Normal setup and the independent retail/HREK screenshot paths corroborate
+that ordering. The projection builder writes exactly `0xC4` derived bytes.
+The camera-state updater sparsely touches a `0xC8` history/state envelope at
+`player_view+0x3B0..+0x477`, including zeroing the projection-offset pair, and
+shifts its own history before writing the current camera. The projection/matrix
+builder's final direct output byte is `player_view+0x750`;
+stock treats `player_view+0x490..+0x75F` as one `0x2D0` current-matrix block.
+Setup argument 5 is separately proven by an HREK assertion to be
+`output_user_index`; it is not an eye selector. The retail camera-state updater
+has only the two arguments above; HREK's extra updater arguments must not be
+transplanted into MCC.
+
+If that helper subset is used, its known touched/replay units are:
+
+- workspace `0x00C9FAE0..0x00C9FD8F`, size `0x2B0`;
+- player view `+0x3B0..+0x477`, size `0xC8`;
+- player view `+0x490..+0x75F`, size `0x2D0`;
+- player view `+0x760..+0xA2F`, size `0x2D0`, only if the previous-matrix
+  mirror is touched;
+- render-camera pointer global RVA `0x04E38A90`, validated as
+  `player_view+0x3B0` before admission and re-armed by each eye updater.
+
+The render-camera pointer is not a final rollback byte. Each stock
+`player_view_render` clears it at `0x26CE2F`; the final eye's stock zero must
+persist. Blindly restoring the inner-entry nonzero value would create a stale
+owner, while restoring an arbitrary prior value could clobber a nested owner.
+Any inter-eye re-arm must come from the proven updater under a serialized owner
+token and fail open on an unexpected value.
+
+The whole `0xA40` player view must not be snapshotted or blindly restored.
+The owner writes `player_view+0xA30` before rendering. A preceding conditional
+at retail `0x26CB54`-`0x26CB5B` can bypass the flag block entirely. When that
+block executes, `player_view_render` tests and clears the flag at
+`0x26CB73`-`0x26CB7C`; HREK identifies its work as `wait_for_gpu`. The first
+candidate policy is `stock_last_window && final_eye`: the first eye receives
+false and the final eye receives the original stock byte. The stock original
+then decides whether the block executes and consumes the byte. The final eye's
+actual post-call byte must persist; it must not be assumed cleared. Static
+evidence proves the conditional consumption semantics, not this policy's
+runtime/headset correctness.
+
+All proven normal and screenshot rebuilds execute before active-view set and
+camera-stack push. The helper inputs still exist at the inner candidate, but
+static evidence does not prove that invoking them inside the active scope is
+safe. Per-eye serial reuse, temporal/previous-matrix policy, conservative
+visibility for both eyes, secondary render-camera policy, OpenXR pose/unit/FOV
+mapping, exception cleanup, and headset behavior therefore remain runtime
+gates. This section selects the exact inner candidate; it does not make it
+hook-eligible.
 
 ### World, first-person, native CHUD, capture, and Present
 
@@ -279,17 +442,84 @@ successful copy. It also proves why a CHUD callee alone is unsafe:
 `0x1D3894`-`0x1D3E27` separately calls `0x2C29F8` at `0x1D3D24` for an
 alternate/screenshot path.
 
+Reach's final stock target identity is nevertheless statically resolved.
+Surface group 1 is constructed by `0x266F90`-`0x2670FB`: at
+`0x266FC2` it reads exact swapchain global RVA `0x04E38868`, calls
+`IDXGISwapChain::GetBuffer(0, ...)` at `0x266FE0`, and creates the group's
+resource views.
+The group-1 descriptor is RVA `0x00BB9288`; its runtime group begins at RVA
+`0x00C8E520`. Its byte-identical retail/HREK descriptor specifies flags
+`0x21`, `DXGI_FORMAT_R8G8B8A8_UNORM`, full-resolution scales, and one sample.
+Flag `0x20` creates four `0x88`-byte specializations. The runtime group records
+their count at `+0x58` and array pointer at `+0x60`; record 0 holds the
+swapchain RTV at `+0x08` and SRV at `+0x18`. Creation calls
+`CreateRenderTargetView(texture, nullptr, ...)` and
+`CreateShaderResourceView(texture, nullptr, ...)`, so both default views
+inherit the swapchain texture's UNORM Texture2D identity.
+
+The selected specialization index is global RVA `0x04E38A08`, written from
+player view `+0x3A4` at `0x26C779`. The selected record is therefore
+`*(group+0x60) + index*0x88`; the stock cache for its current RTV is RVA
+`0x00CA02E0`. When they execute, both conditional late native-CHUD phases bind
+group 1/display through `0x274524` before the final CHUD draw. The accepted
+external observer saw only player slot zero but did not sample `+0x3A4`, so
+normal specialization index zero remains a required runtime check.
+
+Swapchain creation `0x250C4C` proves one buffer, DISCARD swap effect, UNORM
+format, sample count one, and shader-input plus render-target-output usage.
+Stock wrapper `0x25113C` reads that same swapchain at `0x251195` and calls
+Present at `0x2511AA`.
+
+Cleanup `0x2670FC`-`0x26724F` releases and nulls the group resources and views.
+Any retained engine RTV/view must follow that view-generation lifetime.
+Whole-rasterizer dispose/init, ResizeBuffers, and a separate reset/recovery path
+can each recreate the views, so ResizeBuffers alone is not a sufficient
+generation boundary for a retained engine RTV. A cold-retained swapchain
+buffer has the narrower resource lifetime and must be released before
+ResizeBuffers, swapchain replacement, title teardown, or module unload.
+
+This is a direct-to-display path, not Halo 3's internal scene-color path. The
+shared Halo 3 learner requires a full-resolution slot-0
+`R8G8B8A8_TYPELESS` resource with RT, SRV, and UAV bind flags; applying that
+identity rule to Reach would be unsupported and could omit late native CHUD.
+
+The smallest conservative capture route is to validate record 0 against
+`swapchain->GetBuffer(0)` once per Reach generation in the existing cold
+pre-Present path, create matching eye caches there, then let each eye render
+normally into Reach's display buffer. Immediately after each original
+`player_view_render` returns, the candidate would use same-context
+`CopyResource` to snapshot the intended completed world, first-person, and
+executed native-CHUD phases into that eye cache. The second eye would remain in
+the stock display buffer for desktop continuation and Present. Single-sample
+identical descriptors statically select copy rather than resolve; live content,
+ordering, copy success, and no-added-frame-latency still require runtime proof.
+
+Direct final-RTV redirection is not the first candidate: direct clears/copies
+or SRV feedback could bypass it, and it would leave the Presented stock buffer
+unwritten without a copy-back. Production still has to prove the cold resource
+identity, live specialization index zero, pointer continuity, same-context copy
+success, and exact generation lifetime before admitting the display copy.
+
 ### Remaining runtime gate
 
-The static owner, stride, within-call freshness, late-CHUD order, pre-Present
-capture placement, and transaction-scoped clear are closed. Before a Reach
-hook is eligible, the remaining runtime-evidence and implementation gates are:
+The static owner, stride, two caller semantics, within-call freshness,
+workspace lifetime, final display owner, late-CHUD order, pre-Present capture
+placement, and transaction-scoped clear are closed. Before a Reach hook is
+eligible, the remaining runtime-evidence and implementation gates are:
 
-- normal caller scope and alternate-caller semantics, while production repeats
-  the now-corroborated exactly-one loaded-image checks;
+- production exact-return routing for the normal caller, stock-only routing for
+  screenshot and unknown callers, and repetition of the exactly-one
+  loaded-image checks;
 - production enforcement of the now-observed continuous camera freshness and
   one-second safety interval;
-- the render target that remains valid at the selected capture point;
+- production propagation of the outer normal-owner token into the proven inner
+  candidate, plus serial-reuse, temporal, transitive-side-effect, and
+  reentrancy guards;
+- inside-active-scope safety and OpenXR mapping for the stock-observed
+  pre-scope rebuild,
+  plus byte-exact rollback of every touched region;
+- cold record-0/buffer-0 identity, specialization-index-zero continuity, and a
+  successful same-context per-eye `CopyResource`;
 - pause, cinematic, split-screen, unload/reload, device-loss, and title-module
   transition behavior;
 - callback quiescence and complete detour teardown;
@@ -381,8 +611,8 @@ was run against stock MCC for 480,000 ms. Its retained log at
 `out/test-runs/5d34180-stock-reach-observer-20260724-025036448Z/reach-runtime-observer.log`
 has SHA-256
 `3C36AF1F06FC428E914AB0C71330838587B020335EFBF2B017F8EF178768212D`.
-Two preflights passed; 29,507 normal slot-0 transactions yielded 29,496 valid
-camera samples and seven stable windows, with no invalid cameras,
+Two preflights passed; 29,507 accepted exact-slot observer transactions, all
+at slot 0, yielded 29,496 valid camera samples and seven stable windows, with no invalid cameras,
 outside-array pointers, multi-owner intervals, contamination, or snapshot
 failures. The observer safely reset on ambiguous residency, re-ran preflight
 when Reach became sole-resident again, and later recorded one Reach
@@ -399,12 +629,17 @@ Reach path. `proof_complete` and `hook_eligible` remain false.
 
 ## Evidence still required
 
-Resolve the normal and alternate caller scopes and the owning capture target.
-Prove hook-time camera/workspace lifetime and exact snapshot/restore,
-production freshness enforcement, pause/cinematic/split-screen behavior,
-unload/reload and device-loss handling, callback quiescence, and complete
-detour teardown. Still independently derive observer effects, stereo camera
-mutation, first-person weapon behavior, HUD anchor, skeleton and weapon-marker
-facts, brightness, and motion blur before enabling player-visible behavior.
-Xbox 360 map symbols may supply names or call-graph hints only; every fact must
-be re-proven against HREK and the pinned MCC x64 module.
+The next render gate is a fail-open implementation of the exact outer-owner
+token, proven inner `player_view_render` candidate, proposed runtime-unvalidated
+`stock_last_window && final_eye` wait policy (stock false stays false),
+stock-observed pre-scope camera rebuild, complete rollback, and cold-validated
+group-1 buffer copy. The final eye's actual post-call wait byte must persist.
+It must refuse stereo unless every identity, scope, finite/range,
+specialization-zero, and copy precondition holds. Production must also enforce
+freshness, reentrancy, pause/cinematic/split-screen behavior, unload/reload and
+device-loss handling, callback quiescence, and complete detour teardown. Still
+independently derive observer effects, first-person weapon behavior, HUD
+anchor, skeleton and weapon-marker facts, brightness, and motion blur before
+enabling the corresponding player-visible behavior. Xbox 360 map symbols may
+supply names or call-graph hints only; every fact must be re-proven against
+HREK and the pinned MCC x64 module.

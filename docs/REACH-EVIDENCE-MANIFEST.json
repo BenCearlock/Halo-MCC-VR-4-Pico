@@ -56,7 +56,19 @@
         "function_rva": "0x0026C204",
         "function_end_rva_exclusive": "0x0026C6DC",
         "normal_call_site_rva": "0x000C36D6",
-        "rasterizer_workspace_rva": "0x00C9FAE0"
+        "rasterizer_workspace_rva": "0x00C9FAE0",
+        "camera_pair_data_size": "0x000002A8",
+        "render_scope_snapshot_size": "0x000002B0",
+        "workspace_layout": {
+          "primary_compact": { "offset": "0x000", "size": "0x090" },
+          "primary_derived": { "offset": "0x090", "size": "0x0C4" },
+          "secondary_compact": { "offset": "0x154", "size": "0x090" },
+          "secondary_derived": { "offset": "0x1E4", "size": "0x0C4" },
+          "camera_stack_callback": { "offset": "0x2A8", "size": "0x008" }
+        },
+        "return_to_main_render_game_rva": "0x000C36DB",
+        "instructions_to_normal_render_call": 16,
+        "calls_or_branches_before_normal_render_call": 0
       },
       "main_render_view": {
         "function_rva": "0x000C31F4",
@@ -67,7 +79,16 @@
         "entry_aob": "40 53 56 57 48 81 EC 80 00 00 00 0F 29 74 24 70 48 8B 05 05 6E A3 00 48 33 C4 48 89 44 24 68 41",
         "static_executable_match_count": 1,
         "normal_call_site_rva": "0x000C3730",
+        "normal_return_rva": "0x000C3735",
         "alternate_call_site_rva": "0x001D3864",
+        "alternate_return_rva": "0x001D3869",
+        "direct_rel32_caller_count": 2,
+        "alternate_semantics": "SCREENSHOT_TILE_BLOOM_SLOT0",
+        "production_routing": {
+          "normal_return": "STEREO_ELIGIBLE_AFTER_ALL_OTHER_GATES",
+          "alternate_return": "STOCK_ORIGINAL_EXACTLY_ONCE",
+          "unknown_return": "STOCK_ORIGINAL_EXACTLY_ONCE"
+        },
         "abi": {
           "rcx": "rasterizer_camera_workspace",
           "rdx": "player_view_pointer",
@@ -77,13 +98,77 @@
       "player_view_render": {
         "function_rva": "0x0026C6DC",
         "function_end_rva_exclusive": "0x0026CFE6",
+        "function_size": 2314,
+        "body_sha256": "2628D1189621EACED7C95A1F295815D70E7783054F1C3CBA46799F838CC33C60",
+        "entry_aob": "48 8B C4 48 89 58 10 48 89 70 18 48 89 78 20 55 41 54 41 55 41 56 41 57 48 8D A8 28 FF FF FF 48 81 EC B0 01 00 00 0F 29 70 C8 0F 29 78 B8 48 8B 05 ?? ?? ?? ?? 48 33 C4 48 89 85 80 00 00 00 8B 81 A4 03 00 00",
+        "static_executable_match_count": 1,
+        "direct_rel32_caller_count": 1,
         "call_site_rva": "0x000C33C4",
-        "post_call_continuation_rva": "0x000C33C9"
+        "post_call_continuation_rva": "0x000C33C9",
+        "abi": "void __fastcall(player_view*)",
+        "candidate_status": "EXACT_INNER_BOUNDARY_PROVEN_DOUBLE_CALL_RUNTIME_UNPROVEN",
+        "outer_normal_owner_tls_token_required": true,
+        "immediate_return_distinguishes_outer_caller": false,
+        "avoids_repeating_main_render_view_prelude": true,
+        "last_window_flag_offset": "0x0A30",
+        "last_window_candidate_policy": "first eye false; final eye receives original stock byte; preserve final actual post-call byte; runtime unvalidated"
       },
       "active_view_scope": {
         "global_rva": "0x04E389A8",
         "set_rva": "0x000C323C",
+        "camera_stack_push_call_rva": "0x000C3246",
+        "camera_stack_push_rva": "0x00251C08",
+        "camera_stack_depth_rva": "0x00B43ABC",
+        "camera_stack_pointer_slots_rva": "0x00C878A8",
+        "camera_stack_callback_rva": "0x0026BFD4",
+        "pushed_depth_min": 0,
+        "pushed_depth_max": 3,
+        "push_skips_when_prior_depth_at_least": 3,
+        "outer_token_captures_pre_push_depth": true,
+        "inner_admission_depth_rule": "0 <= current_depth && current_depth <= 3 && current_depth == outer_pre_push_depth + 1",
+        "inner_admission_top_rule": "top pointer == admitted normal workspace",
+        "inner_admission_callback_rule": "workspace+0x2A8 == module+0x26BFD4",
+        "camera_stack_pop_call_rva": "0x000C33CE",
+        "camera_stack_pop_rva": "0x00251C50",
         "clear_rva": "0x000C33D3"
+      },
+      "camera_rebuild_transaction": {
+        "stock_order_proven_before_active_scope": true,
+        "inside_active_scope_call_safety_proven": false,
+        "frustum_helper": {
+          "rva": "0x00287F58",
+          "abi": "bool __fastcall(compact_camera*, float[4]*)",
+          "output_size": "0x10"
+        },
+        "projection_builder": {
+          "rva": "0x002884BC",
+          "abi": "void __fastcall(compact_camera*, float[4]*, derived_block*, float)",
+          "normal_fourth_argument": 0.0,
+          "output_size": "0xC4"
+        },
+        "camera_state_updater": {
+          "rva": "0x00286F9C",
+          "retail_argument_count": 2,
+          "destination_player_view_offset": "0x03B0",
+          "sparse_touched_history_state_envelope": "0xC8",
+          "render_camera_pointer_global_rva": "0x04E38A90"
+        },
+        "projection_matrix_builder": {
+          "rva": "0x0028AF8C",
+          "destination_player_view_offset": "0x0490",
+          "stock_transaction_size": "0x2D0",
+          "last_direct_write_offset": "0x2C0",
+          "projection_offset_input": "player_view+0x470 float[2], zeroed by the preceding normal camera-state updater"
+        },
+        "rollback": {
+          "workspace": "0x2B0",
+          "player_view_camera_state": "offset 0x3B0 size 0xC8",
+          "player_view_current_matrices": "offset 0x490 size 0x2D0",
+          "player_view_previous_matrices_if_touched": "offset 0x760 size 0x2D0",
+          "render_camera_pointer_global": "validate expected player_view+0x3B0; re-arm per eye; preserve final stock zero; no blind final restore",
+          "whole_player_view_snapshot_forbidden": true,
+          "last_window_flag_excluded": true
+        }
       },
       "late_chud_call_sites": [
         "0x0026CE28",
@@ -94,6 +179,41 @@
         "outer_present_call_rva": "0x000C3000",
         "present_wrapper_rva": "0x0025113C",
         "present_vcall_rva": "0x002511AA"
+      },
+      "final_display_target": {
+        "status": "STATIC_IDENTITY_PROVEN_RUNTIME_DESCRIPTOR_INCOMPLETE",
+        "surface_group_index": 1,
+        "surface_group_descriptor_rva": "0x00BB9288",
+        "runtime_group_rva": "0x00C8E520",
+        "descriptor_flags": "0x00000021",
+        "descriptor_format": "DXGI_FORMAT_R8G8B8A8_UNORM",
+        "descriptor_sample_count": 1,
+        "expected_specialization_count": 4,
+        "runtime_surface_count_offset": "0x58",
+        "runtime_surface_array_offset": "0x60",
+        "surface_entry_size": "0x88",
+        "surface_entry_rtv_offset": "0x08",
+        "surface_entry_srv_offset": "0x18",
+        "selected_specialization_index_global_rva": "0x04E38A08",
+        "selected_index_player_view_offset": "0x03A4",
+        "selected_rtv_cache_rva": "0x00CA02E0",
+        "creation_function_rva": "0x00266F90",
+        "creation_function_end_rva_exclusive": "0x002670FC",
+        "swapchain_global_rva": "0x04E38868",
+        "swapchain_get_buffer_rva": "0x00266FE0",
+        "cleanup_function_rva": "0x002670FC",
+        "cleanup_function_end_rva_exclusive": "0x00267250",
+        "swapchain_buffer_count": 1,
+        "swapchain_swap_effect": "DXGI_SWAP_EFFECT_DISCARD",
+        "swapchain_usage": [
+          "DXGI_USAGE_SHADER_INPUT",
+          "DXGI_USAGE_RENDER_TARGET_OUTPUT"
+        ],
+        "late_native_chud_when_executed_binds_display_group": true,
+        "same_swapchain_used_by_stock_present": true,
+        "halo3_scene_color_identity_rule_reusable": false,
+        "first_capture_route": "COLD_VALIDATE_BUFFER0_THEN_COPYRESOURCE_AFTER_EACH_PLAYER_VIEW_RENDER",
+        "direct_rtv_redirect_first_candidate": false
       }
     },
     "hrek_homolog": {
@@ -108,7 +228,15 @@
       "setup_function_rva": "0x00837F80",
       "setup_call_site_rva": "0x001CBD3A",
       "player_view_render_rva": "0x00834490",
+      "player_view_render_end_rva_exclusive": "0x00835598",
+      "player_view_render_size": 4360,
+      "player_view_render_body_sha256": "21C52A3135F31D1C1D55C73CA2EE66A36A10780D74B190E7FA873A716A6830B2",
       "player_view_render_call_site_rva": "0x001CBF22",
+      "player_view_render_normal_call_site_rva": "0x001CBF22",
+      "player_view_render_direct_call_sites": [
+        "0x001CBF22",
+        "0x001CC790"
+      ],
       "active_view_set_call_rva": "0x001CBE89",
       "active_view_clear_call_rva": "0x001CBF33",
       "active_view_setter_rva": "0x00837B70",
@@ -127,14 +255,20 @@
       "executed_final_first_person_precedes_late_native_chud": true,
       "post_render_continuation_precedes_active_view_clear": true,
       "post_main_render_view_capture_precedes_stock_present": true,
-      "first_person_and_chud_phases_are_conditional": true
+      "first_person_and_chud_phases_are_conditional": true,
+      "main_render_view_slot0_prelude_must_not_repeat": true,
+      "wait_for_gpu_block_can_skip_before_flag_test": true,
+      "wait_for_gpu_stock_flag_consumed_once_when_block_executes": true,
+      "final_eye_actual_post_call_flag_must_persist": true,
+      "wait_for_gpu_final_eye_policy_runtime_validated": false
     },
     "remaining_runtime_proof": [
       "production_runtime_repeats_loaded_image_preflight",
-      "normal_caller_scope_and_alternate_caller_semantics",
+      "production_exact_normal_return_and_stock_only_alternate_unknown_routing",
       "production_runtime_enforces_camera_freshness_and_one_second_safety_interval",
-      "hook_time_camera_workspace_lifetime_and_snapshot_restore",
-      "capture_target_lifetime_and_copy_success",
+      "production_outer_owner_token_inner_serial_reuse_and_transitive_side_effect_safety",
+      "inside_scope_eye_rebuild_openxr_mapping_and_byte_exact_rollback",
+      "cold_buffer0_identity_specialization0_continuity_and_copyresource_success",
       "pause_cinematic_split_screen_and_transition_observation",
       "device_loss_title_unload_and_callback_quiescence",
       "runtime_finite_range_index_and_count_guards",
@@ -304,6 +438,7 @@
     "continuous_freshness_proof_complete": true,
     "continuous_freshness_proof_scope": "OBSERVED_SLOT0_SINGLE_OWNER_ONLY_IN_TWO_ADMISSION_SESSIONS",
     "lifecycle_proof_complete": false,
+    "capture_target_static_identity_complete": true,
     "capture_target_proof_complete": false,
     "proof_complete": false,
     "hook_eligible": false
@@ -349,13 +484,15 @@
       },
       "remaining_proof": [
         "production_runtime_repeats_loaded_image_preflight",
-        "normal_caller_scope_and_alternate_caller_semantics",
+        "production_exact_normal_return_and_stock_only_alternate_unknown_routing",
         "production_runtime_enforces_camera_freshness_and_one_second_safety_interval",
-        "hook_time_camera_workspace_lifetime_and_snapshot_restore",
-        "capture_target_lifetime_and_copy_success",
+        "production_outer_owner_token_inner_serial_reuse_and_transitive_side_effect_safety",
+        "inside_scope_eye_rebuild_openxr_mapping_and_byte_exact_rollback",
+        "cold_buffer0_identity_specialization0_continuity_and_copyresource_success",
         "pause_cinematic_split_screen_and_transition_observation",
-        "runtime_teardown_and_callback_quiescence",
-        "runtime_finite_and_bounds_guards"
+        "device_loss_title_unload_and_callback_quiescence",
+        "runtime_finite_range_index_and_count_guards",
+        "exact_dll_headset_validation_and_halo3_regression"
       ],
       "proof_complete": false
     },
