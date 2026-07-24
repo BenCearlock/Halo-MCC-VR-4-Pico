@@ -9519,6 +9519,21 @@ namespace
         if (!ValidateReachCompactCamera(compact, kReachCompactCameraBytes, observed))
             return false;
 
+        // player_view_render loads the render-camera owner global (0x04E38A90)
+        // into rax and dereferences [rax+0xB0], and it CLEARS that global to zero
+        // on every call (RVA 0x26CE2F). Left alone, the second eye's call loads
+        // null and faults in the first-person camera build -- the observed access
+        // violation at haloreach.dll RVA 0x26E02F. Require the engine's admitted
+        // owner (player_view + 0x3B0), re-arm the global to it before each eye's
+        // call, and never restore it afterward so the final eye's stock zero
+        // persists. Fail open if the owner is anything unexpected.
+        const uintptr_t reachOwnerGlobal =
+            g_reachCamera.base + kReachRenderCameraOwnerRva;
+        const uintptr_t entryOwner =
+            *reinterpret_cast<uintptr_t*>(reachOwnerGlobal);
+        if (entryOwner != playerView + kReachPlayerViewCameraStateOffset)
+            return false;
+
         alignas(16) unsigned char savedWorkspace[kReachRenderScopeSnapshotSize];
         alignas(16) unsigned char savedPv[kReachPvSnapshotBytes];
         alignas(16) unsigned char center[kReachCompactCameraBytes];
@@ -9556,6 +9571,9 @@ namespace
                     *reinterpret_cast<uint8_t*>(
                         playerView + kReachLastWindowFlagOffset) =
                         policy.lastWindowInput;
+                // Re-arm the render-camera owner the stock call expects on entry;
+                // the previous eye's call zeroed it (see the entry check above).
+                *reinterpret_cast<uintptr_t*>(reachOwnerGlobal) = entryOwner;
                 g_reachOrigPlayerViewRender(playerView);
                 VR_ReachCopyEye(access, policy.eye);
                 if (pass == 0)

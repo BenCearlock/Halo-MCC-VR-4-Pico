@@ -3026,12 +3026,36 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
         XrSystemGetInfo sgi{XR_TYPE_SYSTEM_GET_INFO};
         sgi.formFactor = XR_FORM_FACTOR_HEAD_MOUNTED_DISPLAY;
         r = xrGetSystem(g_instance, &sgi, &g_systemId);
+        // The launcher injects the mod at process start, before the game window
+        // exists, so the runtime and headset are often still coming online the
+        // first time we ask. XR_ERROR_FORM_FACTOR_UNAVAILABLE means "no HMD yet",
+        // which is transient, so poll for up to ~60s instead of giving up on the
+        // first race. This runs on the background init thread and never blocks
+        // the game; a headset connected shortly after launch still brings up VR.
+        for (int waited = 0;
+             r == XR_ERROR_FORM_FACTOR_UNAVAILABLE && waited < 60;
+             ++waited)
+        {
+            if (waited % 10 == 0)
+                LOG("waiting for a headset on OpenXR runtime '%s' "
+                    "(connect it now if it is off)...", g_status.runtime);
+            Sleep(1000);
+            r = xrGetSystem(g_instance, &sgi, &g_systemId);
+        }
         if (XR_FAILED(r))
         {
-            Fail("No headset found. Make sure the headset is connected and SteamVR is running", r);
+            char msg[320];
+            snprintf(msg, sizeof(msg),
+                "No headset found on the active OpenXR runtime '%s' after 60s.\n\n"
+                "The mod uses whichever runtime owns OpenXR. If your headset runs\n"
+                "through SteamVR (PSVR2, Index, Vive, etc.), set SteamVR -> Settings\n"
+                "-> OpenXR -> Set SteamVR as OpenXR Runtime. If you stream with\n"
+                "Virtual Desktop, connect it before launching.",
+                g_status.runtime);
+            Fail(msg, r);
             return false;
         }
-        LOG("OpenXR instance ready; headset found");
+        LOG("OpenXR instance ready; headset found on runtime %s", g_status.runtime);
         return true;
     }
 
