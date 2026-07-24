@@ -338,11 +338,13 @@ const TitleDescriptor* TitleAdapter_PollLoaded(uint64_t observedAtMs)
     else if (!detected->runtimeSupported)
     {
         if (detected->title == GameTitle::HaloReach &&
-            ReachAdapter_GetStage() == ReachAdapterStage::EvidenceOnly)
+            ReachAdapter_GetStage() ==
+                ReachAdapterStage::ControllerInputOnly)
         {
-            LOG("Title adapter: detected %s (%ls); private evidence adapter "
-                "is build-enabled but runtime hooks are forbidden, leaving "
-                "stock Reach untouched",
+            LOG("Title adapter: detected %s (%ls); shared virtual-controller "
+                "transport is enabled; Reach camera, render, aim/movement "
+                "transforms, HUD, haptics, lifecycle, and runtime hooks remain "
+                "disabled",
                 detected->displayName, detected->moduleName);
         }
         else if (TitleRegistry_HookPlan(detected->title) ==

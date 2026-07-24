@@ -1105,6 +1105,9 @@ int main()
                   GameTitle::None, false, false, false, false),
             "the unambiguous MCC shell retains ordinary controller input");
         Check(TitleRegistry_AllowsSharedControllerInput(
+                  GameTitle::Halo3, false, false, false, true),
+            "explicit Halo 3 retains ordinary controller input");
+        Check(TitleRegistry_AllowsSharedControllerInput(
                   GameTitle::Halo3ODST, false, true, false, true),
             "private ODST camera ownership permits ordinary gamepad input");
         Check(TitleRegistry_AllowsSharedControllerInput(
@@ -1114,8 +1117,8 @@ int main()
                   GameTitle::Halo3ODST, false, true, false, false),
             "public ODST camera ownership keeps controller input stock");
         Check(!TitleRegistry_AllowsSharedControllerInput(
-                  GameTitle::HaloCE, false, false, true, true),
-            "an explicitly detected unsupported title keeps stock input");
+                  GameTitle::HaloCE, false, false, true, false),
+            "an explicit title without controller admission keeps stock input");
         Check(!TitleRegistry_AllowsSharedControllerInput(
                   GameTitle::Unknown, false, true, true, true),
             "owned ODST teardown beats resident-module ambiguity");
@@ -1302,6 +1305,9 @@ int main()
     const TitleDescriptor* halo3 = TitleRegistry_FromModuleName(L"halo3.dll");
     Check(halo3 != nullptr, "Halo 3 module is recognized");
     Check(halo3 && halo3->runtimeSupported, "Halo 3 is the supported baseline adapter");
+    Check(halo3 && halo3->admissionCapabilities ==
+              TitleCapability_ControllerInput,
+        "Halo 3 retains ordinary shared-controller admission");
 
     const TitleDescriptor* odst =
         TitleRegistry_FromModuleName(L"N:/MCC/HALO3ODST.DLL");
@@ -1311,6 +1317,15 @@ int main()
         "ODST stays disabled until its adapter passes the title gate");
     Check(odst && odst->capabilities == TitleCapability_None,
         "ODST advertises no public capabilities during private bring-up");
+#if HALOMCCVR_EXPERIMENTAL_ODST_BRINGUP
+    Check(odst && odst->admissionCapabilities ==
+              TitleCapability_ControllerInput,
+        "The private preset grants ODST controller admission");
+#else
+    Check(odst && odst->admissionCapabilities == TitleCapability_None,
+        "The normal preset grants ODST no controller admission");
+#endif
+
     Check(TitleRegistry_HookPlan(GameTitle::Halo3) == TitleHookPlan::Halo3Full,
         "Halo 3 keeps the full headset-confirmed hook plan");
 #if HALOMCCVR_EXPERIMENTAL_ODST_BRINGUP
@@ -1325,20 +1340,25 @@ int main()
     const TitleDescriptor* reach = TitleRegistry_FromModuleName(L"haloreach.dll");
     Check(reach && reach->title == GameTitle::HaloReach, "Reach module is recognized");
     Check(reach && !reach->runtimeSupported,
-        "The evidence-only Reach adapter does not claim runtime support");
+        "The controller-only Reach adapter does not claim runtime support");
     Check(reach && reach->capabilities == TitleCapability_None,
-        "The evidence-only Reach adapter advertises no player capabilities");
+        "The controller-only Reach adapter advertises no runtime capabilities");
     Check(TitleRegistry_HookPlan(GameTitle::HaloReach) == TitleHookPlan::None,
         "Reach receives no runtime hook plan in either build preset");
 #if HALOMCCVR_EXPERIMENTAL_REACH_BRINGUP
-    Check(ReachAdapter_GetStage() == ReachAdapterStage::EvidenceOnly,
-        "The private preset compiles only the Reach evidence shell");
+    Check(reach && reach->admissionCapabilities ==
+              TitleCapability_ControllerInput,
+        "The private preset grants Reach only controller admission");
+    Check(ReachAdapter_GetStage() == ReachAdapterStage::ControllerInputOnly,
+        "The private preset compiles only Reach controller transport");
 #else
+    Check(reach && reach->admissionCapabilities == TitleCapability_None,
+        "The normal preset grants Reach no controller admission");
     Check(ReachAdapter_GetStage() == ReachAdapterStage::Disabled,
         "The normal Release preset keeps the Reach adapter disabled");
 #endif
     Check(!ReachAdapter_RuntimeHooksPermitted(),
-        "Candidate one cannot install Reach runtime hooks");
+        "The controller-only candidate cannot install Reach runtime hooks");
     const ReachEvidenceIdentity& reachIdentity =
         ReachAdapter_GetEvidenceIdentity();
     Check(std::wstring_view(reachIdentity.moduleName) == L"haloreach.dll" &&
@@ -1370,9 +1390,16 @@ int main()
     Check(!TitleRegistry_AllowsSharedGameplayFeatures(
               GameTitle::HaloReach, true, false),
         "Stale Halo 3 ownership cannot admit Reach gameplay features");
+    const bool reachControllerAdmission = reach &&
+        (reach->admissionCapabilities & TitleCapability_ControllerInput) != 0;
+    Check(TitleRegistry_AllowsSharedControllerInput(
+              GameTitle::HaloReach, true, false, true,
+              reachControllerAdmission) == reachControllerAdmission,
+        "Explicit Reach obeys its immutable controller admission policy");
     Check(!TitleRegistry_AllowsSharedControllerInput(
-              GameTitle::HaloReach, true, false, true, true),
-        "Reach controller admission remains stock in candidate one");
+              GameTitle::HaloReach, false, true, false,
+              reachControllerAdmission),
+        "Camera-only ownership cannot leak controller input into Reach");
     const GameTitle unsupportedTitles[] = {
         GameTitle::Halo4, GameTitle::HaloCE,
         GameTitle::Halo2, GameTitle::Unknown, GameTitle::None,
@@ -1380,6 +1407,19 @@ int main()
     for (GameTitle title : unsupportedTitles)
         Check(TitleRegistry_HookPlan(title) == TitleHookPlan::None,
             "Unsupported titles never receive game hooks");
+    const GameTitle stockControllerTitles[] = {
+        GameTitle::Halo4, GameTitle::HaloCE, GameTitle::Halo2,
+    };
+    for (GameTitle title : stockControllerTitles)
+    {
+        const TitleDescriptor* descriptor = TitleRegistry_Find(title);
+        const bool admitted = descriptor &&
+            (descriptor->admissionCapabilities &
+                TitleCapability_ControllerInput) != 0;
+        Check(!admitted && !TitleRegistry_AllowsSharedControllerInput(
+                  title, false, false, true, admitted),
+            "CE, H2, and H4 remain stock despite private title flags");
+    }
     Check(TitleRegistry_FromModuleName(L"MCC-Win64-Shipping.exe") == nullptr,
         "The MCC host is not mistaken for a game title");
     Check(std::string_view(RuntimeModeName(RuntimeMode::Vehicle)) == "vehicle",

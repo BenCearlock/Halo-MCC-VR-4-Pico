@@ -295,12 +295,23 @@ hook is eligible, the remaining runtime-evidence and implementation gates are:
 Accordingly, all Reach `proof_complete` and `hook_eligible` fields remain
 false.
 
-## Foundation candidate behavior
+## Controller-input-only candidate behavior
 
-`HALOMCCVR_EXPERIMENTAL_REACH_BRINGUP=ON` currently compiles an evidence-only
-adapter shell. Reach remains `runtimeSupported=false`, advertises no
-capabilities, receives `TitleHookPlan::None`, and cannot install a runtime hook.
-Rendering, input, movement, aim, HUD, and lifecycle behavior remain stock.
+`HALOMCCVR_EXPERIMENTAL_REACH_BRINGUP=ON` now compiles a
+controller-input-only adapter. When module resolution identifies explicit
+Reach, it grants only shared virtual-controller admission. Reach remains
+`runtimeSupported=false`, its runtime capability mask remains
+`TitleCapability_None`, it receives `TitleHookPlan::None`, and
+`ReachAdapter_RuntimeHooksPermitted()` remains false.
+
+This admission carries ordinary virtual XInput buttons and sticks into stock
+Reach. It does not grant a Reach runtime owner or enable camera or render
+changes, controller-aim or movement transforms, HUD, arm IK, haptics, runtime
+mode publication, lifecycle publication, or any runtime hook. A
+multi-resident `Unknown` frontend cannot claim the Reach-specific admission
+because it cannot be identified as explicit Reach. Any title-independent
+frontend controller-continuity fallback is separate and is not Reach gameplay
+support.
 
 The offline `tools/reach-preflight.ps1` command reads the retail file and HREK
 identity only. It performs no injection, process attach, memory write,

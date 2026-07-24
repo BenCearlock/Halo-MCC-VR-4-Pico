@@ -9714,6 +9714,10 @@ bool Game_AllowsSharedGameplayFeatures()
 bool Game_AllowsSharedControllerInput()
 {
     const GameTitle activeTitle = TitleAdapter_GetActiveTitle();
+    const TitleDescriptor* activeDescriptor = TitleRegistry_Find(activeTitle);
+    const bool explicitTitleAllowsControllerInput = activeDescriptor &&
+        (activeDescriptor->admissionCapabilities &
+            TitleCapability_ControllerInput) != 0;
     const bool resolvedOwnerAllowsControllerInput =
         activeTitle == GameTitle::Unknown &&
         Game_HasTitleCapability(TitleCapability_ControllerInput);
@@ -9727,17 +9731,13 @@ bool Game_AllowsSharedControllerInput()
     // unsupported titles remain fail-closed.
     const bool allowAmbiguousFrontend =
         activeTitle == GameTitle::Unknown;
-    const bool allowCameraOnlyControllerInput =
-        TitleRegistry_HookPlan(GameTitle::Halo3ODST) ==
-        TitleHookPlan::OdstExperimentalCameraCore;
 #else
     const bool cameraOnlyOwned = false;
     const bool allowAmbiguousFrontend = false;
-    const bool allowCameraOnlyControllerInput = false;
 #endif
     return TitleRegistry_AllowsSharedControllerInput(
         activeTitle, resolvedOwnerAllowsControllerInput, cameraOnlyOwned,
-        allowAmbiguousFrontend, allowCameraOnlyControllerInput);
+        allowAmbiguousFrontend, explicitTitleAllowsControllerInput);
 }
 bool Game_HasTitleCapability(uint32_t requiredCapabilities)
 {

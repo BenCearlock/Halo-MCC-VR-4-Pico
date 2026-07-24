@@ -16,7 +16,7 @@ $packageBuildDir = if ($ReachPrivate) {
     'out\build\release'
 }
 $validationPresets = if ($ReachPrivate) {
-    @('release', 'release-reach-private')
+    @('release-reach-private')
 } else {
     @('release')
 }
@@ -143,6 +143,7 @@ try {
             HALOMCCVR_EXPERIMENTAL_ODST_BRINGUP = $true
             HALOMCCVR_EXPERIMENTAL_REACH_BRINGUP = $reachEnabled
         }
+        reach_controller_input_enabled = $reachEnabled
         reach_runtime_hooks_enabled = $false
         base_release = 'MCC_VR_ALPHA_0.2.2'
         files = [ordered]@{

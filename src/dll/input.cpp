@@ -72,6 +72,8 @@ namespace
         if (!pad.valid)
             return;
 
+        const bool sharedGameplayInput =
+            Game_AllowsSharedGameplayFeatures();
         const MenuChordResult chord =
             g_menuChord.Update(GetTickCount64(), pad.clickL, pad.clickR);
         if (chord.toggled)
@@ -81,8 +83,9 @@ namespace
         // into Halo enters native zoom state, which hides the normal VR gun and
         // body even if we restore the eye FOV. Disabled/non-gameplay input still
         // passes through unchanged.
-        const bool scopeAvailable = g_config.scope_enabled &&
-            Game_IsHeadTracking() && !Game_IsCameraOnlyBringup();
+        const bool scopeAvailable = sharedGameplayInput &&
+            g_config.scope_enabled && Game_IsHeadTracking() &&
+            !Game_IsCameraOnlyBringup();
         const ScopeToggleUpdate scope = g_scopeToggle.Update(
             scopeAvailable, pad.clickR, chord.consumeClicks || Menu_IsOpen());
         if (scope.changed && scopeAvailable)
@@ -97,10 +100,18 @@ namespace
             return;
         }
 
-        const MenuChordResult pauseChord =
-            g_pauseChord.Update(GetTickCount64(), pad.y, pad.b);
-        if (pauseChord.toggled)
-            Input_RequestPauseToggle();
+        MenuChordResult pauseChord{};
+        if (PausePresentationInputAllowed(sharedGameplayInput))
+        {
+            pauseChord =
+                g_pauseChord.Update(GetTickCount64(), pad.y, pad.b);
+            if (pauseChord.toggled)
+                Input_RequestPauseToggle();
+        }
+        else
+        {
+            g_pauseChord.Reset();
+        }
 
         WORD btn = state->Gamepad.wButtons;
         if (scopeAvailable)
@@ -127,8 +138,7 @@ namespace
                 g_startPulseUntilMs.store(inputNow + 350);
                 LOG("ODST input: Menu/Start latched for native polling");
             }
-            if (PausePresentationInputAllowed(
-                    Game_AllowsSharedGameplayFeatures()) &&
+            if (PausePresentationInputAllowed(sharedGameplayInput) &&
                 !Game_HasAuthoritativePauseState())
                 VR_RequestPausePresentation(!VR_IsPausePresentationTarget());
         }
@@ -282,8 +292,9 @@ namespace
             r = ERROR_SUCCESS;
         }
         // Controller admission is separate from shared gameplay ownership.
-        // The private ODST camera-only build may expose ordinary gamepad input
-        // while motion aim and every Halo 3 gameplay transform stay blocked.
+        // Private ODST camera-only and Reach controller-only stages may expose
+        // ordinary gamepad input while motion aim and every title-runtime
+        // gameplay transform stay blocked.
         // Gate only decides whether to MERGE VR motion, not whether the pad
         // exists: hold the connection above and skip the merge when gated off.
         if (!Game_AllowsSharedControllerInput())

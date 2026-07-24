@@ -22,8 +22,8 @@
     },
     {
       "name": "release-reach-private",
-      "displayName": "Halo MCC VR private Reach evidence Release",
-      "description": "x64 Halo 3 + ODST build plus inert Reach evidence adapter",
+      "displayName": "Halo MCC VR private Reach controller-input Release",
+      "description": "x64 Halo 3 + ODST build plus Reach virtual-controller admission",
       "generator": "Visual Studio 17 2022",
       "architecture": "x64",
       "binaryDir": "${sourceDir}/out/build/release-reach-private",

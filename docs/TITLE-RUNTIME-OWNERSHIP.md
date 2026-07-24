@@ -1,4 +1,4 @@
-# Shared title-runtime ownership candidate
+# Shared title-runtime ownership and Reach controller-input candidate
 
 Status: **desk-tested, headset-untested, unaccepted**.
 
@@ -14,11 +14,16 @@ native CHUD, first-person weapon, capture, pause, fallback, and teardown paths.
 This candidate does not extract, reorder, or add work inside either title's
 two-eye render transaction.
 
-Its one intended behavior change is title selection when MCC keeps more than
+Its shared-runtime behavior change is title selection when MCC keeps more than
 one game DLL resident. Module presence now means only **available**. A title is
 the runtime owner only when its currently installed, non-teardown lifecycle
 generation publishes the one unique fresh camera heartbeat. Zero or multiple
-qualifying titles expose no owner and no capabilities.
+qualifying titles expose no owner and no runtime capabilities.
+
+The private Reach-ON preset adds one separately bounded behavior: when module
+resolution identifies explicit Reach, shared virtual-controller admission is
+enabled. This is a static input-admission policy, not Reach runtime ownership
+or a Reach runtime capability publication.
 
 ## Rejected first package and retained fix
 
@@ -35,10 +40,12 @@ changed; the controller admission call site incorrectly treated that as a
 reason to suppress title-independent frontend input. The retained fix restores
 the accepted 0.2.2 rule only for ordinary controller transport in `None` or
 multi-resident `Unknown` frontend/transition states. A unique owner may also
-publish `ControllerInput`. Explicit Reach, CE, H2, and H4 states remain stock,
-and stereo, aim, HUD, IK, room scale, runtime modes, and haptics receive no
-fallback capability. The fabricated XInput slot also remains connected across
-gated haptic transitions; stale haptic amplitude is still cleared.
+publish `ControllerInput`. CE, H2, and H4 states remain stock. Explicit Reach
+also remains stock in the Reach-OFF preset; the Reach-ON preset grants it only
+shared virtual-controller admission. Stereo, aim, movement transforms, HUD,
+IK, room scale, runtime modes, and haptics receive no Reach grant or fallback
+capability. The fabricated XInput slot also remains connected across gated
+haptic transitions; stale haptic amplitude is still cleared.
 
 The installed test files were restored from the verified official 0.2.2 ZIP.
 The source foundation was retained and corrected for a new uniquely hashed
@@ -73,6 +80,10 @@ replacement candidate.
   camera transaction. Stereo, aim, HUD, arm IK, room scale, and haptics are
   masked until armed. Ordinary controller input and runtime-mode reporting are
   separate capabilities.
+- Reach-ON controller admission requires an explicitly resolved Reach title.
+  A multi-resident `Unknown` frontend cannot claim the Reach-specific policy.
+  The title-independent frontend controller-continuity fallback remains
+  separate and does not establish Reach gameplay ownership.
 
 ## Publication sites and safety
 
@@ -87,23 +98,31 @@ replacement candidate.
   Incomplete cleanup remains installed with teardown requested and zero exposed
   capabilities.
 - Reach publishes no generation-tagged lifecycle, mode, heartbeat, owner, or
-  capability state.
+  runtime capability state. It remains `runtimeSupported=false` with runtime
+  capabilities `TitleCapability_None`.
   `TitleHookPlan::None` and `ReachAdapter_RuntimeHooksPermitted()==false` remain
-  unchanged in both presets.
+  unchanged in both presets. Reach-ON changes only explicit-title shared
+  virtual-controller admission; camera, rendering, aim and movement
+  transforms, HUD, arm IK, haptics, and lifecycle remain disabled.
 
 ## Desk validation and required headset regression
 
 The deterministic core matrix covers generation rollover, exact epoch and
 freshness boundaries, future/stale/foreign publications, zero/one/multiple
 owners, pending grace, teardown, mode invalidation, heartbeat clearing,
-capability masking, and Reach's zero capability mask. Both cumulative Release
-presets must build and pass CTest before packaging:
-
-- Reach OFF: Halo 3 + ODST, Reach stock.
-- Reach ON: Halo 3 + ODST plus the inert Reach evidence adapter.
+capability masking, Reach's zero runtime capability mask, and the separate
+explicit-Reach controller-admission policy. Routine Reach behavior candidates
+must build and pass CTest with the cumulative Reach-ON preset: Halo 3 + ODST
+plus Reach shared virtual-controller admission. Reach-OFF compile and regression
+remain a milestone/promotion gate instead of blocking each Reach experiment.
 
 Desk tests cannot accept this shared lifecycle change. The exact packaged DLL
-hash still requires, at minimum, an ODST headset result and a Halo 3 regression
-covering level entry/exit, pause, Save & Quit, fresh/stale camera transitions,
-native HUD and weapon stereo, controller input/aim, movement, and rumble. Until
-those results are recorded, 0.2.2 remains the only accepted build.
+hash still requires, at minimum, a Reach headset result and a Halo 3 regression.
+Reach testing must confirm ordinary virtual-controller buttons and sticks only,
+with stock camera/render presentation and no aim or movement transforms, HUD/IK
+changes, haptics, lifecycle, or runtime hook activity. Halo 3 regression must
+confirm controller continuity through gameplay, pause, Save & Quit, and the MCC
+menu while preserving the accepted stereo, aim, movement, HUD, weapon, and
+rumble behavior. ODST and Reach-OFF regression remain milestone/promotion gates
+instead of blocking this routine Reach experiment. Until the required exact-hash
+results are recorded, 0.2.2 remains the only accepted build.

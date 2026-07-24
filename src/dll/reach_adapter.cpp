@@ -21,7 +21,7 @@ namespace
 ReachAdapterStage ReachAdapter_GetStage()
 {
 #if HALOMCCVR_EXPERIMENTAL_REACH_BRINGUP
-    return ReachAdapterStage::EvidenceOnly;
+    return ReachAdapterStage::ControllerInputOnly;
 #else
     return ReachAdapterStage::Disabled;
 #endif
@@ -46,7 +46,8 @@ bool ReachAdapter_HookProofComplete(const ReachHookProof& proof)
 
 bool ReachAdapter_RuntimeHooksPermitted()
 {
-    // Candidate one is intentionally inert. Reaching EvidenceOnly changes build
-    // metadata and offline validation only; it cannot install a runtime hook.
+    // Controller transport is shared XInput policy, not a Reach engine hook.
+    // Camera, render, aim, movement, HUD, IK, haptics, and lifecycle hooks stay
+    // forbidden in this candidate.
     return false;
 }

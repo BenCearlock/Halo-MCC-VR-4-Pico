@@ -52,15 +52,16 @@ else()
 endif()
 
 # Reach remains stock in the normal cumulative Release preset. The private
-# option compiles only an evidence/identity adapter shell; candidate one has no
-# Reach hook installation, controller admission, or rendering behavior.
+# option grants only shared virtual-controller admission for explicit Reach.
+# It installs no Reach hook and enables no rendering, camera, aim, movement,
+# HUD, haptics, lifecycle, or runtime-capability behavior.
 option(HALOMCCVR_EXPERIMENTAL_REACH_BRINGUP
-    "Compile the inert private Halo: Reach evidence adapter" OFF)
+    "Compile private Halo: Reach controller-input admission" OFF)
 
 if(HALOMCCVR_EXPERIMENTAL_REACH_BRINGUP)
     set(HALOMCCVR_BUILD_REACH "ON")
     message(STATUS
-        "Halo MCC VR: private Reach evidence adapter enabled; runtime hooks remain disabled")
+        "Halo MCC VR: private Reach controller input enabled; runtime hooks remain disabled")
 else()
     set(HALOMCCVR_BUILD_REACH "OFF")
     message(STATUS "Halo MCC VR: Reach remains stock")

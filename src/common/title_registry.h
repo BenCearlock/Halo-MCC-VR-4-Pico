@@ -12,6 +12,8 @@ struct TitleDescriptor
     const char* displayName;
     bool runtimeSupported;
     uint32_t capabilities;
+    // Static transport admission; never published as a runtime capability.
+    uint32_t admissionCapabilities;
 };
 
 enum class TitleHookPlan : uint8_t
@@ -32,7 +34,7 @@ bool TitleRegistry_AllowsSharedGameplayFeatures(
 bool TitleRegistry_AllowsSharedControllerInput(
     GameTitle activeTitle, bool resolvedOwnerAllowsControllerInput,
     bool cameraOnlyOwned,
-    bool allowAmbiguousFrontend, bool allowCameraOnlyControllerInput);
+    bool allowAmbiguousFrontend, bool explicitTitleAllowsControllerInput);
 bool TitleRegistry_Halo3CameraOwnsAmbiguousState(
     uint64_t now, uint64_t lastCamera, uint64_t titleTransition);
 const char* RuntimeModeName(RuntimeMode mode);

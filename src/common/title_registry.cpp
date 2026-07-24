@@ -5,9 +5,14 @@
 #ifndef HALOMCCVR_EXPERIMENTAL_ODST_BRINGUP
 #define HALOMCCVR_EXPERIMENTAL_ODST_BRINGUP 0
 #endif
+#ifndef HALOMCCVR_EXPERIMENTAL_REACH_BRINGUP
+#define HALOMCCVR_EXPERIMENTAL_REACH_BRINGUP 0
+#endif
 
 static_assert(HALOMCCVR_EXPERIMENTAL_ODST_BRINGUP == 0 ||
               HALOMCCVR_EXPERIMENTAL_ODST_BRINGUP == 1);
+static_assert(HALOMCCVR_EXPERIMENTAL_REACH_BRINGUP == 0 ||
+              HALOMCCVR_EXPERIMENTAL_REACH_BRINGUP == 1);
 
 namespace
 {
@@ -20,14 +25,34 @@ namespace
         TitleCapability_RoomScale |
         TitleCapability_ControllerInput |
         TitleCapability_Haptics;
+    constexpr uint32_t kHalo3AdmissionCapabilities =
+        TitleCapability_ControllerInput;
+#if HALOMCCVR_EXPERIMENTAL_ODST_BRINGUP
+    constexpr uint32_t kOdstAdmissionCapabilities =
+        TitleCapability_ControllerInput;
+#else
+    constexpr uint32_t kOdstAdmissionCapabilities = TitleCapability_None;
+#endif
+#if HALOMCCVR_EXPERIMENTAL_REACH_BRINGUP
+    constexpr uint32_t kReachAdmissionCapabilities =
+        TitleCapability_ControllerInput;
+#else
+    constexpr uint32_t kReachAdmissionCapabilities = TitleCapability_None;
+#endif
 
     constexpr TitleDescriptor kTitles[] = {
-        { GameTitle::Halo3, L"halo3.dll", "Halo 3", true, kHalo3Capabilities },
-        { GameTitle::Halo3ODST, L"halo3odst.dll", "Halo 3: ODST", false, TitleCapability_None },
-        { GameTitle::HaloReach, L"haloreach.dll", "Halo: Reach", false, TitleCapability_None },
-        { GameTitle::Halo4, L"halo4.dll", "Halo 4", false, TitleCapability_None },
-        { GameTitle::HaloCE, L"halo1.dll", "Halo: CE Anniversary", false, TitleCapability_None },
-        { GameTitle::Halo2, L"halo2.dll", "Halo 2 Anniversary", false, TitleCapability_None },
+        { GameTitle::Halo3, L"halo3.dll", "Halo 3", true,
+          kHalo3Capabilities, kHalo3AdmissionCapabilities },
+        { GameTitle::Halo3ODST, L"halo3odst.dll", "Halo 3: ODST", false,
+          TitleCapability_None, kOdstAdmissionCapabilities },
+        { GameTitle::HaloReach, L"haloreach.dll", "Halo: Reach", false,
+          TitleCapability_None, kReachAdmissionCapabilities },
+        { GameTitle::Halo4, L"halo4.dll", "Halo 4", false,
+          TitleCapability_None, TitleCapability_None },
+        { GameTitle::HaloCE, L"halo1.dll", "Halo: CE Anniversary", false,
+          TitleCapability_None, TitleCapability_None },
+        { GameTitle::Halo2, L"halo2.dll", "Halo 2 Anniversary", false,
+          TitleCapability_None, TitleCapability_None },
     };
 
     bool EqualsModuleName(std::wstring_view left, std::wstring_view right)
@@ -106,17 +131,18 @@ bool TitleRegistry_AllowsSharedGameplayFeatures(
 bool TitleRegistry_AllowsSharedControllerInput(
     GameTitle activeTitle, bool resolvedOwnerAllowsControllerInput,
     bool cameraOnlyOwned,
-    bool allowAmbiguousFrontend, bool allowCameraOnlyControllerInput)
+    bool allowAmbiguousFrontend, bool explicitTitleAllowsControllerInput)
 {
     if (activeTitle == GameTitle::Unknown)
         return resolvedOwnerAllowsControllerInput ||
             (allowAmbiguousFrontend && !cameraOnlyOwned);
     if (activeTitle == GameTitle::Halo3ODST)
-        return allowCameraOnlyControllerInput;
+        return explicitTitleAllowsControllerInput;
     if (cameraOnlyOwned)
         return false;
-    return activeTitle == GameTitle::None ||
-        activeTitle == GameTitle::Halo3;
+    if (activeTitle == GameTitle::None)
+        return true;
+    return explicitTitleAllowsControllerInput;
 }
 
 bool TitleRegistry_Halo3CameraOwnsAmbiguousState(

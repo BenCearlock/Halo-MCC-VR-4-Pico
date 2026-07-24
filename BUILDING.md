@@ -29,21 +29,20 @@ The preset always builds Release x64 with ODST enabled and Reach disabled.
 modes, not a product target. The standalone Reach runtime observer is also
 excluded and must be selected by name; it is never linked into `halo3xr.dll`.
 
-During private Reach bring-up, validate both isolated build trees:
+For a routine private Reach behavior candidate, validate the cumulative
+Reach-ON tree:
 
 ```powershell
-cmake --preset release
-cmake --build --preset release
-ctest --preset release
-
 cmake --preset release-reach-private
 cmake --build --preset release-reach-private
 ctest --preset release-reach-private
 ```
 
-The private preset retains Halo 3 and ODST and compiles the Reach evidence
-adapter. Candidate one remains structurally inert: it installs no Reach hooks
-and leaves Reach rendering, input, movement, aim, and HUD stock.
+The private preset retains Halo 3 and ODST and grants explicit Reach only shared
+virtual-controller admission. It installs no Reach hooks and leaves Reach
+rendering, camera, aim and movement transforms, HUD, IK, haptics, lifecycle,
+and runtime capabilities disabled. Reach-OFF validation remains a separate
+milestone/promotion regression gate.
 
 ## Verify local Reach evidence
 
@@ -144,8 +143,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File `
   .\tools\package-candidate.ps1 -ReachPrivate
 ```
 
-That command rebuilds and tests both the Reach-OFF and Reach-ON Release trees
-before staging only the private tree.
+That command rebuilds and tests the Reach-ON Release tree before staging it.
+Reach-OFF is reserved for the milestone/promotion regression gate rather than
+blocking each routine Reach behavior candidate.
 
 The command refuses a dirty worktree, reconfigures, rebuilds, reruns tests, and
 creates a new directory such as:
@@ -156,9 +156,10 @@ out/candidates/1a2b3c4-reach-private-20260723-120000000Z/
 
 It contains only the DLL, launcher, license, generic manual, and a
 `CANDIDATE-MANIFEST.json` with the full commit, base release 0.2.2, ODST and
-Reach build states, explicit Reach-hook state, exact file sizes, and SHA-256
-hashes. It never copies to MCC, never reuses a candidate directory, and never
-labels rebuilt bytes as release 0.2.2.
+Reach build states, explicit `reach_controller_input_enabled` and
+`reach_runtime_hooks_enabled` states, exact file sizes, and SHA-256 hashes. It
+never copies to MCC, never reuses a candidate directory, and never labels
+rebuilt bytes as release 0.2.2.
 
 Deployment is manual and requires explicit user approval for that exact
 candidate. A rebuild uses the accepted source/configuration but remains

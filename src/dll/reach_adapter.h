@@ -5,7 +5,7 @@
 enum class ReachAdapterStage : uint8_t
 {
     Disabled = 0,
-    EvidenceOnly,
+    ControllerInputOnly,
 };
 
 struct ReachEvidenceIdentity
