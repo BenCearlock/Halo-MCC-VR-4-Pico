@@ -160,10 +160,42 @@ The exact retail `apply_distortions` constant builder divides
 maximum by twice the scale at `0x002875AD`; HREK independently performs the same
 operations at `0x0086BBA9` and `0x0086BBF9`. Source `facf6b0` wrote both
 authored controls to zero, so both ratios became `0/0` NaNs inside the
-screen-space distortion pass. The next forward candidate therefore preserves
-and reasserts the positive authored scale and zeros only the maximum. It does
-not change camera history, culling, stereo, projection, capture, depth, or
-controller paths.
+screen-space distortion pass. Source `03f0bff` therefore preserved and
+reasserted the positive authored scale and zeroed only the maximum. Its exact
+headset result below proved that finite policy was active but also proved the fog
+artifact was not native motion blur.
+
+### Unaccepted Reach finite-blur-controls / opposite-head fog result - 2026-07-24
+
+This result is evidence only and does not advance the accepted pointer above.
+
+| Identity | Value |
+| --- | --- |
+| Tested runtime source | `03f0bffbec5a4bdbe0b0784b47aeafc581505f1b` |
+| Candidate package | `out/candidates/03f0bff-reach-camera-20260724-124956918Z` |
+| `halo3xr.dll` SHA-256 | `456584DF50DF7B7941008BCF23EBC488F24938EE3D2C5B2E8F6A6FEEB182F6BB` |
+| `halo3xr_launcher.exe` SHA-256 | `DA7525BFC4036A6D8F533F92A589C6F495A95CC956F2F7745018CFAC1694870C` |
+| Preserved headset evidence | `out/test-runs/03f0bff-reach-alpha-persists-live-20260724-125506Z` |
+| Headset result | Stereo, projection, 6DOF, head-owned culling, and stick/head coherence remained good; a translucent fog layer persisted and moved opposite headset motion instead of remaining world-stationary |
+
+The installed hashes matched the package and the first log line reported the
+exact source above. A live read of the pinned retail controls proved
+`motion_blur_max=0.0` and the finite authored `motion_blur_scale=0.35`, so this
+was a valid max-only blur-off result with no zero-over-zero distortion constants.
+Reach remained focused with one opaque OpenXR projection layer, two current eye
+caches, and zero frame-order failures. The artifact therefore is neither native
+motion blur nor a separate OpenXR overlay; it is baked into Reach's rendered
+screen-space fog work.
+
+Pinned retail and HREK code then isolated the matching screen-aligned patchy-fog
+pass. Retail `player_view_render` tests bit `0x08` at global RVA `0x00CA0240`
+at `0x0026CC59`; when clear it calls the patchy helper at
+`0x0026CC65 -> 0x0026EFEC`. HREK independently names the corresponding
+resources `_surface_patchy_fog_buffer0/1` and `Patchy Fog Global Parameters`.
+The current forward candidate sets only that proven skip bit immediately around
+each admitted VR eye render and restores only that bit in `__finally`, preserving
+atmospheric fog, distortion, camera/culling, eye order, capture, and all stock or
+fallback renders. It remains headset-pending.
 
 ### Reach stock runtime observation - 2026-07-23
 

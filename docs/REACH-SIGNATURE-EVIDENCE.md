@@ -1,7 +1,8 @@
 # Halo: Reach signature evidence
 
-Status: **armed forward candidate, headset-pending**. The proven signatures below
-are wired into a permanent, fail-open Reach per-eye camera core
+Status: **camera/culling transaction headset-passed; screen-aligned patchy-fog
+fix headset-pending**. The proven signatures below are wired into a permanent,
+fail-open Reach per-eye camera core
 (`InstallReachCameraCore` in `src/dll/game.cpp`; see `BUILDING.md`). It installs
 the inner `player_view_render` and outer `main_render_view` hooks only after the
 loaded-image preflight and display proof pass, arms after the one-second
@@ -57,6 +58,18 @@ after the headset result proved that this was not a valid blur-off experiment:
 the Reach distortion pass divides by `motion_blur_scale`, so setting scale and
 maximum to zero generated invalid shader constants.
 
+Source `03f0bffb` retained/reasserted the positive authored scale and zeroed only
+the maximum. Its exact DLL
+`456584DF50DF7B7941008BCF23EBC488F24938EE3D2C5B2E8F6A6FEEB182F6BB`
+ran with live values `motion_blur_max=0.0` and `motion_blur_scale=0.35`, one
+opaque OpenXR projection layer, current eye caches, and zero frame-order
+failures. The user confirmed that the camera/culling/stereo result remained
+good, but the translucent fog layer still moved opposite the headset instead of
+remaining world-stationary. The run is preserved under
+`out/test-runs/03f0bff-reach-alpha-persists-live-20260724-125506Z`. This rules
+out native motion blur, invalid distortion constants, and a separate OpenXR
+overlay as the remaining cause.
+
 The preceding culling defect was pinned to an exact pre-inner stage. Retail
 `main_render_view` performs its visibility work before calling
 `player_view_render`; its cluster lookup at `0x0C3320 -> 0x273458` explicitly
@@ -67,7 +80,7 @@ secondary-camera inputs. Installing HMD eyes only in the later inner hook can
 therefore draw correct stereo from a visibility set collected in another
 direction.
 
-The forward candidate now:
+The retained headset-passing camera/culling transaction:
 
 - reads one lock-free, exact-prepared-serial head/pad/two-eye snapshot at the
   exact normal outer boundary;
@@ -122,8 +135,9 @@ The exact retail distortion-constant builder begins at `0x287398`. It loads
 `0x86BA8F..0x86BC2F` performs the same divisions at `0x86BBA9` and `0x86BBF9`.
 HREK profile strings identify the owning work as `apply_distortions` and
 `distortion_apply_and/or_motion_blur`. Thus `facf6b07`'s zero/zero policy
-provably uploaded NaNs into the screen-space distortion path, matching the
-reported alpha-like, head-locked contribution.
+provably uploaded NaNs into the screen-space distortion path and made that
+experiment invalid. Source `03f0bffb` proved the same visible fog artifact with
+finite `0.0/0.35` controls, so the invalid constants did not cause it.
 
 Both exact binaries independently expose unique type-6 float debug-table
 entries:
@@ -146,6 +160,38 @@ proves callback plus relay/wrapper RIP quiescence, then restores both authored
 values; a failed restore retains the module/state and retries. No camera,
 culling, history-matrix, eye-order, FOV, render, capture, depth, or controller
 policy changes in this candidate.
+
+The max-only suppression above is now headset-tested and active, but it did not
+remove the fog contribution. Native motion blur is therefore excluded without
+changing the passing camera, culling, history, projection, eye order, or capture
+paths.
+
+### Screen-aligned patchy-fog isolation
+
+Retail `player_view_render` contains a separate patchy-fog gate after its
+atmosphere helper. At `0x0026CC59` it tests bit `0x08` of the byte at
+`0x00CA0240`; `jne 0x0026CC6A` skips the call at
+`0x0026CC65 -> 0x0026EFEC`. The patchy helper queues callback
+`0x0026F16C`, whose renderer reaches `0x0029C510` and consumes the current
+player-view camera state. The exact 2314-byte `player_view_render` body hash
+already pins the test/jump bytes. Production additionally proves the helper
+`rel32` edge, the mapped flag byte, and the live RIP-relative target before
+arming.
+
+HREK independently exposes the homologous block at `0x0083505F..0x0083516B`,
+callback `0x00836B40`, and renderer `0x00894460`. Its strings identify
+`Patchy Fog Global Parameters` and `_surface_patchy_fog_buffer0/1`, matching the
+headset report of a translucent screen-aligned texture moving opposite the
+head. This is distinct from the atmosphere-fog helper, which remains enabled.
+
+The forward correction sets only skip bit `0x08` immediately around each exact
+admitted VR eye's original `player_view_render` call. A per-eye `__finally`
+re-reads the byte and restores only bit `0x08`, preserving any unrelated engine
+flag changes. Setup or restoration failure rejects the stereo transaction and
+falls open to one unsuppressed stock render. Normal stock, nested, screenshot,
+and fallback calls never enter the suppression scope. Camera/culling, motion
+blur constants, matrices/history, eye order, projection, CHUD, and capture order
+are unchanged. This narrow forward candidate remains headset-pending.
 
 This document records Reach-specific facts for the cumulative Halo 3 + ODST +
 Reach line. Halo 3 and ODST offsets, layouts, bones, markers, and tag meanings
@@ -825,15 +871,16 @@ rollback, and cold-validated group-1 copy behind identity, scope, finite/range,
 specialization-zero, and current-frame gates. Those mechanics are not accepted
 merely because they build or launch.
 
-The immediate gate is an exact-DLL headset result proving that geometry
-visibility follows 90/180-degree head yaw, high/low pitch, and doorway lean
-instead of the gun direction while stereo depth, projection coverage,
-positional 6DOF, and visual snap/smooth turning remain coherent. Fast edge
-sweeps must not restore warp or black borders. Halo 3 and ODST regressions are
-then required because shared input/submission code remains cumulative. Broader
+The camera/culling gate passed in source `86864bd` and remained passing in
+`03f0bff`. The immediate gate is now an exact-DLL headset result proving the
+screen-aligned fog layer no longer moves opposite the head or appears eye
+swapped, while atmospheric depth fog, stereo depth, projection coverage,
+positional 6DOF, head-owned visibility, and visual snap/smooth turning remain
+coherent. Halo 3 and ODST regressions are then required because shared
+input/submission code remains cumulative. Broader
 pause/cinematic/split-screen, unload/reload, device-loss, callback quiescence,
 and detour-teardown coverage also remains open. First-person weapon/body aim,
-HUD anchor, skeleton and weapon-marker facts, brightness, and motion blur must
+HUD anchor, skeleton and weapon-marker facts, and brightness must
 be independently derived before enabling those player-visible behaviors. Xbox
 360 map symbols may supply names or call-graph hints only; every fact must be
 re-proven against HREK and the pinned MCC x64 module.

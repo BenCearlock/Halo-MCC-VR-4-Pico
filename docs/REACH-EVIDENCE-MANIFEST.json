@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "status": "PRELIMINARY_HELPER_EVIDENCE_PLUS_ARMED_UNACCEPTED_TRANSACTION",
+  "status": "CAMERA_CULLING_HEADSET_PASS_PATCHY_FOG_FORWARD_CANDIDATE_UNACCEPTED",
   "hook_eligible": false,
   "hook_eligibility_scope": "PRELIMINARY_HELPER_CANDIDATES_ONLY; permanent main_render_view/player_view_render transaction is described separately below",
   "accepted_baseline": {
@@ -37,7 +37,7 @@
     "consumed_layout_fields"
   ],
   "player_view_transaction": {
-    "status": "ARMED_FORWARD_CAMERA_TRANSACTION_HEADSET_PENDING",
+    "status": "CAMERA_CULLING_HEADSET_PASS_OPPOSITE_HEAD_SCREEN_SPACE_FOG_FAIL",
     "retail": {
       "main_render_game": {
         "function_rva": "0x000C33F8",
@@ -176,10 +176,19 @@
       },
       "native_motion_blur_parity": {
         "headset_evidence_source": "86864bd088867a8e67950eb7d013d1c29d9f2d45",
-        "headset_result": "CAMERA_CULLING_STEREO_PASS_THEN_FACF_BOTH_ZERO_DISTORTION_NAN_ALPHA_FAIL",
+        "headset_result": "FINITE_MAX_ONLY_ZERO_CONFIRMED_ALPHA_FOG_PERSISTS_OPPOSITE_HEAD_MOTION",
         "failed_suppression_source": "facf6b0713ace0432e709916184d938fc553f4b1",
         "failed_suppression_dll_sha256": "38BEEF66535A01E0AAC76A6FCFA52117183EEE305F2512663654DB29D6C492A0",
         "failed_suppression_evidence": "out/test-runs/facf6b0-reach-alpha-fog-fail-20260724-072511Z",
+        "finite_suppression_source": "03f0bffbec5a4bdbe0b0784b47aeafc581505f1b",
+        "finite_suppression_dll_sha256": "456584DF50DF7B7941008BCF23EBC488F24938EE3D2C5B2E8F6A6FEEB182F6BB",
+        "finite_suppression_evidence": "out/test-runs/03f0bff-reach-alpha-persists-live-20260724-125506Z",
+        "finite_live_controls": {
+          "motion_blur_max": 0.0,
+          "motion_blur_scale": 0.35
+        },
+        "finite_suppression_result": "FINITE_MAX_ONLY_ZERO_CONFIRMED_ALPHA_FOG_PERSISTS_OPPOSITE_HEAD_MOTION",
+        "causal_disposition": "NATIVE_MOTION_BLUR_RULED_OUT_SCREEN_ALIGNED_PATCHY_FOG_ISOLATED",
         "retail_water_renderer_setup_argument_rva_range": "0x0026C956..0x0026C967",
         "retail_water_renderer_setup_target_rva": "0x0025795C",
         "hrek_water_renderer_setup_target_rva": "0x00812670",
@@ -220,6 +229,32 @@
         "config_enabled_policy": "RESTORE_LATEST_AUTHORED_VALUES",
         "teardown": "DISABLE_BOTH_REACH_HOOKS_PROVE_CALLBACK_AND_RELAY_WRAPPER_RIP_QUIESCENCE_THEN_RESTORE_OR_RETAIN_AND_RETRY",
         "camera_culling_history_eye_order_projection_capture_depth_controller_changed": false
+      },
+      "screen_aligned_patchy_fog": {
+        "headset_observation": "TRANSLUCENT_FOG_LAYER_MOVES_OPPOSITE_HEAD_INSTEAD_OF_REMAINING_WORLD_STATIONARY",
+        "retail_gate_test_rva": "0x0026CC59",
+        "retail_skip_jump_rva": "0x0026CC60",
+        "retail_flags_rva": "0x00CA0240",
+        "retail_skip_mask": "0x08",
+        "retail_patchy_call_rva": "0x0026CC65",
+        "retail_patchy_target_rva": "0x0026EFEC",
+        "retail_callback_rva": "0x0026F16C",
+        "retail_renderer_rva": "0x0029C510",
+        "retail_atmosphere_call_rva": "0x0026CC54",
+        "retail_atmosphere_target_rva": "0x0026D5B4",
+        "hrek_block_rva_range": "0x0083505F..0x0083516B",
+        "hrek_callback_rva": "0x00836B40",
+        "hrek_renderer_rva": "0x00894460",
+        "hrek_semantics": [
+          "Patchy Fog Global Parameters",
+          "_surface_patchy_fog_buffer0",
+          "_surface_patchy_fog_buffer1"
+        ],
+        "identity_proof": "EXACT_PLAYER_VIEW_BODY_HASH_PLUS_SEVEN_REL32_EDGES_MAPPED_FLAG_AND_LIVE_RIP_TARGET_CHECK",
+        "production_policy": "SET_ONLY_BIT_0X08_AROUND_EACH_ADMITTED_VR_EYE_ORIGINAL_CALL_AND_RESTORE_ONLY_THAT_BIT_IN_FINALLY",
+        "stock_nested_screenshot_fallback_affected": false,
+        "atmosphere_fog_changed": false,
+        "headset_result": "PENDING"
       },
       "pre_inner_visibility": {
         "ordering": "AFTER_NORMAL_SETUP_BEFORE_PLAYER_VIEW_RENDER",
@@ -373,7 +408,7 @@
         "exact_normal_screenshot_unknown_outer_return_classification",
         "slot0_workspace_player_view_and_pre_push_depth_validation",
         "opaque_epoch_bound_preflight_freshness_prepared_frame_and_direct_copy_tokens",
-        "worker_only_exact_backing_file_loaded_pe_three_signature_two_body_hash_six_edge_and_fixed_range_preflight",
+        "worker_only_exact_backing_file_loaded_pe_three_signature_two_body_hash_seven_edge_and_fixed_range_preflight",
         "cold_present_buffer0_specialization0_record0_structural_device_context_and_exact_copy_shape_validation",
         "monotonic_display_resource_revision_nonce_and_live_continuity_gate",
         "resize_view_drift_title_exit_and_module_generation_invalidation",
@@ -389,6 +424,7 @@
         "pre_visibility_head_center_binocular_angular_union_camera_commit",
         "coherent_head_center_player_view_fallback",
         "reach_native_motion_blur_exact_slot_resolution_positive_scale_max_only_zero_and_quiescent_restore",
+        "reach_patchy_fog_exact_gate_call_flag_and_per_eye_bit_only_finally_restore",
         "two_eye_engine_camera_rebuild_copyresource_and_projection_fov_publication",
         "callback_wrapper_and_minhook_relay_rip_quiescent_teardown"
       ],
@@ -396,12 +432,12 @@
         "reach_controller_projectile_reticle_and_weapon_body_aim",
         "reach_native_hud_and_arm_ik",
         "exact_finite_distance_cull_coverage_for_translated_eye_origins",
-        "current_forward_finite_zero_blur_distortion_constants_alpha_fog_headset_result",
+        "current_forward_screen_aligned_patchy_fog_suppression_headset_result",
         "halo3_and_odst_regression_for_this_exact_shared_binary"
       ],
       "loaded_image_preflight_compiled": true,
       "display_copy_readiness_compiled": true,
-      "runtime_result": "86864bd exact headset test passed stereo, projection, 6DOF, stick/head coherence, and head-owned culling at approximately 94-120 FPS with zero frame-order failures; facf6b0 then zeroed both native blur controls and the user still saw an alpha-like head-following texture, but exact retail/HREK analysis proved that policy generated 0/0 NaNs inside apply_distortions, so positive-scale/max-only-zero suppression remains headset-untested",
+      "runtime_result": "86864bd passed stereo, projection, 6DOF, stick/head coherence, and head-owned culling at approximately 94-120 FPS with zero frame-order failures; 03f0bff then proved live finite blur controls max=0.0 scale=0.35 and one opaque OpenXR projection layer while the translucent fog still moved opposite head motion, ruling out native motion blur and an OpenXR overlay; retail/HREK isolate the screen-aligned patchy-fog pass and its narrow forward suppression remains headset-pending",
       "title_hook_plan": "REACH_CAMERA_CORE",
       "runtime_capabilities": [
         "STEREO",
@@ -419,7 +455,8 @@
     },
     "remaining_runtime_proof": [
       "close_peripheral_geometry_result_under_head_center_visibility_policy",
-      "exact_forward_positive_scale_max_only_zero_has_no_alpha_fog_eye_swap_or_head_locked_trail",
+      "exact_forward_patchy_fog_suppression_has_no_opposite_head_motion_or_eye_swap",
+      "atmospheric_depth_fog_remains_authored_and_world_stationary",
       "pause_cinematic_split_screen_device_loss_and_title_transition_observation",
       "exact_dll_headset_validation_then_halo3_and_odst_regression"
     ],

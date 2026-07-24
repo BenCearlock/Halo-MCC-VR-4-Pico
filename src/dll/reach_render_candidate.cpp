@@ -94,7 +94,7 @@ void ReachRenderCandidate_ColdPoll(
     if (complete)
     {
         LOG("Reach render cold preflight PASS: exact retail image, three "
-            "unique executable signatures, two body hashes, six caller "
+            "unique executable signatures, two body hashes, seven caller "
             "edges, and fixed ranges; runtime hooks remain disabled");
     }
     else

@@ -77,6 +77,32 @@ inline constexpr uintptr_t kReachMotionBlurScaleValueRva = 0x00B44604;
 inline constexpr uintptr_t kReachMotionBlurMaxOverScaleDivideRva = 0x00287561;
 inline constexpr uintptr_t kReachMotionBlurScaledMaxDivideRva = 0x002875AD;
 inline constexpr float kReachMotionBlurMinimumUsableScale = 1.0e-6f;
+// Reach's screen-aligned patchy-fog renderer is independently gated inside
+// player_view_render. Retail tests bit 0x08 and skips the helper when it is set.
+// HREK names the matching resources `_surface_patchy_fog_buffer0/1` and the
+// matching parameter block `Patchy Fog Global Parameters`. The exact retail
+// player_view body hash pins the test/jump bytes; the preflight additionally
+// proves the helper call edge and mapped flag byte before publication.
+inline constexpr uintptr_t kReachPatchyFogGateTestRva = 0x0026CC59;
+inline constexpr uintptr_t kReachPatchyFogSkipJumpRva = 0x0026CC60;
+inline constexpr uintptr_t kReachPatchyFogCallRva = 0x0026CC65;
+inline constexpr uintptr_t kReachPatchyFogTargetRva = 0x0026EFEC;
+inline constexpr uintptr_t kReachPatchyFogFlagsRva = 0x00CA0240;
+inline constexpr uint8_t kReachPatchyFogSkipMask = 0x08;
+
+inline constexpr uint8_t ReachPatchyFogSuppressedFlags(
+    uint8_t flags) noexcept
+{
+    return static_cast<uint8_t>(flags | kReachPatchyFogSkipMask);
+}
+
+inline constexpr uint8_t ReachPatchyFogRestoredFlags(
+    uint8_t current, uint8_t original) noexcept
+{
+    return static_cast<uint8_t>(
+        (current & static_cast<uint8_t>(~kReachPatchyFogSkipMask)) |
+        (original & kReachPatchyFogSkipMask));
+}
 inline constexpr uintptr_t kReachPlayerViewCameraStateOffset = 0x03B0;
 inline constexpr uintptr_t kReachPlayerViewCurrentMatricesOffset = 0x0490;
 inline constexpr uintptr_t kReachPlayerViewPreviousMatricesOffset = 0x0760;

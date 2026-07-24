@@ -270,6 +270,40 @@ int main()
                   std::numeric_limits<float>::quiet_NaN(), 0.08f),
             "Reach blur suppression pins the exact slots/divisions and keeps a positive scale with zero max");
 
+        bool patchyFogPolicyExact = true;
+        for (unsigned original = 0; original <= 0xFFu; ++original)
+        {
+            const uint8_t originalByte = static_cast<uint8_t>(original);
+            const uint8_t suppressed =
+                ReachPatchyFogSuppressedFlags(originalByte);
+            patchyFogPolicyExact = patchyFogPolicyExact &&
+                (suppressed & kReachPatchyFogSkipMask) != 0 &&
+                (suppressed & static_cast<uint8_t>(~kReachPatchyFogSkipMask)) ==
+                    (originalByte &
+                     static_cast<uint8_t>(~kReachPatchyFogSkipMask));
+            for (unsigned current = 0; current <= 0xFFu; ++current)
+            {
+                const uint8_t currentByte = static_cast<uint8_t>(current);
+                const uint8_t restored = ReachPatchyFogRestoredFlags(
+                    currentByte, originalByte);
+                patchyFogPolicyExact = patchyFogPolicyExact &&
+                    (restored & kReachPatchyFogSkipMask) ==
+                        (originalByte & kReachPatchyFogSkipMask) &&
+                    (restored &
+                     static_cast<uint8_t>(~kReachPatchyFogSkipMask)) ==
+                        (currentByte &
+                         static_cast<uint8_t>(~kReachPatchyFogSkipMask));
+            }
+        }
+        Check(patchyFogPolicyExact &&
+              kReachPatchyFogGateTestRva == 0x0026CC59 &&
+              kReachPatchyFogSkipJumpRva == 0x0026CC60 &&
+              kReachPatchyFogCallRva == 0x0026CC65 &&
+              kReachPatchyFogTargetRva == 0x0026EFEC &&
+              kReachPatchyFogFlagsRva == 0x00CA0240 &&
+              kReachPatchyFogSkipMask == 0x08,
+            "Reach VR patchy-fog policy sets and restores only the exact proven skip bit");
+
         std::array<uint8_t, kReachMainRenderViewAob.size()> exactMask{};
         exactMask.fill(0xFF);
         std::array<uint8_t, kReachMainRenderViewAob.size() * 2 + 1>

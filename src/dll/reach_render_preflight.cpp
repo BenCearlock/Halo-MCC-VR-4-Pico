@@ -40,6 +40,7 @@ namespace
         {kReachPlayerViewRenderCallerRva, kReachPlayerViewRenderRva},
         {kReachOuterMainRenderCallRva, kReachOuterMainRenderTargetRva},
         {kReachOuterPresentCallRva, kReachOuterPresentTargetRva},
+        {kReachPatchyFogCallRva, kReachPatchyFogTargetRva},
     };
 
     struct FixedRange
@@ -61,6 +62,7 @@ namespace
         {kReachDisplayGroupRva,
          kReachDisplaySurfaceArrayOffset + sizeof(uintptr_t)},
         {kReachDisplaySelectedRtvRva, sizeof(uintptr_t)},
+        {kReachPatchyFogFlagsRva, sizeof(uint8_t)},
     };
 
     bool IsReadableProtection(DWORD protection) noexcept

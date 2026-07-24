@@ -9428,6 +9428,60 @@ namespace
                 kReachVisibilityBuildTargetRva);
     }
 
+    // Decode the exact internal patchy-fog skip gate from the already
+    // hash-pinned player_view_render body. This cold install-time check binds
+    // the writable byte to the retail RIP-relative test and the proven helper
+    // call edge. A changed opcode, branch, target, or mapping leaves Reach
+    // completely stock.
+    bool ReachVerifyPatchyFogGate(
+        uintptr_t base, size_t size, uint8_t*& flags)
+    {
+        flags = nullptr;
+        constexpr size_t kGateBytes = 17;
+        const auto fits = [size](uintptr_t rva, size_t bytes)
+        {
+            return rva < size && bytes <= size - rva;
+        };
+        if (!fits(kReachPatchyFogGateTestRva, kGateBytes) ||
+            !fits(kReachPatchyFogFlagsRva, sizeof(uint8_t)) ||
+            !fits(kReachPatchyFogCallRva, 5))
+        {
+            return false;
+        }
+
+        const uint8_t* gate = reinterpret_cast<const uint8_t*>(
+            base + kReachPatchyFogGateTestRva);
+        constexpr uint8_t kTail[] = {
+            kReachPatchyFogSkipMask, 0x75, 0x08, 0x48, 0x8B, 0xCE, 0xE8};
+        if (gate[0] != 0xF6 || gate[1] != 0x05 ||
+            memcmp(gate + 6, kTail, sizeof(kTail)) != 0 ||
+            kReachPatchyFogSkipJumpRva != kReachPatchyFogGateTestRva + 7 ||
+            kReachPatchyFogCallRva != kReachPatchyFogGateTestRva + 12)
+        {
+            return false;
+        }
+
+        int32_t displacement = 0;
+        memcpy(&displacement, gate + 2, sizeof(displacement));
+        const uintptr_t next = base + kReachPatchyFogGateTestRva + 7;
+        const uintptr_t target = static_cast<uintptr_t>(
+            static_cast<intptr_t>(next) + displacement);
+        if (target != base + kReachPatchyFogFlagsRva ||
+            !ReachVerifyRel32Call(
+                base, kReachPatchyFogCallRva,
+                kReachPatchyFogTargetRva))
+        {
+            return false;
+        }
+
+        auto* resolved = reinterpret_cast<uint8_t*>(target);
+        uint8_t current = 0;
+        if (!SafeReadByte(resolved, &current))
+            return false;
+        flags = resolved;
+        return true;
+    }
+
     constexpr size_t kReachCompactCameraBytes = 0x90;
 
     struct ReachEyeRenderInput
@@ -9478,6 +9532,7 @@ namespace
         MotionBlurVar motionBlurVars[2]{};
         bool motionBlurResolved = false;
         bool motionBlurSuppressed = false;
+        uint8_t* patchyFogFlags = nullptr;
     } g_reachCamera;
     static_assert(std::atomic<int>::is_always_lock_free);
 
@@ -9553,6 +9608,46 @@ namespace
             return;
         if (!SafeWriteFloat(maximum.slot, 0.0f))
             return;
+    }
+
+    // Reach draws patchy fog as screen-aligned translucent noise sheets. In
+    // sequential stereo those sheets move opposite the tracked head even while
+    // world fog and geometry are correct. Suppress only that helper for one
+    // admitted eye render, then restore only its bit so any unrelated stock
+    // flag updates survive. The per-eye __finally executes even if the stock
+    // renderer faults; normal stock, nested, screenshot, and fallback renders
+    // never enter this scope.
+    bool ReachCallPlayerViewWithoutPatchyFog(uintptr_t playerView)
+    {
+        uint8_t original = 0;
+        bool suppressionWritten = false;
+        bool callReturned = false;
+        bool restoreSucceeded = true;
+        __try
+        {
+            uint8_t* const flags = g_reachCamera.patchyFogFlags;
+            if (flags && SafeReadByte(flags, &original) &&
+                SafeWriteByte(
+                    flags, ReachPatchyFogSuppressedFlags(original)))
+            {
+                suppressionWritten = true;
+                g_reachOrigPlayerViewRender(playerView);
+                callReturned = true;
+            }
+        }
+        __finally
+        {
+            if (suppressionWritten)
+            {
+                uint8_t current = 0;
+                uint8_t* const flags = g_reachCamera.patchyFogFlags;
+                restoreSucceeded = flags && SafeReadByte(flags, &current) &&
+                    SafeWriteByte(
+                        flags,
+                        ReachPatchyFogRestoredFlags(current, original));
+            }
+        }
+        return callReturned && restoreSucceeded;
     }
 
     // kReachSecondaryCompactOffset and the derived/render-bounds sub-block
@@ -10021,7 +10116,11 @@ namespace
                 // state updater cleared or moved the owner the inner render
                 // dereferences.
                 *reinterpret_cast<uintptr_t*>(reachOwnerGlobal) = entryOwner;
-                g_reachOrigPlayerViewRender(playerView);
+                if (!ReachCallPlayerViewWithoutPatchyFog(playerView))
+                {
+                    transactionValid = false;
+                    break;
+                }
                 if (!VR_ReachCopyEye(access, policy.eye))
                 {
                     transactionValid = false;
@@ -10843,6 +10942,7 @@ namespace
         g_reachCamera.motionBlurVars[1] = {};
         g_reachCamera.motionBlurResolved = false;
         g_reachCamera.motionBlurSuppressed = false;
+        g_reachCamera.patchyFogFlags = nullptr;
         g_reachOrigPlayerViewRender = nullptr;
         g_reachOrigMainRenderView = nullptr;
         g_reachHelpers = {};
@@ -10874,6 +10974,7 @@ namespace
         // Resolve the four stock camera-rebuild helpers. The preflight already
         // pinned the exact module SHA-256, so base+RVA is exact; additionally
         // cross-check the two setup call sites so a mismatched image fails open.
+        uint8_t* reachPatchyFogFlags = nullptr;
         if (kReachFrustumHelperRva >= size ||
             kReachProjectionBuilderRva >= size ||
             kReachCameraStateUpdaterRva >= size ||
@@ -10883,7 +10984,9 @@ namespace
             !ReachVerifyRel32Call(
                 base, kReachSetupProjectionCallRva,
                 kReachProjectionBuilderRva) ||
-            !ReachVerifyVisibilityConsumer(base, size))
+            !ReachVerifyVisibilityConsumer(base, size) ||
+            !ReachVerifyPatchyFogGate(
+                base, size, reachPatchyFogFlags))
         {
             LOG("Reach camera install: camera-rebuild helper verification failed; "
                 "stock Reach remains active");
@@ -10966,6 +11069,7 @@ namespace
             reachMotionBlurMax, reachMotionBlurMaxOriginal};
         g_reachCamera.motionBlurResolved = true;
         g_reachCamera.motionBlurSuppressed = false;
+        g_reachCamera.patchyFogFlags = reachPatchyFogFlags;
         for (int eye = 0; eye < 2; ++eye)
         {
             g_reachRenderFovSerial[eye].store(0, std::memory_order_release);
@@ -11001,6 +11105,11 @@ namespace
             static_cast<unsigned long long>(
                 reinterpret_cast<uintptr_t>(reachMotionBlurMax) - base),
             reachMotionBlurScaleOriginal, reachMotionBlurMaxOriginal);
+        LOG("Reach stereo fog evidence: screen-aligned patchy helper %llX "
+            "is suppressed per eye through exact flag %llX bit 0x%02X",
+            static_cast<unsigned long long>(kReachPatchyFogTargetRva),
+            static_cast<unsigned long long>(kReachPatchyFogFlagsRva),
+            static_cast<unsigned>(kReachPatchyFogSkipMask));
         return true;
     }
 
