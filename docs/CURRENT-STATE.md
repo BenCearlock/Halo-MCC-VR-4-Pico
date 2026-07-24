@@ -456,6 +456,9 @@ ODST on the accepted build:
   results remain unaccepted until this pointer advances explicitly.
 - `docs/TITLE-RUNTIME-OWNERSHIP.md`: accepted shared heartbeat/generation
   ownership contract and its cross-title regression evidence.
+- `docs/RESOLUTION-FSR-INVESTIGATION.md`: active (not accepted) findings for the
+  resolution-scaling and FSR feature work — verified facts, labeled hypotheses,
+  and open questions. No behavioral change shipped.
 - `docs/HISTORY.md`: how to retrieve the full pre-cleanup ledger.
 - `releases/0.2.2/manifest.json`: current machine-readable release identity.
 - `releases/0.2.1/manifest.json`: protected rollback release identity.
