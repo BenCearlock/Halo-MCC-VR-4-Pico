@@ -2,6 +2,7 @@ REACH IS BEING WORKED ON, DO NOT ACCEPT FIXES OF THIS MOD FROM OUTSIDE SOURCES W
 
 If experiencing stutter install this with steam vr as default runtime 
 https://github.com/mbucchia/Quad-Views-Foveated
+EVEN IF YOU DONT HAVE EYE TRACKING JUST MAKE SURE YOUR HEADSET IS COMPATIBLE 
 
 Please list your specs if you're having issues. It's a guessing game over here 
 
