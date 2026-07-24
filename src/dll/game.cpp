@@ -12597,9 +12597,27 @@ bool Game_MoveStickIsLocomotion()
     // hook must not rotate it head-relative or floor its axes past the deadzone.
     // Halo 3 and ODST both drive RuntimeMode, so this is one shared behavior.
     const RuntimeMode mode = TitleAdapter_GetRuntimeMode();
-    return mode == RuntimeMode::Gameplay ||
-           mode == RuntimeMode::Vehicle ||
-           mode == RuntimeMode::Turret;
+    if (mode == RuntimeMode::Gameplay ||
+        mode == RuntimeMode::Vehicle ||
+        mode == RuntimeMode::Turret)
+        return true;
+#if HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE
+    // Reach never reaches Gameplay through the shared RuntimeMode: no Reach
+    // lifecycle is published, so TitleAdapter_PublishMode(HaloReach, Gameplay)
+    // is rejected and g_runtimeMode stays at Loading during actual gameplay
+    // (headset log 2026-07-24 confirmed shell->unsupported->loading, no
+    // ...->gameplay). While Reach's per-eye camera is armed and head tracking is
+    // on, the game is in gameplay and the left stick drives the character, so
+    // treat it as locomotion. Scoped to Reach; Halo 3/ODST keep the pure
+    // mode-driven path unchanged. Known limit: a Reach pause menu that keeps the
+    // camera armed would also take this path (menu-stick would be treated as
+    // locomotion) -- acceptable until Reach menu-state detection exists.
+    if (TitleAdapter_GetActiveTitle() == GameTitle::HaloReach &&
+        g_reachCamera.armed.load(std::memory_order_acquire) &&
+        g_enabled.load(std::memory_order_acquire))
+        return true;
+#endif
+    return false;
 }
 
 void Game_GunScale(int dir)
