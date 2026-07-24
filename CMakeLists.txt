@@ -51,41 +51,18 @@ else()
         "Halo MCC VR: ODST is disabled; this does not match release 0.2.2")
 endif()
 
-# Reach remains stock in the normal cumulative Release preset. The private
-# option grants only shared virtual-controller admission for explicit Reach.
-# It installs no Reach hook and enables no rendering, camera, aim, movement,
-# HUD, haptics, lifecycle, or runtime-capability behavior.
-option(HALOMCCVR_EXPERIMENTAL_REACH_BRINGUP
-    "Compile private Halo: Reach controller-input admission" OFF)
-
-# Separate from controller admission: this compiles allocation-free routing,
-# ownership, freshness, pass-order, and rollback policy plus worker-only loaded
-# image and display/copy-shape readiness proof. It does not add
-# a title hook plan or any reachable MinHook/camera/write/CopyResource path.
-option(HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE
-    "Compile the hard-off Halo: Reach render-candidate foundation" OFF)
-
-if(HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE AND
-        NOT HALOMCCVR_EXPERIMENTAL_REACH_BRINGUP)
-    message(FATAL_ERROR
-        "The hard-off Reach render candidate requires Reach controller bring-up ON")
-endif()
-
-if(HALOMCCVR_EXPERIMENTAL_REACH_BRINGUP)
-    set(HALOMCCVR_BUILD_REACH "ON")
-    message(STATUS
-        "Halo MCC VR: private Reach controller input enabled; runtime hooks remain disabled")
-else()
-    set(HALOMCCVR_BUILD_REACH "OFF")
-    message(STATUS "Halo MCC VR: Reach remains stock")
-endif()
-if(HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE)
-    set(HALOMCCVR_BUILD_REACH_RENDER "COLD-PREFLIGHT-HOOKS-OFF")
-    message(STATUS
-        "Halo MCC VR: Reach cold preflight/resource proof compiled; runtime hooks remain disabled")
-else()
-    set(HALOMCCVR_BUILD_REACH_RENDER "OFF")
-endif()
+# Halo: Reach is a permanent title in the one cumulative build, exactly like
+# Halo 3 and ODST. There is no experimental Reach flag to toggle on or off.
+# Reach arms its VR camera/stereo path only after its proven loaded-image
+# preflight passes on the live module, and fails open to stock Reach otherwise,
+# so a permanent build can never break Halo 3 or ODST. Every new title follows
+# this same permanent, fail-open doctrine instead of an on/off compile gate.
+set(HALOMCCVR_EXPERIMENTAL_REACH_BRINGUP ON)
+set(HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE ON)
+set(HALOMCCVR_BUILD_REACH "ON")
+set(HALOMCCVR_BUILD_REACH_RENDER "ON")
+message(STATUS
+    "Halo MCC VR: Halo: Reach is a permanent cumulative title (fail-open to stock)")
 message(STATUS
     "Halo MCC VR build identity: ${HALOMCCVR_BUILD_COMMIT}, ODST=${HALOMCCVR_BUILD_ODST}, Reach=${HALOMCCVR_BUILD_REACH}, ReachRender=${HALOMCCVR_BUILD_REACH_RENDER}")
 

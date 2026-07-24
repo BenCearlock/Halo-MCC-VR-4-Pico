@@ -21,6 +21,7 @@ enum class TitleHookPlan : uint8_t
     None,
     Halo3Full,
     OdstExperimentalCameraCore,
+    ReachCameraCore,
 };
 
 constexpr uint64_t kHalo3AmbiguousCameraOwnershipMs = 100;

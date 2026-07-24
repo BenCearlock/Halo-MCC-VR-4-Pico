@@ -1,8 +1,9 @@
 # Building Halo MCC VR
 
-This builds the cumulative Halo 3 + ODST source from the accepted 0.2.2 line.
-Reach stays stock in the normal Release preset. Every generated file stays
-under ignored `out/`; nothing writes to an MCC installation.
+This builds one cumulative Halo 3 + ODST + Halo: Reach runtime. Every title is a
+permanent, fail-open part of the single Release build -- there is no experimental
+Reach flag to toggle. Every generated file stays under ignored `out/`; nothing
+writes to an MCC installation.
 
 ## Requirements
 
@@ -24,48 +25,30 @@ cmake --build --preset release
 ctest --preset release
 ```
 
-The preset always builds Release x64 with ODST enabled and Reach disabled.
-`camscan` is excluded: it is an opt-in diagnostic with process-memory write
-modes, not a product target. The standalone Reach runtime observer is also
-excluded and must be selected by name; it is never linked into `halo3xr.dll`.
+There is a single `release` preset. It always builds Release x64 with Halo 3,
+ODST, and Halo: Reach compiled in permanently. `camscan` is excluded: it is an
+opt-in diagnostic with process-memory write modes, not a product target. The
+standalone Reach runtime observer is also excluded and must be selected by name;
+it is never linked into `halo3xr.dll`. The build identity line reports
+`ODST=ON, Reach=ON, ReachRender=ON`.
 
-For a routine private Reach behavior candidate, validate the cumulative
-Reach-ON tree:
+## How the permanent Reach camera core behaves
 
-```powershell
-cmake --preset release-reach-private
-cmake --build --preset release-reach-private
-ctest --preset release-reach-private
-```
+Reach is fail-open: it renders exactly as stock until its runtime proof passes.
+The 50 ms title worker verifies the exact loaded Reach PE/file identity, three
+unique executable signatures, both function-body hashes, six caller edges, and
+fixed ranges once per sole-title admission epoch, and the Present path validates
+the exact swapchain buffer 0 and builds two private per-eye caches. Only after
+that proof and a one-second fresh-camera safety interval does the worker install
+two hooks -- the inner `player_view_render` and outer `main_render_view` -- and
+arm the per-eye stereo transaction. Any unmet precondition, an invalid camera,
+or a fault falls open to a single stock render, and Halo 3 and ODST are never
+touched. When Reach is armed the log reports `Reach camera core armed` and
+`Reach camera bring-up: head tracking, stereo, and 6DOF ON`.
 
-The private preset retains Halo 3 and ODST and grants explicit Reach only shared
-virtual-controller admission. It installs no Reach hooks and leaves Reach
-rendering, camera, aim and movement transforms, HUD, IK, haptics, lifecycle,
-and runtime capabilities disabled. Reach-OFF validation remains a separate
-milestone/promotion regression gate.
-
-To compile and test the next render-policy slice without making any Reach
-detour reachable:
-
-```powershell
-cmake --preset release-reach-render-disabled
-cmake --build --preset release-reach-render-disabled
-ctest --preset release-reach-render-disabled
-```
-
-This third preset keeps Halo 3, ODST, and Reach controller transport intact.
-It adds the allocation-free routing/ownership/rollback policy plus two cold,
-fail-open readiness checks. The 50 ms title worker verifies the exact loaded
-Reach PE/file identity, three unique executable signatures, both function-body
-hashes, six caller edges, and fixed ranges once per sole-title admission epoch.
-Present first rejects unrelated swapchains with one raw identity read. At most
-every 250 ms on the exact Reach swapchain, it publishes a fixed-storage snapshot
-and retains only interfaces obtained from the live Present receiver. Record-0
-RTV/SRV values remain raw structural identities and are never dereferenced by
-the worker. The worker validates retained buffer 0 after a single-threaded-device
-guard and transactionally creates two exact copy-compatible Reach-private eye
-caches. Its build identity reports
-`ReachRender COLD-PREFLIGHT-HOOKS-OFF`.
+The camera-injection correctness (how the OpenXR head/eye pose maps into Reach's
+camera) is a headset-tuning result, exactly as it was for the first ODST
+camera-core milestone.
 
 `TitleHookPlan::None`, zero Reach runtime capabilities, and the hard runtime-
 hook gate remain unchanged. The candidate installs no Reach detour, writes no

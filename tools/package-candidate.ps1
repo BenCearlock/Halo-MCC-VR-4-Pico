@@ -1,8 +1,11 @@
 [CmdletBinding()]
-param(
-    [switch]$ReachPrivate,
-    [switch]$ReachRenderDisabled
-)
+param()
+
+# Halo MCC VR is one cumulative build: Halo 3 + ODST + Halo: Reach, all
+# permanent and fail-open. There is a single `release` preset and no Reach
+# on/off switch. This stages one unaccepted local candidate under out/candidates
+# after a clean rebuild and passing tests; it never copies to MCC and never
+# labels rebuilt bytes as an accepted release.
 
 $ErrorActionPreference = 'Stop'
 $repoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
@@ -10,33 +13,8 @@ $candidateRoot = [IO.Path]::GetFullPath(
     (Join-Path $repoRoot 'out\candidates'))
 $expectedCandidateRoot = [IO.Path]::GetFullPath(
     (Join-Path $repoRoot 'out')) + [IO.Path]::DirectorySeparatorChar
-$packagePreset = if ($ReachRenderDisabled) {
-    'release-reach-render-disabled'
-} elseif ($ReachPrivate) {
-    'release-reach-private'
-} else {
-    'release'
-}
-$packageBuildDir = if ($ReachRenderDisabled) {
-    'out\build\release-reach-render-disabled'
-} elseif ($ReachPrivate) {
-    'out\build\release-reach-private'
-} else {
-    'out\build\release'
-}
-$validationPresets = if ($ReachRenderDisabled) {
-    @('release-reach-render-disabled')
-} elseif ($ReachPrivate) {
-    @('release-reach-private')
-} else {
-    @('release')
-}
-$reachEnabled = [bool]($ReachPrivate -or $ReachRenderDisabled)
-$reachRenderCompiled = [bool]$ReachRenderDisabled
-
-if ($ReachPrivate -and $ReachRenderDisabled) {
-    throw 'Choose either -ReachPrivate or -ReachRenderDisabled, not both.'
-}
+$packagePreset = 'release'
+$packageBuildDir = 'out\build\release'
 
 if (-not $candidateRoot.StartsWith(
         $expectedCandidateRoot,
@@ -66,62 +44,26 @@ try {
         throw "Refusing to package: HEAD does not descend from accepted source $acceptedSource."
     }
 
-    foreach ($preset in $validationPresets) {
-        & cmake --preset $preset
-        if ($LASTEXITCODE -ne 0) {
-            throw "CMake configure failed for preset $preset."
-        }
-
-        $presetBuildDir = if ($preset -eq 'release-reach-render-disabled') {
-            'out\build\release-reach-render-disabled'
-        } elseif ($preset -eq 'release-reach-private') {
-            'out\build\release-reach-private'
-        } else {
-            'out\build\release'
-        }
-        $cachePath = Join-Path $repoRoot "$presetBuildDir\CMakeCache.txt"
-        $cache = [IO.File]::ReadAllText($cachePath)
-        if ($cache -notmatch
-                '(?m)^HALOMCCVR_EXPERIMENTAL_ODST_BRINGUP:BOOL=ON\r?$') {
-            throw "Refusing to package: ODST is not ON in preset $preset."
-        }
-        $expectedReach = if ($preset -in @(
-                'release-reach-private',
-                'release-reach-render-disabled')) {
-            'ON'
-        } else {
-            'OFF'
-        }
-        $reachPattern =
-            "(?m)^HALOMCCVR_EXPERIMENTAL_REACH_BRINGUP:BOOL=$expectedReach\r?$"
-        if ($cache -notmatch $reachPattern) {
-            throw "Refusing to package: Reach is not $expectedReach in preset $preset."
-        }
-        $expectedRenderCandidate = if (
-                $preset -eq 'release-reach-render-disabled') { 'ON' } else { 'OFF' }
-        $renderCandidatePattern =
-            "(?m)^HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE:BOOL=$expectedRenderCandidate\r?$"
-        if ($cache -notmatch $renderCandidatePattern) {
-            throw "Refusing to package: hard-off Reach render candidate is not $expectedRenderCandidate in preset $preset."
-        }
-
-        & cmake --build --preset $preset --clean-first
-        if ($LASTEXITCODE -ne 0) {
-            throw "Release build failed for preset $preset."
-        }
-
-        & ctest --preset $preset
-        if ($LASTEXITCODE -ne 0) {
-            throw "Core tests failed for preset $preset."
-        }
+    & cmake --preset $packagePreset
+    if ($LASTEXITCODE -ne 0) {
+        throw "CMake configure failed for preset $packagePreset."
     }
 
-    if ($ReachRenderDisabled) {
-        & powershell -NoProfile -ExecutionPolicy Bypass -File `
-            (Join-Path $repoRoot 'tools\reach-preflight.ps1')
-        if ($LASTEXITCODE -ne 0) {
-            throw 'Reach offline evidence preflight failed.'
-        }
+    $cachePath = Join-Path $repoRoot "$packageBuildDir\CMakeCache.txt"
+    $cache = [IO.File]::ReadAllText($cachePath)
+    if ($cache -notmatch
+            '(?m)^HALOMCCVR_EXPERIMENTAL_ODST_BRINGUP:BOOL=ON\r?$') {
+        throw 'Refusing to package: ODST is not ON in the cumulative build.'
+    }
+
+    & cmake --build --preset $packagePreset --clean-first
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Release build failed.'
+    }
+
+    & ctest --preset $packagePreset
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Core tests failed.'
     }
 
     $finalCommit = (& git -C $repoRoot rev-parse HEAD).Trim()
@@ -133,14 +75,7 @@ try {
     }
 
     $createdUtc = [DateTime]::UtcNow
-    $packageKind = if ($ReachRenderDisabled) {
-        'reach-render-disabled'
-    } elseif ($ReachPrivate) {
-        'reach-private'
-    } else {
-        'release'
-    }
-    $packageId = '{0}-{1}-{2}' -f $commit.Substring(0, 7), $packageKind,
+    $packageId = '{0}-{1}-{2}' -f $commit.Substring(0, 7), 'reach-camera',
         $createdUtc.ToString("yyyyMMdd-HHmmssfff'Z'")
     $packageDir = Join-Path $candidateRoot $packageId
     if (Test-Path -LiteralPath $packageDir) {
@@ -172,28 +107,30 @@ try {
         (Get-FileHash -LiteralPath $launcherPath -Algorithm SHA256).Hash
 
     $manifest = [ordered]@{
-        schema_version = 4
+        schema_version = 5
         status = 'UNTESTED_LOCAL_CANDIDATE'
         accepted = $false
         package_id = $packageId
         created_utc = $createdUtc.ToString('o')
         source_commit = $commit
         package_preset = $packagePreset
+        titles = @('Halo 3', 'Halo 3: ODST', 'Halo: Reach')
         embedded_build_identity = [ordered]@{
             source_commit = $commit
-            HALOMCCVR_EXPERIMENTAL_ODST_BRINGUP = $true
-            HALOMCCVR_EXPERIMENTAL_REACH_BRINGUP = $reachEnabled
-            HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE =
-                $reachRenderCompiled
+            odst = $true
+            reach = $true
+            reach_render = $true
         }
-        reach_controller_input_enabled = $reachEnabled
-        reach_render_candidate_compiled = $reachRenderCompiled
-        reach_loaded_image_preflight_enabled = $reachRenderCompiled
-        reach_display_copy_readiness_enabled = $reachRenderCompiled
-        reach_render_candidate_enabled = $false
-        reach_copyresource_enabled = $false
-        reach_engine_memory_writes_enabled = $false
-        reach_runtime_hooks_enabled = $false
+        # Reach is now a permanent, fail-open per-eye camera core.
+        reach_permanent = $true
+        reach_controller_input_enabled = $true
+        reach_render_candidate_compiled = $true
+        reach_loaded_image_preflight_enabled = $true
+        reach_display_copy_readiness_enabled = $true
+        reach_camera_core_enabled = $true
+        reach_copyresource_enabled = $true
+        reach_engine_memory_writes_enabled = $true
+        reach_runtime_hooks_enabled = $true
         base_release = 'MCC_VR_ALPHA_0.2.2'
         files = [ordered]@{
             'halo3xr.dll' = [ordered]@{
@@ -205,7 +142,7 @@ try {
                 sha256 = $launcherHash
             }
         }
-        note = 'Not accepted until this exact DLL hash passes the required headset tests.'
+        note = 'Not accepted until this exact DLL hash passes the required headset tests (Reach 3D plus a Halo 3 + ODST regression).'
     }
 
     $manifestPath = Join-Path $packageDir 'CANDIDATE-MANIFEST.json'

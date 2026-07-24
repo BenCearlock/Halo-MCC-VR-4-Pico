@@ -247,6 +247,14 @@ namespace
     std::atomic<uint64_t> g_reachPresentNextSnapshotMs{0};
     std::atomic<bool> g_reachResizeActive{false};
     ID3D11Texture2D* g_reachEyeCache[2]{};
+    ID3D11Texture2D* g_reachCaptureSource = nullptr;
+    ID3D11Texture2D* g_reachCaptureEyes[2]{};
+    ID3D11DeviceContext* g_reachCaptureContext = nullptr;
+    ReachDisplaySurfaceProof g_reachCaptureProof{};
+    D3D11_TEXTURE2D_DESC g_reachCaptureDesc{};
+    std::atomic<bool> g_reachCaptureEnabled{false};
+    std::atomic<uint32_t> g_reachCaptureUsers{0};
+    std::atomic<uint64_t> g_reachEyeSerial[2]{};
 #endif
     // Retained immediately after Present using the flip chain's current buffer
     // index. ODST can copy it after each death-camera eye draw without COM
@@ -1454,6 +1462,36 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
         }
     }
 
+    bool InvalidateReachCaptureResources() noexcept
+    {
+        g_reachCaptureEnabled.store(false, std::memory_order_seq_cst);
+        for (unsigned spin = 0;
+             g_reachCaptureUsers.load(std::memory_order_seq_cst) != 0 &&
+             spin < 2000; ++spin)
+        {
+            Sleep(1);
+        }
+        if (g_reachCaptureUsers.load(std::memory_order_seq_cst) != 0)
+            return false;
+        if (g_reachCaptureSource)
+            g_reachCaptureSource->Release();
+        for (auto*& eye : g_reachCaptureEyes)
+        {
+            if (eye)
+                eye->Release();
+            eye = nullptr;
+        }
+        if (g_reachCaptureContext)
+            g_reachCaptureContext->Release();
+        g_reachCaptureSource = nullptr;
+        g_reachCaptureContext = nullptr;
+        g_reachCaptureProof = {};
+        g_reachCaptureDesc = {};
+        g_reachEyeSerial[0].store(0, std::memory_order_release);
+        g_reachEyeSerial[1].store(0, std::memory_order_release);
+        return true;
+    }
+
     template <typename T>
     bool ReadReachLocal(uintptr_t address, T& value) noexcept
     {
@@ -1995,8 +2033,11 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
         }
         if (releaseResources)
         {
-            ReleaseReachEyeCaches();
-            DiscardReachDisplaySnapshots(false);
+            if (InvalidateReachCaptureResources())
+            {
+                ReleaseReachEyeCaches();
+                DiscardReachDisplaySnapshots(false);
+            }
         }
         g_reachDisplayNextAttemptMs = 0;
         g_reachDisplayReadyLogged = false;
@@ -2148,6 +2189,48 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
         return ReachDisplaySurfaceProofComplete(proof);
     }
 
+    bool PublishReachCaptureResources(
+        const ReachDisplaySnapshot& snapshot,
+        const ReachDisplaySurfaceProof& proof) noexcept
+    {
+        if (!snapshot.buffer0 || !snapshot.device ||
+            !g_reachEyeCache[0] || !g_reachEyeCache[1] ||
+            !ReachDisplaySurfaceProofComplete(proof))
+            return false;
+        if (g_reachCaptureEnabled.load(std::memory_order_acquire) &&
+            g_reachCaptureSource == snapshot.buffer0 &&
+            g_reachCaptureEyes[0] == g_reachEyeCache[0] &&
+            g_reachCaptureEyes[1] == g_reachEyeCache[1] &&
+            ReachSameModuleEpoch(g_reachCaptureProof.continuity.epoch,
+                                 proof.continuity.epoch) &&
+            g_reachCaptureProof.continuity.lifecycleSerial ==
+                proof.continuity.lifecycleSerial)
+            return true;
+
+        if (!InvalidateReachCaptureResources())
+            return false;
+        ID3D11DeviceContext* context = nullptr;
+        snapshot.device->GetImmediateContext(&context);
+        if (!context || ReachComIdentity(context) !=
+                proof.continuity.immediateContextIdentity)
+        {
+            if (context)
+                context->Release();
+            return false;
+        }
+        snapshot.buffer0->AddRef();
+        g_reachEyeCache[0]->AddRef();
+        g_reachEyeCache[1]->AddRef();
+        g_reachCaptureSource = snapshot.buffer0;
+        g_reachCaptureEyes[0] = g_reachEyeCache[0];
+        g_reachCaptureEyes[1] = g_reachEyeCache[1];
+        g_reachCaptureContext = context;
+        g_reachCaptureProof = proof;
+        g_reachCaptureDesc = snapshot.buffer0Desc;
+        g_reachCaptureEnabled.store(true, std::memory_order_seq_cst);
+        return true;
+    }
+
     void PollReachDisplayCandidate()
     {
         ReachExclusiveResourceLock lock(g_reachDisplayResourceLock);
@@ -2270,7 +2353,8 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
                     admission.epoch.moduleBase &&
                 ReachRenderCandidate_IsPreflightCurrent(preflight);
             const bool published = built && admissionStillCurrent &&
-                g_reachDirectCopyGate.Publish(proof);
+                g_reachDirectCopyGate.Publish(proof) &&
+                PublishReachCaptureResources(*snapshot, proof);
             if (published)
             {
                 if (!g_reachDisplayReadyLogged)
@@ -3857,7 +3941,37 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
                                     g_stereoChain != XR_NULL_HANDLE && Game_IsHeadTracking();
                 if (stereo)
                 {
-                    ValidateStereoImagesOnce();
+#if HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE
+                    ReachVrRenderAccess reachAccess{};
+                    bool reachImages = false;
+                    if (TitleAdapter_GetActiveTitle() == GameTitle::HaloReach)
+                    {
+                        constexpr size_t reachSlot =
+                            TitleRuntimeSlotIndex(GameTitle::HaloReach);
+                        const TitleRuntimeAvailabilitySnapshot availability =
+                            TitleAdapter_GetAvailability();
+                        const ReachModuleEpoch epoch{
+                            availability.moduleBases[reachSlot],
+                            TitleAdapter_GetGeneration(GameTitle::HaloReach)};
+                        const ReachPreparedFrameToken prepared =
+                            ReachPreparedFrameToken::Create(
+                                epoch, g_preparedFrame.serial, true);
+                        reachImages = VR_ReachBeginRenderAccess(
+                                epoch, prepared, reachAccess) &&
+                            g_reachEyeSerial[0].load(
+                                std::memory_order_acquire) ==
+                                g_preparedFrame.serial &&
+                            g_reachEyeSerial[1].load(
+                                std::memory_order_acquire) ==
+                                g_preparedFrame.serial;
+                        if (!reachImages && reachAccess.active)
+                            VR_ReachEndRenderAccess(reachAccess);
+                    }
+#else
+                    const bool reachImages = false;
+#endif
+                    if (!reachImages)
+                        ValidateStereoImagesOnce();
                     uint32_t idx = 0;
                     XrSwapchainImageAcquireInfo ai{XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
                     XrSwapchainImageWaitInfo swi{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO};
@@ -3868,15 +3982,23 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
                     {
                         for (uint32_t eye = 0; eye < 2; ++eye)
                         {
-                            if (g_eyeHasImage[eye])
+                            const bool haveImage = reachImages ||
+                                g_eyeHasImage[eye];
+                            ID3D11Texture2D* source = reachImages
+                                ? reachAccess.eyes[eye] : g_eyeCache[eye];
+                            const D3D11_TEXTURE2D_DESC& sourceDesc = reachImages
+                                ? g_reachCaptureDesc : g_eyeCacheDesc;
+                            if (haveImage && source)
                                 if (ID3D11RenderTargetView* rtv = GetStereoRtv(idx, eye))
-                                    Blit(g_eyeCache[eye], g_eyeCacheDesc, g_stereoImages[idx],
+                                    Blit(source, sourceDesc, g_stereoImages[idx],
                                          g_stereoW, g_stereoH, rtv);
                         }
                         xrReleaseSwapchainImage(g_stereoChain, &ri);
                     }
 
-                    if (g_eyeHasImage[0] && g_eyeHasImage[1] && projection.viewCount == 2)
+                    if ((reachImages ||
+                         (g_eyeHasImage[0] && g_eyeHasImage[1])) &&
+                        projection.viewCount == 2)
                     {
                         layers.push_back(reinterpret_cast<XrCompositionLayerBaseHeader*>(&projection));
 
@@ -3994,6 +4116,10 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
                             }
                         }
                     }
+#if HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE
+                    if (reachAccess.active)
+                        VR_ReachEndRenderAccess(reachAccess);
+#endif
                 }
                 else if (g_haveCenter && EnsureScreenChain(bd.Width, bd.Height))
                 {
@@ -4128,6 +4254,74 @@ void VR_InitInstance()
 void VR_ReachRenderCandidate_ColdPoll()
 {
     PollReachDisplayCandidate();
+}
+
+ReachPreparedFrameToken VR_ReachPreparedFrame(
+    const ReachModuleEpoch& epoch)
+{
+    const uint64_t serial =
+        g_preparedSerialPublished.load(std::memory_order_acquire);
+    return ReachPreparedFrameToken::Create(
+        epoch, serial,
+        serial != 0 &&
+        g_preparedShouldRender.load(std::memory_order_acquire));
+}
+
+bool VR_ReachDisplayReady(const ReachModuleEpoch& epoch)
+{
+    return g_reachCaptureEnabled.load(std::memory_order_seq_cst) &&
+        ReachSameModuleEpoch(g_reachCaptureProof.continuity.epoch, epoch) &&
+        ReachRenderCandidate_IsPreflightCurrent(
+            g_reachCaptureProof.preflight);
+}
+
+bool VR_ReachBeginRenderAccess(
+    const ReachModuleEpoch& epoch,
+    const ReachPreparedFrameToken& prepared,
+    ReachVrRenderAccess& access)
+{
+    access = {};
+    g_reachCaptureUsers.fetch_add(1, std::memory_order_seq_cst);
+    if (!g_reachCaptureEnabled.load(std::memory_order_seq_cst) ||
+        !prepared.Ready() ||
+        !ReachSameModuleEpoch(prepared.Epoch(), epoch) ||
+        !g_reachCaptureSource || !g_reachCaptureContext ||
+        !g_reachCaptureEyes[0] || !g_reachCaptureEyes[1] ||
+        !ReachSameModuleEpoch(g_reachCaptureProof.continuity.epoch, epoch) ||
+        !ReachRenderCandidate_IsPreflightCurrent(
+            g_reachCaptureProof.preflight))
+    {
+        g_reachCaptureUsers.fetch_sub(1, std::memory_order_seq_cst);
+        return false;
+    }
+    access.proof = g_reachCaptureProof;
+    access.source = g_reachCaptureSource;
+    access.eyes[0] = g_reachCaptureEyes[0];
+    access.eyes[1] = g_reachCaptureEyes[1];
+    access.context = g_reachCaptureContext;
+    access.preparedSerial = prepared.Serial();
+    access.active = true;
+    return true;
+}
+
+bool VR_ReachCopyEye(ReachVrRenderAccess& access, int eye)
+{
+    if (!access.active || eye < 0 || eye > 1 ||
+        !access.context || !access.source || !access.eyes[eye] ||
+        !g_reachCaptureEnabled.load(std::memory_order_seq_cst))
+        return false;
+    access.context->CopyResource(access.eyes[eye], access.source);
+    g_reachEyeSerial[eye].store(
+        access.preparedSerial, std::memory_order_release);
+    return true;
+}
+
+void VR_ReachEndRenderAccess(ReachVrRenderAccess& access)
+{
+    if (!access.active)
+        return;
+    access = {};
+    g_reachCaptureUsers.fetch_sub(1, std::memory_order_seq_cst);
 }
 #endif
 

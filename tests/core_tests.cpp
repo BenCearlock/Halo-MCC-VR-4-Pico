@@ -2145,12 +2145,19 @@ int main()
 
     const TitleDescriptor* reach = TitleRegistry_FromModuleName(L"haloreach.dll");
     Check(reach && reach->title == GameTitle::HaloReach, "Reach module is recognized");
-    Check(reach && !reach->runtimeSupported,
-        "The controller-only Reach adapter does not claim runtime support");
-    Check(reach && reach->capabilities == TitleCapability_None,
-        "The controller-only Reach adapter advertises no runtime capabilities");
-    Check(TitleRegistry_HookPlan(GameTitle::HaloReach) == TitleHookPlan::None,
-        "Reach receives no runtime hook plan in either build preset");
+    Check(reach && reach->runtimeSupported,
+        "Reach is a permanent runtime-supported title");
+    Check(reach && reach->capabilities ==
+              (TitleCapability_Stereo | TitleCapability_ControllerAim |
+               TitleCapability_RuntimeModes | TitleCapability_RoomScale |
+               TitleCapability_ControllerInput | TitleCapability_Haptics),
+        "Reach advertises the 3D + motion core capabilities");
+    Check(reach && (reach->capabilities &
+              (TitleCapability_Hud | TitleCapability_ArmIk)) == 0u,
+        "Reach withholds HUD and arm IK until Reach-specific offsets are proven");
+    Check(TitleRegistry_HookPlan(GameTitle::HaloReach) ==
+              TitleHookPlan::ReachCameraCore,
+        "Reach receives its permanent camera-core hook plan");
 #if HALOMCCVR_EXPERIMENTAL_REACH_BRINGUP
     Check(reach && reach->admissionCapabilities ==
               TitleCapability_ControllerInput,

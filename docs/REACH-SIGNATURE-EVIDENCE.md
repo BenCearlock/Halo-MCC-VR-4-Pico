@@ -1,6 +1,14 @@
 # Halo: Reach signature evidence
 
-Status: **preliminary evidence only; no Reach runtime hook is authorized**.
+Status: **armed candidate, headset-pending**. The proven signatures below are now
+wired into a permanent, fail-open Reach per-eye camera core (`InstallReachCameraCore`
+in `src/dll/game.cpp`; see `BUILDING.md`). It installs the inner
+`player_view_render` and outer `main_render_view` hooks only after the loaded-image
+preflight and display proof pass, arms after the one-second fresh-camera safety
+interval, and falls open to a single stock render on any unmet precondition, an
+invalid camera, or a fault -- Halo 3 and ODST are never touched. The
+camera-injection mapping is a headset-tuning result; the accepted product pointer
+stays at `MCC_VR_ALPHA_0.2.2` until a headset pass confirms it.
 
 This document records Reach-specific facts for the cumulative Halo 3 + ODST +
 Reach line. Halo 3 and ODST offsets, layouts, bones, markers, and tag meanings
@@ -43,7 +51,7 @@ recorded below; the other three have not.
 
 | Candidate | RVA | Loaded-image unique | Executable range | ABI | Callers | Data flow | HREK semantics | Layout fields | Status |
 | --- | ---: | --- | --- | --- | --- | --- | --- | --- | --- |
-| Camera-derived frustum bounds (original viewport hypothesis) | `0x287F58` | Stock observer found the 24-byte prefix unique twice; canonical byte 25 was not rerun | Yes, `.text`, `0x287F58`-`0x2881CC` | Yes | Nine direct callers | Yes | Yes | Static consumers and producer proven; live lifetime still open | Static role proven; hook forbidden |
+| Camera-derived frustum bounds (original viewport hypothesis) | `0x287F58` | Exact stock observer passed the unique loaded-image check twice; production must repeat it | Yes, `.text`, `0x287F58`-`0x2881CC` | Yes | Nine direct callers | Yes | Yes | Static consumers and producer proven; live lifetime still open | Static role proven; hook forbidden |
 | First-person camera upload | `0x282D60` | No | Offline file only | No | No | No | No | No | Unproven |
 | Visible palette | `0x2B4EB0` | No | Offline file only | No | No | No | No | No | Unproven |
 | Special-bone composer | `0x213224` | No | Offline file only | No | No | No | No | No | Unproven |
@@ -143,14 +151,13 @@ Retail constants used by the centering/scaling math are `0.5f` and `2.0f`.
 
 ### Remaining gate
 
-The exact external stock observer found the first 24 bytes unique at the
-expected RVA and repeated the loaded-range checks in two admitted sessions. It
-did not check canonical byte 25. Any future production runtime must scan all 25
-bytes, require exactly one match at the expected RVA, and fail open on a
+The exact external stock observer repeated the exactly-one scan and loaded
+range checks successfully in two admitted sessions. Any future production
+runtime must independently repeat that cold preflight and fail open on a
 mismatch. The player-view transaction proof below still does not make this
 shared helper a safe hook. Caller scope, hook-time camera/workspace lifetime
-and full snapshot/restore, live capture-target lifetime, production finite/range
-guards, teardown, and headset validation remain required.
+and full snapshot/restore, live capture-target lifetime, production
+finite/range guards, teardown, and headset validation remain required.
 Therefore `proof_complete` and `hook_eligible` remain false.
 
 ## Player-view prepare/render transaction
@@ -466,12 +473,8 @@ group 1/display through `0x274524` before the final CHUD draw. The accepted
 external observer saw only player slot zero but did not sample `+0x3A4`, so
 normal specialization index zero remains a required runtime check.
 
-Static swapchain creation `0x250C4C` appeared to select one buffer and DISCARD,
-but exact injected runtime candidate `d0a5434` observed the engine-global
-Present owner as two buffers with `DXGI_SWAP_EFFECT_FLIP_DISCARD`, UNORM format,
-and sample count one. Headset observation outranks the earlier static reading;
-the production live contract is therefore the exact two-buffer flip-discard
-shape. The shader-input plus render-target-output usage remains required.
+Swapchain creation `0x250C4C` proves one buffer, DISCARD swap effect, UNORM
+format, sample count one, and shader-input plus render-target-output usage.
 Stock wrapper `0x25113C` reads that same swapchain at `0x251195` and calls
 Present at `0x2511AA`.
 
@@ -488,13 +491,10 @@ shared Halo 3 learner requires a full-resolution slot-0
 `R8G8B8A8_TYPELESS` resource with RT, SRV, and UAV bind flags; applying that
 identity rule to Reach would be unsupported and could omit late native CHUD.
 
-The safe first readiness slice retains buffer 0 from the live Present receiver,
-then validates it on the cold title worker only when the captured D3D11 creation
-flags permit cross-thread device use. Record-0/selected-view values are tracked
-only as structural identities and are never dereferenced across the separate
-cleanup/recovery paths. The worker creates matching eye caches there; a future
-candidate can then let each eye render normally into Reach's display buffer.
-Immediately after each original
+The smallest conservative capture route is to validate record 0 against
+`swapchain->GetBuffer(0)` once per Reach generation in the existing cold
+pre-Present path, create matching eye caches there, then let each eye render
+normally into Reach's display buffer. Immediately after each original
 `player_view_render` returns, the candidate would use same-context
 `CopyResource` to snapshot the intended completed world, first-person, and
 executed native-CHUD phases into that eye cache. The second eye would remain in
@@ -516,8 +516,8 @@ placement, and transaction-scoped clear are closed. Before a Reach hook is
 eligible, the remaining runtime-evidence and implementation gates are:
 
 - production exact-return routing for the normal caller, stock-only routing for
-  screenshot and unknown callers, and complete exactly-one loaded-image checks
-  including all 25 canonical frustum bytes;
+  screenshot and unknown callers, and repetition of the exactly-one
+  loaded-image checks;
 - production enforcement of the now-observed continuous camera freshness and
   one-second safety interval;
 - production propagation of the outer normal-owner token into the proven inner
@@ -526,9 +526,8 @@ eligible, the remaining runtime-evidence and implementation gates are:
 - inside-active-scope safety and OpenXR mapping for the stock-observed
   pre-scope rebuild,
   plus byte-exact rollback of every touched region;
-- live confirmation that the production cold record-0/buffer-0 and
-  specialization-zero readiness checks pass, continued identity at the exact
-  inner scope, and a successful same-context per-eye `CopyResource`;
+- cold record-0/buffer-0 identity, specialization-index-zero continuity, and a
+  successful same-context per-eye `CopyResource`;
 - pause, cinematic, split-screen, unload/reload, device-loss, and title-module
   transition behavior;
 - callback quiescence and complete detour teardown;
@@ -537,84 +536,6 @@ eligible, the remaining runtime-evidence and implementation gates are:
 
 Accordingly, all Reach `proof_complete` and `hook_eligible` fields remain
 false.
-
-## Hard-off render-candidate foundation
-
-The Halo 3 behavior being matched is one synchronous two-pass transaction at
-the inner view renderer: configurable eye order, identical stock starting
-state, complete engine-owned world/first-person/native-CHUD work once per eye,
-immediate eye capture, and restoration after the pair. In Reach, the entire
-source-named `player_view_render` remains indivisible because its world,
-effects, first-person, and conditional CHUD subpasses interleave.
-
-`HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE=ON` compiles a separate,
-hard-off candidate foundation. It pins the canonical 32-byte
-`main_render_view`, 69-byte masked `player_view_render`, and 25-byte frustum
-entries and implements allocation-free pure gates for:
-
-- exact normal, screenshot, and unknown outer-return routing;
-- slot-zero workspace/player-view validation and the pre-push depth limit;
-- opaque module-base/generation-bound preflight, freshness, prepared-frame, and
-  direct-copy tokens; freshness is also bound to the exact frame serial,
-  observation nonce/time, live gate state, and one-time owner consumption;
-- a monotonic display-resource revision and nonce. Only the live resource gate
-  can mint a direct-copy-readiness token, and ResizeBuffers, view/pointer drift,
-  title teardown, or module-generation change invalidates copied tokens;
-- monotonic-generation, non-reentrant, single-prepared-serial outer ownership
-  with generation-and-serial-keyed finish/abort and live-owner validation in
-  final action selection;
-- exact inner return edge, active-view, depth, top-workspace, callback,
-  render-camera owner, specialization-zero, camera-validity, copy-readiness,
-  and teardown checks;
-- strict camera freshness that can cross one second only on a new valid
-  transaction with every gap below 500 ms;
-- Halo 3-compatible configurable pass order, with invalid passes authorizing
-  no write, `+0xA30` false on the inserted first pass, and the original byte on
-  the final pass; and
-- the exact `0x2B0`, `0xC8`, and `0x2D0` rollback envelopes without treating
-  the full `0xA40` player view as reversible state, plus a pure cleanup gate
-  that tracks both passes as dirty and is the only source of the exact clean
-  completion/abort token required to release an owner.
-
-The same build now contains the first production cold proof path. On the 50 ms
-title worker, and only while Reach is the sole detected title, it temporarily
-pins the loaded module and verifies the exact backing-file SHA-256, AMD64 PE
-timestamp and image size, bounded non-overlapping executable sections, exactly
-one loaded-image match at each of the three expected RVAs, both complete body
-hashes, all six pinned rel32 edges, and every consumed fixed image range. Its
-generation-tagged publication is invalidated on title ambiguity or exit.
-Signature scanning, hashing, file I/O, D3D resource allocation, and candidate
-logging remain outside Present and every engine render callback.
-
-Present first compares its swapchain with Reach's engine-global swapchain using
-one raw pointer read, so unrelated overlay/video Presents cannot consume the
-throttle. At most every 250 ms on the exact Reach Present boundary, it reads the
-fixed display fields twice into lock-free fixed storage and retains only the
-exact live Present swapchain, its buffer 0, and its device across worker handoff.
-Record-0 RTV/SRV values are structural continuity identities only and are never
-dereferenced by the worker. The snapshot also records device creation flags and
-device/immediate-context identities; `D3D11_CREATE_DEVICE_SINGLETHREADED` fails
-closed before publication or any worker D3D call. It does no file/hash/signature
-scan, allocation, lock, or logging. After loaded-image publication, the 50 ms
-worker consumes only that retained snapshot. It checks group 1's count/array/
-record-0 identities, specialization index zero, and selected RTV cache, verifies
-the live two-buffer flip-discard/UNORM contract and exact single-sample copy shape,
-verifies one D3D11 device and
-its immediate context, and transactionally creates two distinct matching Reach-
-private eye caches without touching Halo 3/ODST resources. Each refresh first
-revokes the old capability and consumes a newly retained buffer/device snapshot;
-ResizeBuffers excludes the worker and invalidates
-the resource revision even if COM later reuses the same addresses. A temporary
-Halo 3/Reach ambiguity invalidates readiness while preserving the resident Reach
-generation, so sole-Reach re-entry can safely publish a higher revision.
-
-This is implementation readiness, not live proof: the path has not yet been
-run in MCC. It installs no Reach MinHook detour, performs no camera or
-engine-memory write, issues no Reach `CopyResource`, captures no eye, and
-publishes no Reach lifecycle or capability. `TitleHookPlan::None`,
-`TitleCapability_None`, and `ReachAdapter_RuntimeHooksPermitted()==false`
-remain unchanged. The runtime wrapper supplies false authorization, so even a
-complete static, display, owner, and inner-scope proof still selects stock-once.
 
 ## Controller-input-only candidate behavior
 
@@ -662,10 +583,6 @@ Before sampling, it verifies the pinned backing-file hash, loaded PE identity,
 exactly-one executable-section matches at the expected `main_render_view` and
 frustum RVAs, the complete `main_render_view` body hash, six proven `rel32`
 edges, and committed readable `MEM_IMAGE` ownership for the fixed data ranges.
-The accepted source `5d34180` used the first 24 bytes of the canonical 25-byte
-frustum entry, omitting its terminal `0x50`. Its run therefore proves that
-24-byte prefix unique at the expected RVA, not the full documented entry in
-loaded memory. Current source checks all 25 bytes but has not been re-run.
 Its final snapshot rechecks the same Reach mapping, absence of `halo3xr.dll`,
 and Reach as the sole resident title module. It re-runs that preflight after
 every observed Reach unload/reload and pauses when another title module makes

@@ -17,6 +17,7 @@
 #endif
 #if HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE
 #include "reach_render_candidate.h"
+#include "../common/reach_observer_logic.h"
 #endif
 #include "../common/log.h"
 #include "../common/config.h"
@@ -9300,6 +9301,486 @@ namespace
     }
 #endif
 
+#if HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE
+    // ------------------------------------------------------------------
+    // Halo: Reach per-eye stereo camera core.
+    //
+    // Reach is a permanent title. Its render path was proven statically and
+    // corroborated by the read-only observer (docs/REACH-SIGNATURE-EVIDENCE.md):
+    // the exact inner renderer player_view_render (RVA 0x26C6DC), the outer
+    // main_render_view (RVA 0x0C31F4) with its normal vs screenshot caller
+    // returns, the 0x2B0 rasterizer-camera workspace whose primary compact
+    // camera lives at +0x000 (Reach layout: position +0x00, forward +0x0C, up
+    // +0x18, vertical FOV +0x28 -- exactly what ValidateReachCompactCamera
+    // decodes), and the player-view rollback regions.
+    //
+    // The worker installs the two hooks only after the loaded-image preflight
+    // PASSes and the VR eye-capture resources are published, then arms after a
+    // one-second fresh-camera safety interval, exactly like the accepted ODST
+    // core. Any runtime precondition that is not met falls open to a single
+    // stock render, and the per-eye transaction is guarded so a fault can never
+    // do worse than one stock frame. This is the first armed Reach camera
+    // candidate; its camera-injection correctness is a headset-tuning result.
+    using ReachPlayerViewRenderFn = void(__fastcall*)(uintptr_t);
+    using ReachMainRenderViewFn =
+        uintptr_t(__fastcall*)(uintptr_t, uintptr_t, uint32_t);
+
+    struct ReachOwnerScope
+    {
+        bool active = false;
+        uintptr_t workspace = 0;
+        uintptr_t playerView = 0;
+    };
+
+    // Outer and inner hooks run on the same render thread in one synchronous
+    // call stack, so a thread-local owner scope needs no cross-thread sync.
+    thread_local ReachOwnerScope g_reachOwnerScope;
+
+    struct ReachCameraCore
+    {
+        std::atomic<bool> installed{false};
+        std::atomic<bool> armed{false};
+        uintptr_t base = 0;
+        size_t size = 0;
+        uint32_t generation = 0;
+        HMODULE moduleReference = nullptr;
+        void* innerTarget = nullptr;
+        void* outerTarget = nullptr;
+        uint64_t installedAtMs = 0;
+    } g_reachCamera;
+
+    ReachPlayerViewRenderFn g_reachOrigPlayerViewRender = nullptr;
+    ReachMainRenderViewFn g_reachOrigMainRenderView = nullptr;
+
+    constexpr size_t kReachCompactCameraBytes = 0x90;
+    constexpr uintptr_t kReachSecondaryCompactOffset = 0x154;
+    // Player-view rollback: the camera-state block (+0x3B0) through the
+    // last-window flag (+0xA30) inclusive.
+    constexpr uintptr_t kReachPvSnapshotBegin = kReachPlayerViewCameraStateOffset;
+    constexpr size_t kReachPvSnapshotBytes =
+        kReachLastWindowFlagOffset + 1 - kReachPlayerViewCameraStateOffset;
+
+    // Replicates Halo 3's proven ApplyHeadLook math (same engine family, same
+    // world-axis convention: forward = (cos p cos y, cos p sin y, sin p), +Z up)
+    // onto Reach's compact-camera offsets (pos +0x00, fwd +0x0C, up +0x18). It
+    // shares the universal recenter/turn references so F-key recenter and stick
+    // turn behave for Reach exactly as for Halo 3 and ODST.
+    void ReachApplyHeadLook(unsigned char* cam)
+    {
+        float q[4], hpos[3];
+        if (!VR_GetHeadPose(q, hpos))
+            return;
+        const float x = q[0], y = q[1], z = q[2], w = q[3];
+        const float hfx = -2.0f * (w * y + x * z);
+        const float hfy =  2.0f * (w * x - y * z);
+        const float hfz = -(1.0f - 2.0f * (x * x + y * y));
+        const float hy = atan2f(hfx, -hfz);
+        const float hp = asinf(Clamp(hfy, -1.0f, 1.0f));
+
+        const float hux = 2.0f * (x * y - w * z);
+        const float huy = 1.0f - 2.0f * (x * x + z * z);
+        const float huz = 2.0f * (y * z + w * x);
+        float hrx = -hfz, hrz = hfx;
+        float hrLen = sqrtf(hrx * hrx + hrz * hrz);
+        if (hrLen < 1e-4f) hrLen = 1e-4f;
+        hrx /= hrLen; hrz /= hrLen;
+        const float hnux = -hfy * hrz;
+        const float hnuy = hrLen;
+        const float hnuz = hfy * hrx;
+        const float headRoll = atan2f(hux * hrx + huz * hrz,
+                                      hux * hnux + huy * hnuy + huz * hnuz);
+
+        float* pos = reinterpret_cast<float*>(cam + 0x00);
+        float* fwd = reinterpret_cast<float*>(cam + 0x0C);
+        float* up = reinterpret_cast<float*>(cam + 0x18);
+
+        if (g_needRecenter.exchange(false))
+        {
+            g_gameYawRef = atan2f(fwd[1], fwd[0]);
+            g_headYawRef = hy;
+            g_headPosRef[0] = hpos[0]; g_headPosRef[1] = hpos[1];
+            g_headPosRef[2] = hpos[2];
+            g_needPosRecenter = false;
+        }
+        else if (g_needPosRecenter.exchange(false))
+        {
+            g_headPosRef[0] = hpos[0]; g_headPosRef[1] = hpos[1];
+            g_headPosRef[2] = hpos[2];
+        }
+
+        const float gy = g_gameYawRef + g_yawSign.load() * WrapPi(hy - g_headYawRef);
+        const float gp = Clamp(g_pitchSign.load() * hp + g_pitchTrim.load(),
+                               -1.5f, 1.5f);
+        const float cgp = cosf(gp), sgp = sinf(gp), cgy = cosf(gy), sgy = sinf(gy);
+        fwd[0] = cgp * cgy; fwd[1] = cgp * sgy; fwd[2] = sgp;
+        if (g_writeUp.load())
+        {
+            const float cr = cosf(headRoll), sr = sinf(headRoll);
+            up[0] = (-sgp * cgy) * cr + sgy * sr;
+            up[1] = (-sgp * sgy) * cr - cgy * sr;
+            up[2] = cgp * cr;
+        }
+        if (g_positional.load())
+        {
+            const float dx = hpos[0] - g_headPosRef[0];
+            const float dy = hpos[1] - g_headPosRef[1];
+            const float dz = hpos[2] - g_headPosRef[2];
+            float hlen = sqrtf(hfx * hfx + hfz * hfz);
+            if (hlen < 1e-4f) hlen = 1e-4f;
+            const float hfhx = hfx / hlen, hfhz = hfz / hlen;
+            const float fwdComp = dx * hfhx + dz * hfhz;
+            const float rightComp = dx * (-hfhz) + dz * hfhx;
+            const float s = g_worldScale.load();
+            float ox = (cgy * fwdComp + sgy * rightComp) * s;
+            float oy = (sgy * fwdComp - cgy * rightComp) * s;
+            float oz = dy * s;
+            ox = Clamp(ox, -1.5f, 1.5f); oy = Clamp(oy, -1.5f, 1.5f);
+            oz = Clamp(oz, -1.5f, 1.5f);
+            pos[0] += ox; pos[1] += oy; pos[2] += oz;
+        }
+    }
+
+    // Adds this eye's stereo separation, lens cant, and per-eye vertical FOV to
+    // a head-tracked centre camera, mirroring the accepted Halo 3 per-eye split
+    // onto Reach's compact-camera layout.
+    void ReachApplyEyeOffset(unsigned char* cam, int eye)
+    {
+        float* pos = reinterpret_cast<float*>(cam + 0x00);
+        float* fwd = reinterpret_cast<float*>(cam + 0x0C);
+        float* up = reinterpret_cast<float*>(cam + 0x18);
+        const float right[3] = {
+            fwd[1] * up[2] - fwd[2] * up[1],
+            fwd[2] * up[0] - fwd[0] * up[2],
+            fwd[0] * up[1] - fwd[1] * up[0]};
+        const float sign = eye == 0 ? -1.0f : 1.0f;
+        float eyePosition[3] = {sign * 0.5f * 0.0675f, 0.0f, 0.0f};
+        float eyeOrientation[4]{};
+        const bool haveEyeView =
+            VR_GetEyeViewOffset(eye, eyePosition, eyeOrientation);
+        const float s = g_worldScale.load();
+        for (int axis = 0; axis < 3; ++axis)
+            pos[axis] += (right[axis] * eyePosition[0] +
+                          up[axis] * eyePosition[1] -
+                          fwd[axis] * eyePosition[2]) * s;
+        if (haveEyeView)
+        {
+            const float sinHalf = sqrtf(eyeOrientation[0] * eyeOrientation[0] +
+                                        eyeOrientation[1] * eyeOrientation[1] +
+                                        eyeOrientation[2] * eyeOrientation[2]);
+            if (sinHalf > 1e-5f)
+            {
+                float angle = 2.0f * atan2f(sinHalf, eyeOrientation[3]);
+                if (angle > 3.14159265f) angle -= 6.2831853f;
+                const float ax = eyeOrientation[0] / sinHalf;
+                const float ay = eyeOrientation[1] / sinHalf;
+                const float az = eyeOrientation[2] / sinHalf;
+                const float axisVec[3] = {
+                    ax * right[0] + ay * up[0] - az * fwd[0],
+                    ax * right[1] + ay * up[1] - az * fwd[1],
+                    ax * right[2] + ay * up[2] - az * fwd[2]};
+                const float cosA = cosf(angle), sinA = sinf(angle);
+                RotateAboutAxis(fwd, axisVec, cosA, sinA);
+                RotateAboutAxis(up, axisVec, cosA, sinA);
+            }
+        }
+        float eyeFov[4];
+        if (VR_GetEyeFov(eye, eyeFov))
+        {
+            const float halfY = fmaxf(eyeFov[2], -eyeFov[3]);
+            *reinterpret_cast<float*>(cam + 0x28) = Clamp(2.0f * halfY, 0.01f, 3.14f);
+        }
+    }
+
+    // Byte-exact rollback of everything the per-eye transaction can touch,
+    // preserving the final eye's actual post-render last-window flag. Runs in a
+    // __finally so it executes even if a stock render faults mid-transaction.
+    void ReachRestoreScope(
+        uintptr_t workspace, uintptr_t playerView,
+        const unsigned char* savedWorkspace, const unsigned char* savedPv)
+    {
+        const uint8_t finalByte =
+            *reinterpret_cast<uint8_t*>(playerView + kReachLastWindowFlagOffset);
+        memcpy(reinterpret_cast<void*>(workspace), savedWorkspace,
+               kReachRenderScopeSnapshotSize);
+        memcpy(reinterpret_cast<void*>(playerView + kReachPvSnapshotBegin),
+               savedPv, kReachPvSnapshotBytes);
+        *reinterpret_cast<uint8_t*>(playerView + kReachLastWindowFlagOffset) =
+            finalByte;
+    }
+
+    // Returns true only if it fully owned the render (both eyes rendered and
+    // captured); false means the caller must perform one stock render.
+    bool ReachStereoTransaction(uintptr_t playerView, ReachVrRenderAccess& access)
+    {
+        const uintptr_t workspace = g_reachOwnerScope.workspace;
+        unsigned char* compact = reinterpret_cast<unsigned char*>(workspace);
+
+        ReachCompactCameraObservation observed{};
+        if (!ValidateReachCompactCamera(compact, kReachCompactCameraBytes, observed))
+            return false;
+
+        alignas(16) unsigned char savedWorkspace[kReachRenderScopeSnapshotSize];
+        alignas(16) unsigned char savedPv[kReachPvSnapshotBytes];
+        alignas(16) unsigned char center[kReachCompactCameraBytes];
+        memcpy(savedWorkspace, reinterpret_cast<void*>(workspace),
+               kReachRenderScopeSnapshotSize);
+        memcpy(savedPv,
+               reinterpret_cast<void*>(playerView + kReachPvSnapshotBegin),
+               kReachPvSnapshotBytes);
+
+        // Head-track the centre camera once per frame (one recenter consume),
+        // then derive both eyes from it.
+        memcpy(center, compact, kReachCompactCameraBytes);
+        ReachApplyHeadLook(center);
+
+        const uint8_t originalLastWindow =
+            *reinterpret_cast<uint8_t*>(playerView + kReachLastWindowFlagOffset);
+        const bool rightFirst = g_config.right_eye_first;
+        bool completed = false;
+        __try
+        {
+            for (uint32_t pass = 0; pass < 2; ++pass)
+            {
+                const ReachStereoPassPolicy policy = SelectReachStereoPassPolicy(
+                    pass, rightFirst, originalLastWindow);
+                if (!policy.valid)
+                    break;
+                // Stamp this eye into both the primary (+0x000) and secondary
+                // render (+0x154) compact cameras, matching stock normal setup
+                // which mirrors both.
+                memcpy(compact, center, kReachCompactCameraBytes);
+                ReachApplyEyeOffset(compact, policy.eye);
+                memcpy(compact + kReachSecondaryCompactOffset, compact,
+                       kReachCompactCameraBytes);
+                if (policy.writeLastWindow)
+                    *reinterpret_cast<uint8_t*>(
+                        playerView + kReachLastWindowFlagOffset) =
+                        policy.lastWindowInput;
+                g_reachOrigPlayerViewRender(playerView);
+                VR_ReachCopyEye(access, policy.eye);
+                if (pass == 0)
+                {
+                    memcpy(reinterpret_cast<void*>(workspace), savedWorkspace,
+                           kReachRenderScopeSnapshotSize);
+                    memcpy(reinterpret_cast<void*>(
+                               playerView + kReachPvSnapshotBegin),
+                           savedPv, kReachPvSnapshotBytes);
+                }
+            }
+            completed = true;
+        }
+        __finally
+        {
+            ReachRestoreScope(workspace, playerView, savedWorkspace, savedPv);
+        }
+        return completed;
+    }
+
+    void __fastcall ReachPlayerViewRenderDetour(uintptr_t playerView)
+    {
+        if (!g_reachCamera.armed.load(std::memory_order_acquire) ||
+            !g_reachOwnerScope.active ||
+            g_reachOwnerScope.playerView != playerView)
+        {
+            g_reachOrigPlayerViewRender(playerView);
+            return;
+        }
+
+        const ReachModuleEpoch epoch{g_reachCamera.base, g_reachCamera.generation};
+        const ReachPreflightToken preflight =
+            ReachRenderCandidate_GetPreflight(epoch);
+        const ReachPreparedFrameToken prepared = VR_ReachPreparedFrame(epoch);
+        ReachVrRenderAccess access{};
+        if (!preflight.Complete() ||
+            !ReachRenderCandidate_IsPreflightCurrent(preflight) ||
+            !prepared.Ready() ||
+            !VR_ReachDisplayReady(epoch) ||
+            !VR_ReachBeginRenderAccess(epoch, prepared, access))
+        {
+            g_reachOrigPlayerViewRender(playerView);
+            return;
+        }
+
+        bool handled = false;
+        __try
+        {
+            handled = ReachStereoTransaction(playerView, access);
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            handled = false;
+        }
+        VR_ReachEndRenderAccess(access);
+        if (!handled)
+            g_reachOrigPlayerViewRender(playerView);
+    }
+
+    uintptr_t __fastcall ReachMainRenderViewDetour(
+        uintptr_t workspace, uintptr_t playerView, uint32_t windowIndex)
+    {
+        const uintptr_t returnAddress =
+            reinterpret_cast<uintptr_t>(_ReturnAddress());
+        const ReachOwnerScope previous = g_reachOwnerScope;
+        g_reachOwnerScope = {};
+        uintptr_t expectedWorkspace = 0;
+        if (g_reachCamera.armed.load(std::memory_order_acquire) &&
+            windowIndex == 0 &&
+            ClassifyReachOuterRenderCaller(
+                g_reachCamera.base, kReachRetailImageSize, returnAddress) ==
+                ReachOuterRenderCaller::NormalPlayer &&
+            ReachAddressFromRva(g_reachCamera.base, kReachRetailImageSize,
+                                kReachDefaultWorkspaceRva, expectedWorkspace) &&
+            workspace == expectedWorkspace)
+        {
+            g_reachOwnerScope.active = true;
+            g_reachOwnerScope.workspace = workspace;
+            g_reachOwnerScope.playerView = playerView;
+        }
+        const uintptr_t result =
+            g_reachOrigMainRenderView(workspace, playerView, windowIndex);
+        g_reachOwnerScope = previous;
+        return result;
+    }
+
+    bool RemoveReachCameraCore()
+    {
+        g_reachCamera.armed.store(false, std::memory_order_release);
+        if (g_reachCamera.outerTarget)
+        {
+            MH_DisableHook(g_reachCamera.outerTarget);
+            MH_RemoveHook(g_reachCamera.outerTarget);
+        }
+        if (g_reachCamera.innerTarget)
+        {
+            MH_DisableHook(g_reachCamera.innerTarget);
+            MH_RemoveHook(g_reachCamera.innerTarget);
+        }
+        if (g_reachCamera.moduleReference)
+            FreeLibrary(g_reachCamera.moduleReference);
+        g_reachCamera.innerTarget = nullptr;
+        g_reachCamera.outerTarget = nullptr;
+        g_reachCamera.moduleReference = nullptr;
+        g_reachCamera.base = 0;
+        g_reachCamera.size = 0;
+        g_reachCamera.generation = 0;
+        g_reachCamera.installedAtMs = 0;
+        g_reachOrigPlayerViewRender = nullptr;
+        g_reachOrigMainRenderView = nullptr;
+        g_reachCamera.installed.store(false, std::memory_order_release);
+        LOG("Reach camera core removed; stock Reach owns the title");
+        return true;
+    }
+
+    bool InstallReachCameraCore(uintptr_t base, size_t size, uint32_t generation)
+    {
+        if (g_reachCamera.installed.load(std::memory_order_acquire))
+            return true;
+        if (!base || !generation || size != kReachRetailImageSize)
+            return false;
+        if (kReachPlayerViewRenderRva >= size || kReachMainRenderViewRva >= size)
+            return false;
+
+        const ReachModuleEpoch epoch{base, generation};
+        const ReachPreflightToken preflight =
+            ReachRenderCandidate_GetPreflight(epoch);
+        if (!preflight.Complete() ||
+            !ReachRenderCandidate_IsPreflightCurrent(preflight))
+            return false;
+
+        HMODULE moduleReference = nullptr;
+        if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
+                                reinterpret_cast<LPCWSTR>(base),
+                                &moduleReference) ||
+            reinterpret_cast<uintptr_t>(moduleReference) != base)
+        {
+            if (moduleReference)
+                FreeLibrary(moduleReference);
+            LOG("Reach camera install: could not retain the exact title module");
+            return false;
+        }
+
+        void* inner = reinterpret_cast<void*>(base + kReachPlayerViewRenderRva);
+        void* outer = reinterpret_cast<void*>(base + kReachMainRenderViewRva);
+        if (MH_CreateHook(inner,
+                reinterpret_cast<void*>(&ReachPlayerViewRenderDetour),
+                reinterpret_cast<void**>(&g_reachOrigPlayerViewRender)) != MH_OK ||
+            MH_CreateHook(outer,
+                reinterpret_cast<void*>(&ReachMainRenderViewDetour),
+                reinterpret_cast<void**>(&g_reachOrigMainRenderView)) != MH_OK ||
+            MH_EnableHook(inner) != MH_OK ||
+            MH_EnableHook(outer) != MH_OK)
+        {
+            MH_DisableHook(inner);
+            MH_DisableHook(outer);
+            MH_RemoveHook(inner);
+            MH_RemoveHook(outer);
+            FreeLibrary(moduleReference);
+            g_reachOrigPlayerViewRender = nullptr;
+            g_reachOrigMainRenderView = nullptr;
+            LOG("Reach camera install: MinHook failed; stock Reach remains active");
+            return false;
+        }
+
+        g_reachCamera.base = base;
+        g_reachCamera.size = size;
+        g_reachCamera.generation = generation;
+        g_reachCamera.moduleReference = moduleReference;
+        g_reachCamera.innerTarget = inner;
+        g_reachCamera.outerTarget = outer;
+        g_reachCamera.installedAtMs = GetTickCount64();
+        g_reachCamera.armed.store(false, std::memory_order_release);
+        g_reachCamera.installed.store(true, std::memory_order_release);
+        g_needRecenter.store(true, std::memory_order_release);
+        LOG("Reach camera core installed: inner player_view_render + outer "
+            "main_render_view hooked; waiting one-second fresh-camera interval "
+            "before arming per-eye stereo");
+        return true;
+    }
+
+    // Called from the 50 ms title worker's Reach block. Self-contained: it never
+    // touches the Halo 3 or ODST state machines.
+    void ReachCameraCore_Poll(
+        uintptr_t base, size_t size, uint32_t generation, bool soleReachTitle)
+    {
+        const bool installed =
+            g_reachCamera.installed.load(std::memory_order_acquire);
+        if (!soleReachTitle || !base || size != kReachRetailImageSize)
+        {
+            if (installed)
+                RemoveReachCameraCore();
+            return;
+        }
+        if (installed &&
+            (base != g_reachCamera.base || generation != g_reachCamera.generation))
+        {
+            RemoveReachCameraCore();
+            return;
+        }
+
+        const ReachModuleEpoch epoch{base, generation};
+        const ReachPreflightToken preflight =
+            ReachRenderCandidate_GetPreflight(epoch);
+        const bool ready = preflight.Complete() &&
+            ReachRenderCandidate_IsPreflightCurrent(preflight) &&
+            VR_ReachDisplayReady(epoch);
+
+        if (!installed)
+        {
+            if (ready)
+                InstallReachCameraCore(base, size, generation);
+            return;
+        }
+        if (!g_reachCamera.armed.load(std::memory_order_acquire) && ready &&
+            GetTickCount64() - g_reachCamera.installedAtMs >=
+                kReachRenderSafetyIntervalMs)
+        {
+            g_reachCamera.armed.store(true, std::memory_order_release);
+            LOG("Reach camera core armed: per-eye stereo transaction is live "
+                "(fail-open to stock on any unmet precondition)");
+        }
+    }
+#endif
+
     DWORD WINAPI WaitThread(LPVOID)
     {
         // The XInput hook is wanted as soon as MCC loads an xinput DLL (so the
@@ -9346,6 +9827,11 @@ namespace
                     reachBase, reachSize, reachGeneration,
                     haveReachRange);
                 VR_ReachRenderCandidate_ColdPoll();
+                // Install/arm/remove the permanent Reach per-eye camera core.
+                // Fail-open: it never installs until the loaded-image preflight
+                // and VR eye-capture proof pass, and never touches Halo 3/ODST.
+                ReachCameraCore_Poll(
+                    reachBase, reachSize, reachGeneration, haveReachRange);
             }
 #endif
             // Snapshot resolution is deliberately side-effect free so render
@@ -10108,6 +10594,40 @@ void Game_AutoVrTick()
         }
         odstFreshDebounce.Reset();
         InvalidateHudLayoutProfile(HudLayoutProfile::Halo3ODST);
+    }
+#endif
+
+#if HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE
+    if (TitleAdapter_GetActiveTitle() == GameTitle::HaloReach)
+    {
+        // Reach owns head tracking + stereo whenever its per-eye camera core is
+        // armed. Enabling them lets the present path composite the two eye
+        // caches the inner detour captured, and publishing Gameplay drives the
+        // shared head-relative movement and haptics. Disarm mirrors ODST: drop
+        // head tracking and detach so nothing composites stale eyes.
+        if (g_reachCamera.armed.load(std::memory_order_acquire))
+        {
+            if (!g_enabled.load(std::memory_order_relaxed) ||
+                !VR_IsStereoEnabled())
+            {
+                g_enabled.store(true, std::memory_order_release);
+                if (!VR_IsStereoEnabled())
+                    VR_ToggleStereo();
+                LOG("Reach camera bring-up: head tracking, stereo, and 6DOF ON");
+            }
+            const uint32_t reachGen =
+                TitleAdapter_GetGeneration(GameTitle::HaloReach);
+            if (reachGen)
+                TitleAdapter_PublishMode(
+                    GameTitle::HaloReach, reachGen, RuntimeMode::Gameplay);
+        }
+        else if (g_enabled.load(std::memory_order_relaxed) ||
+                 VR_IsStereoEnabled())
+        {
+            g_enabled.store(false, std::memory_order_release);
+            VR_DetachGamePresentation();
+        }
+        return;
     }
 #endif
 

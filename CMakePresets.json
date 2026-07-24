@@ -9,52 +9,17 @@
     {
       "name": "release",
       "displayName": "Halo MCC VR cumulative Release",
-      "description": "x64 accepted Halo 3 + ODST build with Reach kept stock",
+      "description": "x64 cumulative build: Halo 3 + ODST + Halo: Reach, all permanent and fail-open",
       "generator": "Visual Studio 17 2022",
       "architecture": "x64",
       "binaryDir": "${sourceDir}/out/build/release",
       "cacheVariables": {
         "BUILD_TESTING": "ON",
         "FETCHCONTENT_BASE_DIR": "${sourceDir}/out/deps",
-        "HALOMCCVR_EXPERIMENTAL_ODST_BRINGUP": "ON",
-        "HALOMCCVR_EXPERIMENTAL_REACH_BRINGUP": "OFF",
-        "HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE": "OFF"
-      }
-    },
-    {
-      "name": "release-reach-private",
-      "displayName": "Halo MCC VR private Reach controller-input Release",
-      "description": "x64 Halo 3 + ODST build plus Reach virtual-controller admission",
-      "generator": "Visual Studio 17 2022",
-      "architecture": "x64",
-      "binaryDir": "${sourceDir}/out/build/release-reach-private",
-      "cacheVariables": {
-        "BUILD_TESTING": "ON",
-        "FETCHCONTENT_BASE_DIR": "${sourceDir}/out/deps/reach-private",
         "FETCHCONTENT_SOURCE_DIR_OPENXR": "${sourceDir}/out/deps/openxr-src",
         "FETCHCONTENT_SOURCE_DIR_MINHOOK": "${sourceDir}/out/deps/minhook-src",
         "FETCHCONTENT_SOURCE_DIR_IMGUI": "${sourceDir}/out/deps/imgui-src",
-        "HALOMCCVR_EXPERIMENTAL_ODST_BRINGUP": "ON",
-        "HALOMCCVR_EXPERIMENTAL_REACH_BRINGUP": "ON",
-        "HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE": "OFF"
-      }
-    },
-    {
-      "name": "release-reach-render-disabled",
-      "displayName": "Halo MCC VR hard-off Reach render candidate",
-      "description": "x64 Halo 3 + ODST + Reach controller build with cold proof/readiness and no Reach runtime hooks",
-      "generator": "Visual Studio 17 2022",
-      "architecture": "x64",
-      "binaryDir": "${sourceDir}/out/build/release-reach-render-disabled",
-      "cacheVariables": {
-        "BUILD_TESTING": "ON",
-        "FETCHCONTENT_BASE_DIR": "${sourceDir}/out/deps/reach-render-disabled",
-        "FETCHCONTENT_SOURCE_DIR_OPENXR": "${sourceDir}/out/deps/openxr-src",
-        "FETCHCONTENT_SOURCE_DIR_MINHOOK": "${sourceDir}/out/deps/minhook-src",
-        "FETCHCONTENT_SOURCE_DIR_IMGUI": "${sourceDir}/out/deps/imgui-src",
-        "HALOMCCVR_EXPERIMENTAL_ODST_BRINGUP": "ON",
-        "HALOMCCVR_EXPERIMENTAL_REACH_BRINGUP": "ON",
-        "HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE": "ON"
+        "HALOMCCVR_EXPERIMENTAL_ODST_BRINGUP": "ON"
       }
     }
   ],
@@ -63,38 +28,12 @@
       "name": "release",
       "configurePreset": "release",
       "configuration": "Release"
-    },
-    {
-      "name": "release-reach-private",
-      "configurePreset": "release-reach-private",
-      "configuration": "Release"
-    },
-    {
-      "name": "release-reach-render-disabled",
-      "configurePreset": "release-reach-render-disabled",
-      "configuration": "Release"
     }
   ],
   "testPresets": [
     {
       "name": "release",
       "configurePreset": "release",
-      "configuration": "Release",
-      "output": {
-        "outputOnFailure": true
-      }
-    },
-    {
-      "name": "release-reach-private",
-      "configurePreset": "release-reach-private",
-      "configuration": "Release",
-      "output": {
-        "outputOnFailure": true
-      }
-    },
-    {
-      "name": "release-reach-render-disabled",
-      "configurePreset": "release-reach-render-disabled",
       "configuration": "Release",
       "output": {
         "outputOnFailure": true

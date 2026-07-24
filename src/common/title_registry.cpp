@@ -27,6 +27,18 @@ namespace
         TitleCapability_Haptics;
     constexpr uint32_t kHalo3AdmissionCapabilities =
         TitleCapability_ControllerInput;
+    // Reach 3D + motion core: stereo, head tracking, controller aim,
+    // head-relative movement, and haptics all ride the title-agnostic path once
+    // Reach's proven camera hook owns the frame. HUD and arm IK are deliberately
+    // withheld until Reach-specific HUD-anchor and skeleton offsets are proven,
+    // exactly as ODST's first camera-core milestone withheld them.
+    constexpr uint32_t kReachCapabilities =
+        TitleCapability_Stereo |
+        TitleCapability_ControllerAim |
+        TitleCapability_RuntimeModes |
+        TitleCapability_RoomScale |
+        TitleCapability_ControllerInput |
+        TitleCapability_Haptics;
 #if HALOMCCVR_EXPERIMENTAL_ODST_BRINGUP
     constexpr uint32_t kOdstAdmissionCapabilities =
         TitleCapability_ControllerInput;
@@ -45,8 +57,8 @@ namespace
           kHalo3Capabilities, kHalo3AdmissionCapabilities },
         { GameTitle::Halo3ODST, L"halo3odst.dll", "Halo 3: ODST", false,
           TitleCapability_None, kOdstAdmissionCapabilities },
-        { GameTitle::HaloReach, L"haloreach.dll", "Halo: Reach", false,
-          TitleCapability_None, kReachAdmissionCapabilities },
+        { GameTitle::HaloReach, L"haloreach.dll", "Halo: Reach", true,
+          kReachCapabilities, kReachAdmissionCapabilities },
         { GameTitle::Halo4, L"halo4.dll", "Halo 4", false,
           TitleCapability_None, TitleCapability_None },
         { GameTitle::HaloCE, L"halo1.dll", "Halo: CE Anniversary", false,
@@ -113,6 +125,8 @@ TitleHookPlan TitleRegistry_HookPlan(GameTitle title)
 #else
         return TitleHookPlan::None;
 #endif
+    case GameTitle::HaloReach:
+        return TitleHookPlan::ReachCameraCore;
     default:
         return TitleHookPlan::None;
     }

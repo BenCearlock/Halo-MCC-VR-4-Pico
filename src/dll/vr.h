@@ -4,6 +4,20 @@
 
 struct IDXGISwapChain;
 
+#if HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE
+#include "../common/reach_render_logic.h"
+
+struct ReachVrRenderAccess
+{
+    ReachDisplaySurfaceProof proof{};
+    ID3D11Texture2D* source = nullptr;
+    ID3D11Texture2D* eyes[2]{};
+    ID3D11DeviceContext* context = nullptr;
+    uint64_t preparedSerial = 0;
+    bool active = false;
+};
+#endif
+
 // Called once on the DLL's background init thread. Creates the OpenXR instance
 // and finds the headset (slow), so the render thread never blocks on it.
 void VR_InitInstance();
@@ -19,6 +33,17 @@ void VR_AfterResizeBuffers(IDXGISwapChain* swapchain);
 // Worker-thread-only Reach display/resource proof. The private candidate calls
 // this after its loaded-image proof; normal builds never reference it.
 void VR_ReachRenderCandidate_ColdPoll();
+#if HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE
+ReachPreparedFrameToken VR_ReachPreparedFrame(
+    const ReachModuleEpoch& epoch);
+bool VR_ReachDisplayReady(const ReachModuleEpoch& epoch);
+bool VR_ReachBeginRenderAccess(
+    const ReachModuleEpoch& epoch,
+    const ReachPreparedFrameToken& prepared,
+    ReachVrRenderAccess& access);
+bool VR_ReachCopyEye(ReachVrRenderAccess& access, int eye);
+void VR_ReachEndRenderAccess(ReachVrRenderAccess& access);
+#endif
 
 // Timing beacon from Halo's camera-copy hook. The first call after
 // VR_AfterPresent proves how quickly the freshly predicted pose reaches the
