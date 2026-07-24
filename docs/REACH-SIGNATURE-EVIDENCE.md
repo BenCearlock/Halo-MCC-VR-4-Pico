@@ -26,6 +26,17 @@ aim camera instead of the headset. The log, manifest, build identity, and result
 are preserved under
 `out/test-runs/f953bbe-reach-stereo-pass-culling-fail-20260724-102643Z`.
 
+Source `065f62a0` moved visibility ownership to the tracked head, but its exact
+headset test went black immediately after Reach stereo armed. The live log
+showed `stereo on` with `focused shouldRender=1 layers=0`: neither eye copy had
+completed. The candidate incorrectly rejected every normal outer transaction
+because it required a nonnegative pre-push camera-stack depth. The pinned
+retail image initializes the empty stack to `-1`; the exact push increments it
+to depth/slot zero. The failure is preserved under
+`out/test-runs/065f62a-reach-head-cull-black-20260724-114200Z`. The forward
+correction accepts only pre-push depths `-1..2` and still requires the exact
+post-push relation and bounds described below.
+
 The remaining defect is now pinned to an exact pre-inner stage. Retail
 `main_render_view` performs its visibility work before calling
 `player_view_render`; its cluster lookup at `0x0C3320 -> 0x273458` explicitly
@@ -350,13 +361,15 @@ continuation at `0x0C33C9`, pops the camera scope at
 CFG has no return that bypasses the paired pop and clear after the set.
 
 The push is a bounded stack, not an unconditional assignment. Retail depth is
-RVA `0x00B43ABC`, pointer slots begin at RVA `0x00C878A8`, and valid pushed
-depths are 0 through 3. `0x251C08` silently skips the push when the prior depth
-is already at least 3. The exact normal call supplies callback
+RVA `0x00B43ABC`, is initialized to the empty sentinel `-1`, and pointer slots
+begin at RVA `0x00C878A8`. Valid pre-push depths are `-1` through `2`; the push
+increments them to valid current depths/slots 0 through 3. `0x251C08` silently
+skips the push when the prior depth is already at least 3. The exact normal call supplies callback
 `module+0x0026BFD4`, which a successful push stores at workspace `+0x2A8`.
 The outer token must capture the pre-push depth. Production inner admission
-must require the active-view global to equal the candidate `player_view*`,
-current depth to equal captured pre-push depth plus one and remain at most 3,
+must require the pre-push depth to remain within `-1..2`, the active-view global
+to equal the candidate `player_view*`, current depth to equal captured pre-push
+depth plus one and remain within `0..3`,
 the new top slot to point to the admitted normal workspace, and its callback
 qword to equal `module+0x0026BFD4`. This detects a silently skipped push even
 if a prior top slot happens to alias the workspace. Overflow, nested-owner,

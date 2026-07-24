@@ -9996,7 +9996,7 @@ namespace
         if (g_reachNestedOuterSuppressed ||
             !scope.active || !base || scope.playerView != playerView ||
             !scope.renderAccess || !scope.renderAccess->active ||
-            scope.cameraStackDepthBefore < 0 ||
+            scope.cameraStackDepthBefore < -1 ||
             scope.cameraStackDepthBefore >= 3)
         {
             return false;
@@ -10190,7 +10190,7 @@ namespace
                 workspace + kReachSecondaryDerivedOffset);
         ReachCompactCameraObservation observedPrimary{};
         ReachCompactCameraObservation observedSecondary{};
-        if (stackDepthBefore < 0 || stackDepthBefore >= 3 ||
+        if (stackDepthBefore < -1 || stackDepthBefore >= 3 ||
             *reinterpret_cast<const uintptr_t*>(
                 epoch.moduleBase + kReachRenderCameraOwnerRva) !=
                     expectedOwner ||

@@ -90,6 +90,28 @@ quiescence before releasing hooks or the retained Reach module.
 The stock pre-head direction remains separate and is not claimed as Reach
 projectile or controller aim.
 
+### Unaccepted Reach head-cull black-screen result - 2026-07-24
+
+This result is evidence only and does not advance the accepted pointer above.
+
+| Identity | Value |
+| --- | --- |
+| Tested runtime source | `065f62a05a5b7ed4d733ac2ebfd30b5093190c73` |
+| Candidate package | `out/candidates/065f62a-reach-camera-20260724-113854197Z` |
+| `halo3xr.dll` SHA-256 | `12C6E10BD94B4022A57A697F5A9632786E8FF95AFEB0D139DCE632656038031C` |
+| Preserved failure evidence | `out/test-runs/065f62a-reach-head-cull-black-20260724-114200Z` |
+| Headset result | Reach became black immediately after stereo armed; the focused OpenXR session submitted zero layers |
+
+The exact installed hash matched the candidate. A fresh Reach re-entry
+reproduced `stereo on` followed by `focused shouldRender=1 layers=0`, with no
+OpenXR frame-order or display-resource failure. The pinned retail image proves
+the normal camera stack is empty at depth `-1`, and its push changes `-1` to
+slot/depth `0`. Source `065f62a` incorrectly rejected every negative pre-push
+depth in both its outer and propagated inner gates, so neither eye render/copy
+could run. The forward correction changes only that proven admission bound to
+`-1..2`, retains exact current-depth `pre+1` within `0..3`, and preserves the
+head-owned visibility work. It remains headset-pending.
+
 ### Reach stock runtime observation - 2026-07-23
 
 The external read-only Reach observer from source

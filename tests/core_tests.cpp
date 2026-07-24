@@ -656,7 +656,9 @@ int main()
         outer.workspace = moduleBase + kReachDefaultWorkspaceRva;
         outer.playerView = moduleBase + kReachPlayerViewArrayRva;
         outer.playerWindowIndex = 0;
-        outer.cameraStackDepthBefore = 0;
+        // Retail initializes the camera-stack depth to -1. The normal
+        // top-level push increments that sentinel to slot/depth zero.
+        outer.cameraStackDepthBefore = -1;
         outer.nowMs = 1101;
         const ReachModuleEpoch epoch{moduleBase, 9};
         const ReachRenderCandidateProof outerProof =
@@ -726,6 +728,7 @@ int main()
               outerRejects([](auto& v) { v.nowMs = 0; }) &&
               outerRejects([](auto& v) { ++v.moduleBase; }) &&
               outerRejects([](auto& v) { ++v.playerWindowIndex; }) &&
+              outerRejects([](auto& v) { v.cameraStackDepthBefore = -2; }) &&
               outerRejects([](auto& v) { v.cameraStackDepthBefore = 3; }) &&
               outerRejects([](auto& v) { ++v.workspace; }) &&
               outerRejects([](auto& v) { ++v.playerView; }) &&
@@ -755,7 +758,7 @@ int main()
         inner.returnAddress = moduleBase + kReachPlayerViewRenderReturnRva;
         inner.playerView = outer.playerView;
         inner.activeView = outer.playerView;
-        inner.cameraStackDepth = 1;
+        inner.cameraStackDepth = 0;
         inner.topWorkspace = outer.workspace;
         inner.workspaceCallback = moduleBase + kReachCameraStackCallbackRva;
         inner.renderCameraOwner =

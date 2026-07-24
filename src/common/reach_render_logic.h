@@ -1385,7 +1385,7 @@ inline bool ReachNormalOuterInputMatches(
         input.moduleBase != epoch.moduleBase ||
         input.moduleSize != kReachRetailImageSize ||
         input.playerWindowIndex != 0 ||
-        input.cameraStackDepthBefore < 0 ||
+        input.cameraStackDepthBefore < -1 ||
         input.cameraStackDepthBefore >= 3 ||
         ClassifyReachOuterRenderCaller(
             input.moduleBase, input.moduleSize, input.returnAddress) !=
@@ -1541,7 +1541,7 @@ inline bool ReachInnerScopeMatches(
 {
     if (!owner.IsCurrent(token) ||
         !ReachModuleEpochValid(token.Epoch()) || !token.Workspace() ||
-        !token.PlayerView() || token.CameraStackDepthBefore() < 0 ||
+        !token.PlayerView() || token.CameraStackDepthBefore() < -1 ||
         token.CameraStackDepthBefore() >= 3 ||
         !input.preparedFrame.Ready() || !input.directCopy.Ready() ||
         !ReachSameModuleEpoch(

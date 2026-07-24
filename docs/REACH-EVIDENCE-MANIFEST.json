@@ -122,6 +122,9 @@
         "camera_stack_depth_rva": "0x00B43ABC",
         "camera_stack_pointer_slots_rva": "0x00C878A8",
         "camera_stack_callback_rva": "0x0026BFD4",
+        "empty_pre_push_depth": -1,
+        "accepted_pre_push_depth_min": -1,
+        "accepted_pre_push_depth_max": 2,
         "pushed_depth_min": 0,
         "pushed_depth_max": 3,
         "push_skips_when_prior_depth_at_least": 3,
@@ -350,7 +353,7 @@
       ],
       "loaded_image_preflight_compiled": true,
       "display_copy_readiness_compiled": true,
-      "runtime_result": "f953bbe exact headset test passed 3D/projection but failed pre-inner culling ownership; current forward fix is untested",
+      "runtime_result": "f953bbe exact headset test passed 3D/projection but failed pre-inner culling ownership; 065f62a then failed black because it incorrectly rejected the proven -1 empty pre-push depth; the forward -1-to-0 admission correction is untested",
       "title_hook_plan": "REACH_CAMERA_CORE",
       "runtime_capabilities": [
         "STEREO",
