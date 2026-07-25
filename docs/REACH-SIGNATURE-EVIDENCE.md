@@ -645,6 +645,59 @@ the result is primary slot `0`. Slot `1`, `-1`, any inactive runtime state, and
 all nonmatching datums retain the stock origin path. Static proof does not turn
 this pending candidate into a headset-accepted build.
 
+### Shared authored `primary_trigger` transaction
+
+The centimeter-offset experiments are rejected. HREK proves that the official
+assault-rifle `primary_trigger` is one marker on node `0`, has local translation
+`(0.233427, 1.90735e-08, 0.0512855)`, scale `0.01`, direction `+X`, and an
+effectively identity rotation. The projectile transaction's firing-frame
+`+0x9F0` value is already world space, so applying that authored local vector
+directly to it mixes coordinate spaces and can put the origin behind the
+player.
+
+Pinned retail function `0x11BFB0`-`0x11C00E` is the final first-person marker
+composer. It reads the marker node index at record `+0x02`, calls the proven
+first-person marker-query function `0x120FDC` at `0x11BFDC`, then passes the
+returned interpolated node matrix and authored marker matrix at record `+0x0C`
+to the matrix composer `0xA90D8` at `0x11BFED`. Its relocation-tolerant entry
+AOB matches once at the expected RVA, and installation verifies both `rel32`
+edges before any hook is created.
+
+Candidate `2e1cbcba330dd9bc91c50db984680ae189905dca` is rejected. Its exact
+installed DLL hash was
+`6DC481CBCB7A2BF9CB4055C22D292C7D7539AC983D1EA52ED77F1BDC9B3F3C3F`.
+The headset showed both muzzle flash and projectile remained displaced, while
+the log proved the composer installed but never published a `primary_trigger`
+world matrix and never wrote a firing frame. It does not advance the accepted
+pointer and was reverted by `984aa18` before the corrected candidate.
+
+The static control flow also exposes the muzzle error. The stock composer calls
+`first_person_weapon_get_marker`, which calls the already-hooked interpolation
+function. When that nested interpolation is inside the bounded render scope, it
+has already moved the live marker graph exactly once before the stock query
+copies its requested node. The old marker-query detour then applied the same
+rigid delta again. Some effect queries occur after that scope and still require
+the published transform, so removing the detour entirely would leave those
+stock. The corrected query snapshots a thread-local source serial before its
+stock call. If the nested interpolation advances it, the returned marker is
+accepted untouched; otherwise, and only for the exact local slot-0 datum, one
+generation-matched published delta is applied. The two branches are exclusive.
+
+The corrected pending candidate hooks the serial-gated query and final
+composer. The bounded interpolation publishes its verified record delta and
+center root. The query advances a second thread-local corrected serial after
+either nested ownership or the exclusive fallback succeeds. The composer
+accepts a result only when its own stock call caused that corrected serial to
+advance, which proves its result was corrected exactly once even when the outer
+render scope is no longer armed. Only an exact HREK assault-rifle `primary_trigger` record for
+output user `0`, first-person slot `0`, and the current full weapon datum is
+published. Its world translation is copied into the same datum's native
+firing-frame marker-origin slot immediately before the stock weapon-origin
+branch consumes it. Direction, weapon tags, shared game data, other weapons,
+and nonlocal firing transactions remain unchanged. This remains pending
+exact-DLL headset validation and does not advance the accepted pointer. The
+user explicitly approved this serial-gated once-only marker-query write.
+
 ## Camera-derived frustum-bounds proof
 
 The original `viewport` hypothesis is now statically identified as the

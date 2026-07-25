@@ -48,6 +48,8 @@ $forbidden = [ordered]@{
         'ReachFpProjectileOrigin[\s\S]{0,240}kReachBarrelProjectileFiresInMarkerDirectionMask'
     'generic projectile-function entry detour' =
         'MH_CreateHook\(\s*reinterpret_cast<void\*>\(base\s*\+\s*kReachProjectileFireRva\)'
+    'marker composer limited to the expired outer pair scope' =
+        'ComposeBoneMatrices\(\s*g_reachFpPairScope\.targets\.centerRoot,\s*markerRecordSpace,markerWorld\)'
 }
 foreach ($entry in $forbidden.GetEnumerator()) {
     if (($game + "`n" + $logic) -match $entry.Value) {
@@ -136,6 +138,30 @@ $requiredGame = [ordered]@{
         'FpExplicitPoseTargets\s+targets=context\.targets;\s*targets\.centerRoot\.scale=root->scale;\s*BoneMatrix\s+alignedRight\{\};\s*if\s*\(!ReachAlignRightTargetToAuthoredBarrel\(\s*targets\.rightWrist'
     'Reach native projectile-origin decision target lifecycle' =
         'g_reachCamera\.fpProjectileOriginTarget'
+    'Reach final authored marker-composer target lifecycle' =
+        'g_reachCamera\.fpMarkerComposeTarget'
+    'Reach HREK-exact assault-rifle primary-trigger admission' =
+        'ReachFpMarkerCompose[\s\S]*?ReachIsHrekAssaultRiflePrimaryTrigger\(markerRecord\)'
+    'Reach marker composer calls exact marker-query function' =
+        'ReachVerifyRel32Call\(\s*base,kReachFpMarkerComposeQueryCallRva,\s*kReachFpMarkerQueryRva\)'
+    'Reach marker composer calls exact matrix-compose function' =
+        'ReachVerifyRel32Call\(\s*base,kReachFpMarkerComposeMatrixCallRva,\s*kReachFpMarkerMatrixComposeRva\)'
+    'Reach shared marker transform published by the exact nested interpolation' =
+        'ReachPublishMarkerSharedTransform\(\s*context\.generation,markerTargets\.centerRoot,\s*context\.untouchedLive\[context\.layout\.rightWristSource\],\s*alignedRight,markerTargets\.rightScale\)'
+    'Reach query snapshots nested source ownership before stock execution' =
+        'sourceSerialBefore=g_reachFpMarkerSourceSerial'
+    'Reach query uses nested ownership or one fallback, never both' =
+        'if\s*\(g_reachFpMarkerSourceSerial!=sourceSerialBefore\)[\s\S]*?else if\s*\(ReachApplyPublishedMarkerQueryTransform\(output\)\)'
+    'Reach composer requires this query correction serial' =
+        'g_reachFpMarkerQueryCorrectedSerial!=correctedSerialBefore'
+    'Reach composed marker loads the published center root' =
+        'LoadAtomicBoneMatrix\(\s*g_reachFpMarkerSharedTransform\.centerRoot,centerRoot\)'
+    'Reach composed marker converted through the published center root' =
+        'ComposeBoneMatrices\(\s*centerRoot,markerRecordSpace,markerWorld\)'
+    'Reach composed marker weapon datum publication' =
+        'g_reachFpPrimaryTriggerWorld\.weaponDatum\.store\(\s*weaponDatum'
+    'Reach composed world translation enters native firing frame' =
+        'memcpy\(frame\+barrelOffset\+0x9F0,\s*markerWorld\.translation'
     'Reach exact output-user-0 primary FP weapon gate' =
         'firstPersonSlot\s*=\s*slotForDatum\(0,\s*weaponDatum\)'
     'Reach projectile-origin callback quiescence wrapper' =
@@ -148,6 +174,12 @@ $requiredGame = [ordered]@{
         'ReachColdVerifyFpProjectileOriginTrampoline'
     'Reach projectile-origin hook enabled last' =
         'MH_EnableHook\(fpProjectileOrigin\)'
+    'Reach marker-composer hook enabled' =
+        'MH_EnableHook\(fpMarkerCompose\)'
+    'Reach serial-gated marker-query hook enabled' =
+        'MH_EnableHook\(fpMarkerQuery\)'
+    'Reach serial-gated marker-query target lifecycle' =
+        'g_reachCamera\.fpMarkerQueryTarget'
     'Reach projectile-origin relay ingress scan' =
         'instruction\s*>=\s*projectileRelay\s*&&\s*instruction\s*<\s*projectileRelayEnd'
     'Reach projectile-origin relay released after hook removal' =
@@ -187,6 +219,14 @@ $requiredLogic = [ordered]@{
         'controllerAimActive\s*&&\s*firstPersonWeaponSlot\s*==\s*0'
     'Reach weapon-origin and marker-direction bits remain distinct' =
         'kReachBarrelProjectileFiresInMarkerDirectionMask'
+    'Reach final marker-composer RVA' =
+        'kReachFpMarkerComposeRva\s*=\s*0x0011BFB0'
+    'Reach marker-composer marker-query call edge' =
+        'kReachFpMarkerComposeQueryCallRva\s*=\s*0x0011BFDC'
+    'Reach marker-composer matrix-compose call edge' =
+        'kReachFpMarkerComposeMatrixCallRva\s*=\s*0x0011BFED'
+    'Reach marker matrix-compose target' =
+        'kReachFpMarkerMatrixComposeRva\s*=\s*0x000A90D8'
 }
 foreach ($entry in $requiredLogic.GetEnumerator()) {
     if ($logic -notmatch $entry.Value) {
@@ -209,4 +249,4 @@ if ($logic -notmatch 'kReachFpCameraRebuildAob' -or
     throw 'Reach FP parity gate missing: exact Reach camera rebuild/upload proof anchors.'
 }
 
-Write-Host 'Reach FP Halo 3/ODST palette + native weapon-IK + world-projection camera + local native projectile-origin parity gate passed.'
+Write-Host 'Reach FP Halo 3/ODST palette + native weapon-IK + world-projection camera + composed primary-trigger projectile-origin parity gate passed.'
