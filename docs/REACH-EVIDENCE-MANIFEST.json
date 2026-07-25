@@ -754,6 +754,20 @@
         "weapon_datum_offset": "0x0000003C",
         "primary_slot_index": 0,
         "not_found_result": -1
+      },
+      "first_person_marker_composer": {
+        "function_rva": "0x0011BFB0",
+        "function_end_rva_exclusive": "0x0011C00E",
+        "entry_aob": "48 89 5C 24 08 57 48 83 EC 60 48 8B DA 45 33 D2 0F B7 52 02 45 32 DB 83 C8 FF 49 8B F8 66 3B C2 74 26 39 41 3C 74 21 4C 8D 44 24 20 E8 ?? ?? ?? ?? 48 8D 53 0C 4C 8B C7 48 8D 4C 24 20 E8 ?? ?? ?? ??",
+        "static_executable_match_count": 1,
+        "abi": "BoneMatrix* __fastcall(void* first_person_weapon,const marker_record* marker,BoneMatrix* output,bool first_person)",
+        "marker_node_index_offset": "0x02",
+        "authored_marker_matrix_offset": "0x0C",
+        "marker_query_call_rva": "0x0011BFDC",
+        "marker_query_target_rva": "0x00120FDC",
+        "matrix_compose_call_rva": "0x0011BFED",
+        "matrix_compose_target_rva": "0x000A90D8",
+        "result_semantics": "final record-space marker matrix after interpolated first-person node plus authored local marker composition"
       }
     },
     "hrek": {
@@ -775,7 +789,22 @@
       "first_person_weapon_slot_for_datum_rva": "0x008CEED0",
       "official_assault_rifle_barrel_flags": "empty",
       "official_assault_rifle_marker": "primary_trigger",
-      "official_assault_rifle_marker_centered_and_forward_axis": "+X"
+      "official_assault_rifle_marker_centered_and_forward_axis": "+X",
+      "official_assault_rifle_primary_trigger": {
+        "weapon_xml": "out/hrek-evidence/assault_rifle.weapon.xml",
+        "render_model_xml": "out/hrek-evidence/assault_rifle.render_model.xml",
+        "marker_group_index": 10,
+        "node_index": 0,
+        "flags": "has node relative direction",
+        "translation": [0.233427, 0.0000000190735, 0.0512855],
+        "quaternion": [0.0, 0.0, 0.000000238419, 1.0],
+        "scale": 0.01,
+        "direction": [1.0, 0.0, 0.0]
+      },
+      "world_marker_builder_rva": "0x00D3B0E0",
+      "world_marker_builder_wrapper_rva": "0x00D47970",
+      "firing_frame_world_origin_offset": "0x1070",
+      "retail_homolog_firing_frame_world_origin_offset": "0x09F0"
     },
     "runtime_scope": {
       "output_user_index": 0,
@@ -784,7 +813,11 @@
       "ai_remote_third_person_and_vehicle_weapons_excluded_by_exact_slot_match": true,
       "shared_weapon_tag_mutation_forbidden": true,
       "marker_direction_flag_mutation_forbidden": true,
-      "stock_player_aim_direction_preserved": true
+      "stock_player_aim_direction_preserved": true,
+      "composed_marker_generation_and_weapon_datum_must_match": true,
+      "composed_marker_world_translation_written_to_local_slot0_firing_frame": true,
+      "centimeter_constants_removed": true,
+      "candidate_status": "PENDING_EXACT_DLL_HEADSET_VALIDATION"
     },
     "static_proof_complete": true,
     "headset_accepted": false,

@@ -645,6 +645,36 @@ the result is primary slot `0`. Slot `1`, `-1`, any inactive runtime state, and
 all nonmatching datums retain the stock origin path. Static proof does not turn
 this pending candidate into a headset-accepted build.
 
+### Shared authored `primary_trigger` transaction
+
+The centimeter-offset experiments are rejected. HREK proves that the official
+assault-rifle `primary_trigger` is one marker on node `0`, has local translation
+`(0.233427, 1.90735e-08, 0.0512855)`, scale `0.01`, direction `+X`, and an
+effectively identity rotation. The projectile transaction's firing-frame
+`+0x9F0` value is already world space, so applying that authored local vector
+directly to it mixes coordinate spaces and can put the origin behind the
+player.
+
+Pinned retail function `0x11BFB0`-`0x11C00E` is the final first-person marker
+composer. It reads the marker node index at record `+0x02`, calls the proven
+first-person marker-query function `0x120FDC` at `0x11BFDC`, then passes the
+returned interpolated node matrix and authored marker matrix at record `+0x0C`
+to the matrix composer `0xA90D8` at `0x11BFED`. Its relocation-tolerant entry
+AOB matches once at the expected RVA, and installation verifies both `rel32`
+edges before any hook is created.
+
+The approved pending candidate hooks that final composer. After the existing
+controller-owned marker-query transaction has supplied the weapon node, the
+stock composer applies the authored marker. Only an exact HREK assault-rifle
+`primary_trigger` record for output user `0`, first-person slot `0`, and the
+current full weapon datum is admitted. The result is composed through the
+current transaction's verified center root into world space, published with a
+generation and datum, and its translation is copied into the same datum's
+native firing-frame marker-origin slot immediately before the stock
+weapon-origin branch consumes it. Direction, weapon tags, shared game data,
+other weapons, and nonlocal firing transactions remain unchanged. This is
+pending exact-DLL headset validation and does not advance the accepted pointer.
+
 ## Camera-derived frustum-bounds proof
 
 The original `viewport` hypothesis is now statically identified as the
