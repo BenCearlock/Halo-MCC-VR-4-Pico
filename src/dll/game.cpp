@@ -9849,7 +9849,7 @@ namespace
                         const float ll=sqrtf(left[0]*left[0]+left[1]*left[1]+left[2]*left[2]);
                         if (isfinite(fl) && isfinite(ll) && fl>1e-4f && ll>1e-4f)
                             for (int i=0;i<3;++i)
-                                origin[i] += (forward[i]/fl)*(0.11f*kReachWorldUnitsPerMeter) + (left[i]/ll)*(0.10f*kReachWorldUnitsPerMeter);
+                                origin[i] += (forward[i]/fl)*(0.06f*kReachWorldUnitsPerMeter) + (left[i]/ll)*(0.15f*kReachWorldUnitsPerMeter);
                     }
                 }
             }
