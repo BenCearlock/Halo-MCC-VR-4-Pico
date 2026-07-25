@@ -167,6 +167,13 @@ namespace
     float g_gameYawRef = 0;
     float g_headPosRef[3] = {0, 0, 0}; // headset position (m) captured at recenter
 
+    // DEPTHPROBE diagnostic (temporary, log-only): the right controller's
+    // forward/back excursion in meters, captured where the Reach wrist target is
+    // built, so the visible-palette hook can compare it against the rendered
+    // hand's actual depth travel. Answers whether the hand moves in 6DoF depth.
+    std::atomic<float> g_depthProbeCtlFwdM{0.0f};
+    std::atomic<bool> g_depthProbeCtlValid{false};
+
     using CamCopyFn = void*(__fastcall*)(void* dst, void* src);
     CamCopyFn g_origCamCopy = nullptr;
     using ObserverCameraEffectFn = void(__fastcall*)(int userIndex);
@@ -10861,6 +10868,11 @@ namespace
         const float sh=sinf(g_headYawRef),ch=cosf(g_headYawRef);
         const float roomForward=dx*sh-dz*ch;
         const float roomRight=dx*ch+dz*sh;
+        if (!left && isfinite(roomForward)) // DEPTHPROBE: right-hand fwd/back (m)
+        {
+            g_depthProbeCtlFwdM.store(roomForward,std::memory_order_relaxed);
+            g_depthProbeCtlValid.store(true,std::memory_order_relaxed);
+        }
         const float cg=cosf(g_gameYawRef),sg=sinf(g_gameYawRef);
         const float scale=kReachWorldUnitsPerMeter;
         const float offset[3]={
@@ -11204,6 +11216,56 @@ namespace
                 }
                 else
                 {
+                    // DEPTHPROBE (temporary, log-only): does the visible right
+                    // hand actually move in depth when the controller does?
+                    // Compare the controller's forward/back excursion (m,
+                    // stashed in ReachBuildPreparedControllerTarget) against the
+                    // rendered right-wrist bone's travel along the head-forward
+                    // axis (world units). Fail-open: a bad index, failed
+                    // compose, or non-finite value skips the sample and never
+                    // touches an engine buffer. Runs BEFORE the floating-hands
+                    // collapse so the wrist bone still carries its real pose.
+                    if (selectedSource==g_fpPaletteScratch &&
+                        g_depthProbeCtlValid.load(std::memory_order_relaxed) &&
+                        fp.wrist>=0 && fp.wrist<fp.count)
+                    {
+                        BoneMatrix worldWrist{};
+                        const float* fwd=targets.centerRoot.rotation; // row0=fwd
+                        if (ComposeBoneMatrices(*root,
+                                g_fpPaletteScratch[fp.wrist],worldWrist))
+                        {
+                            const float* wt=worldWrist.translation;
+                            const float handFwd=
+                                wt[0]*fwd[0]+wt[1]*fwd[1]+wt[2]*fwd[2];
+                            const float ctlFwd=g_depthProbeCtlFwdM.load(
+                                std::memory_order_relaxed);
+                            if (isfinite(handFwd) && isfinite(ctlFwd))
+                            {
+                                static float ctlMin=0,ctlMax=0,handMin=0,handMax=0;
+                                static bool have=false;
+                                static std::atomic<uint64_t> lastMs{0};
+                                if (!have){ ctlMin=ctlMax=ctlFwd;
+                                            handMin=handMax=handFwd; have=true; }
+                                ctlMin=fminf(ctlMin,ctlFwd); ctlMax=fmaxf(ctlMax,ctlFwd);
+                                handMin=fminf(handMin,handFwd); handMax=fmaxf(handMax,handFwd);
+                                const uint64_t now=GetTickCount64();
+                                uint64_t last=lastMs.load(std::memory_order_relaxed);
+                                if (now-last>=2000 &&
+                                    lastMs.compare_exchange_strong(last,now))
+                                {
+                                    const float ctlRange=ctlMax-ctlMin;
+                                    const float handRange=handMax-handMin;
+                                    const float ratio=ctlRange>1e-4f
+                                        ? handRange/ctlRange : 0.0f;
+                                    LOG("DEPTHPROBE ctlFwd=%.3fm range=%.3fm "
+                                        "handFwd=%.3fwu range=%.3fwu "
+                                        "ratio=%.2fwu/m (expect ~0.33 for 1:1 depth)",
+                                        ctlFwd,ctlRange,handFwd,handRange,ratio);
+                                    ctlMin=ctlMax=ctlFwd; handMin=handMax=handFwd;
+                                }
+                            }
+                        }
+                    }
                     if (g_config.floating_hands &&
                         selectedSource==g_fpPaletteScratch)
                     {

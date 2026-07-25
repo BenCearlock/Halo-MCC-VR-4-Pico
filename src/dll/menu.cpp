@@ -375,9 +375,10 @@ namespace
         ImGui::Spacing();
         ImGui::Separator();
         ImGui::Text("Body (VRIK)");
-        changed |= ImGui::Checkbox("Arm IK (bend arm to controller)", &g_config.arm_ik);
-        ImGui::TextDisabled("ON: shoulder stays, elbow bends, hand+gun follow your controller.\n"
-                            "OFF: the whole arm rigid-parents to the controller (old behavior).");
+        changed |= ImGui::Checkbox("Arm IK (EXPERIMENTAL - currently broken)", &g_config.arm_ik);
+        ImGui::TextDisabled("Unsupported and OFF by default: the wrist/arm roots stretch away\n"
+                            "from the hands. Leave off. Floating hands (below) is the supported\n"
+                            "mode: the whole hand+gun rigid-parents to your controller.");
         if (g_config.arm_ik)
         {
             changed |= ImGui::SliderFloat("Right shoulder drop", &g_config.right_shoulder_drop,
