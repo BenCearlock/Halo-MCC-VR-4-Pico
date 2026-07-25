@@ -744,6 +744,38 @@ int main()
               kReachDebugBooleanType == 5,
             "Reach native weapon-IK bypass pins the exact named control and stock no-IK edge");
 
+        bool projectileOriginGateExact = true;
+        for (int active = 0; active <= 1; ++active)
+        {
+            for (int slot = -2; slot <= 3; ++slot)
+            {
+                projectileOriginGateExact = projectileOriginGateExact &&
+                    ReachShouldUseNativeWeaponProjectileOrigin(
+                        active != 0, slot) == (active != 0 && slot == 0);
+            }
+        }
+        Check(projectileOriginGateExact &&
+              kReachProjectileFireRva == 0x004C2710 &&
+              kReachProjectileFireEndRvaExclusive == 0x004C4923 &&
+              kReachProjectileFireBodySize == 0x2213 &&
+              kReachProjectileFireCallerRva == 0x004B63BE &&
+              kReachProjectileOriginBlockRva == 0x004C30AC &&
+              kReachProjectileOriginDecisionRva == 0x004C30C5 &&
+              kReachProjectileOriginStockFalseRva ==
+                  kReachProjectileOriginDecisionRva + 5 &&
+              kReachProjectileOriginNativeTrueRva ==
+                  kReachProjectileOriginDecisionRva + 15 &&
+              kReachFpWeaponSlotForDatumRva == 0x002B1218 &&
+              kReachFpWeaponSlotForDatumEndRvaExclusive == 0x002B1273 &&
+              kReachFpWeaponSlotForDatumBodySize == 0x5B &&
+              kReachFpWeaponSlotConsumerRva == 0x00121012 &&
+              kReachFpWeaponSlotConsumerCallRva == 0x0012101A &&
+              kReachBarrelProjectilesUseWeaponOriginMask == 0x0004 &&
+              kReachBarrelProjectileFiresInMarkerDirectionMask == 0x8000 &&
+              (kReachBarrelProjectilesUseWeaponOriginMask &
+               kReachBarrelProjectileFiresInMarkerDirectionMask) == 0,
+            "Reach projectile origin admits only armed output-user-0 slot 0 and preserves the separate marker-direction policy");
+
         std::array<uint8_t, kReachMainRenderViewAob.size()> exactMask{};
         exactMask.fill(0xFF);
         std::array<uint8_t, kReachMainRenderViewAob.size() * 2 + 1>

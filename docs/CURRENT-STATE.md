@@ -210,6 +210,39 @@ candidate removes only that second addition, matching Halo 3/ODST's absolute
 controller-world target ownership. The accepted pointer remains
 `a5524d3fe58e4ed5507c27429ccca52a3d4fdf7d`.
 
+### Reach wrist/head-decoupling pass / projectile-origin mismatch - 2026-07-25
+
+Candidate `03396fa5201c8b086caf2a452ab29964b8dee609` removed only the
+rejected second render-head translation from the already absolute prepared
+controller targets while retaining both headset-passed wrist anchors. Its exact
+packaged and separately verified deployed identity was:
+
+| Identity | Value |
+| --- | --- |
+| Candidate package | `out/candidates/03396fa-reach-fp-parity-20260725-130616667Z` |
+| `halo3xr.dll` SHA-256 | `3677FBF2BF69E991E9204B8F7D0D587041AD65DC7C77B8E3FE509EADE6BC70EE` |
+| `halo3xr_launcher.exe` SHA-256 | `A4B475B5DF2DBA2E36C0AFFCDF26CFEC268CCEC1261E0A1C64095B07E28BCB29` |
+| Headset result | Both wrist fixes remained good and the gun/both hands stopped following physical head translation; projectile origin still appeared too high/from the left of the controller-owned gun |
+
+The preserved runtime log is
+`out/test-runs/03396fa-reach-head-decoupling-pass-muzzle-offset-20260725-133049Z/halo3xr.log`,
+SHA-256 `35719DBD951CAFD031B89BDAA2AED3CF1612F6A8D04EC5F83DCD8A88792BC9BC`.
+This is a narrow Reach Spartan wrist/head-pose acceptance only. Halo 3, ODST,
+Elite, broader weapons, lifecycle transitions, HUD, and crosshair were not
+regression-tested, so the cumulative accepted pointer above remains unchanged.
+
+Pinned HREK now identifies the isolated muzzle correction without another
+camera, IK, or aim approximation. `weapon_barrel_flags` bit 2 is exactly
+`projectiles use weapon origin`; the separate bit 15 is marker-direction policy
+and must remain stock. Pinned retail repeats the native origin decision at
+`0x4C30C5` inside projectile routine `0x4C2710`, and its exact output-user
+first-person slot helper at `0x2B1218` proves whether the incoming full weapon
+datum is output-user 0 slot 0. The forward candidate detours only that five-byte
+decision, preserves the stock direction transaction, and forces the existing
+native weapon-origin branch only for that exact local primary FP datum. AI,
+remote, vehicle, alternate-slot, inactive, and exceptional paths remain stock;
+no shared tag or game file is mutated. Headset acceptance is pending.
+
 ### Failed Reach final-palette-only candidate - 2026-07-24
 
 Candidate `abea61f0daf2b70ba779a40a3a2ad72b3debf121` implemented the

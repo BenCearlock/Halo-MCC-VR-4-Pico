@@ -42,6 +42,12 @@ $forbidden = [ordered]@{
         'placementBase(?:Valid)?'
     'prepared wrist translation rebuilt from the palette root' =
         'target\.translation\[axis\]\s*=\s*renderRoot\.translation\[axis\]'
+    'shared weapon-tag projectile-origin mutation' =
+        'SafeWrite(?:Byte|Bytes)[\s\S]{0,160}kReachBarrelProjectilesUseWeaponOriginMask'
+    'projectile marker-direction override' =
+        'ReachFpProjectileOrigin[\s\S]{0,240}kReachBarrelProjectileFiresInMarkerDirectionMask'
+    'generic projectile-function entry detour' =
+        'MH_CreateHook\(\s*reinterpret_cast<void\*>\(base\s*\+\s*kReachProjectileFireRva\)'
 }
 foreach ($entry in $forbidden.GetEnumerator()) {
     if (($game + "`n" + $logic) -match $entry.Value) {
@@ -128,6 +134,24 @@ $requiredGame = [ordered]@{
         'FpExplicitPoseTargets\s+markerTargets=context\.targets;\s*BoneMatrix\s+alignedRight\{\};\s*if\s*\(!ReachAlignRightTargetToAuthoredBarrel\(\s*markerTargets\.rightWrist'
     'palette path consumes the prepared absolute targets directly' =
         'FpExplicitPoseTargets\s+targets=context\.targets;\s*targets\.centerRoot\.scale=root->scale;\s*BoneMatrix\s+alignedRight\{\};\s*if\s*\(!ReachAlignRightTargetToAuthoredBarrel\(\s*targets\.rightWrist'
+    'Reach native projectile-origin decision target lifecycle' =
+        'g_reachCamera\.fpProjectileOriginTarget'
+    'Reach exact output-user-0 primary FP weapon gate' =
+        'firstPersonSlot\s*=\s*slotForDatum\(0,\s*weaponDatum\)'
+    'Reach projectile-origin callback quiescence wrapper' =
+        'ReachFpProjectileOriginPredicate[\s\S]*?activeCallbacks\.fetch_add[\s\S]*?__finally[\s\S]*?activeCallbacks\.fetch_sub'
+    'Reach current projectile-frame weapon datum relay load' =
+        '0x8B,0x8C,0x24,0x34,0x01,0x00,0x00'
+    'Reach native decision midhook creation' =
+        'MH_CreateHook\(\s*fpProjectileOrigin,fpProjectileOriginRelay'
+    'Reach disabled trampoline branch verification' =
+        'ReachColdVerifyFpProjectileOriginTrampoline'
+    'Reach projectile-origin hook enabled last' =
+        'MH_EnableHook\(fpProjectileOrigin\)'
+    'Reach projectile-origin relay ingress scan' =
+        'instruction\s*>=\s*projectileRelay\s*&&\s*instruction\s*<\s*projectileRelayEnd'
+    'Reach projectile-origin relay released after hook removal' =
+        'projectileOriginRemoved\s*&&[\s\S]*?VirtualFree\('
 }
 foreach ($entry in $requiredGame.GetEnumerator()) {
     if ($game -notmatch $entry.Value) {
@@ -153,6 +177,16 @@ $requiredLogic = [ordered]@{
         'layout\.rightControllerOwnedSourceBranch\s*=\s*rightSourceMask\s*\|\s*kReachRightControllerOwnedAuxiliarySourceMask'
     'resolved left controller ownership union' =
         'layout\.leftControllerOwnedSourceBranch\s*=\s*leftSourceMask\s*\|\s*kReachLeftControllerOwnedAuxiliarySourceMask'
+    'Reach native projectile-origin decision RVA' =
+        'kReachProjectileOriginDecisionRva\s*=\s*0x004C30C5'
+    'Reach native projectile-origin true continuation' =
+        'kReachProjectileOriginNativeTrueRva\s*=\s*0x004C30D4'
+    'Reach exact FP weapon-slot helper RVA' =
+        'kReachFpWeaponSlotForDatumRva\s*=\s*0x002B1218'
+    'Reach local primary FP projectile-origin policy' =
+        'controllerAimActive\s*&&\s*firstPersonWeaponSlot\s*==\s*0'
+    'Reach weapon-origin and marker-direction bits remain distinct' =
+        'kReachBarrelProjectileFiresInMarkerDirectionMask'
 }
 foreach ($entry in $requiredLogic.GetEnumerator()) {
     if ($logic -notmatch $entry.Value) {
@@ -175,4 +209,4 @@ if ($logic -notmatch 'kReachFpCameraRebuildAob' -or
     throw 'Reach FP parity gate missing: exact Reach camera rebuild/upload proof anchors.'
 }
 
-Write-Host 'Reach FP Halo 3/ODST palette + native weapon-IK + world-projection camera parity gate passed.'
+Write-Host 'Reach FP Halo 3/ODST palette + native weapon-IK + world-projection camera + local native projectile-origin parity gate passed.'

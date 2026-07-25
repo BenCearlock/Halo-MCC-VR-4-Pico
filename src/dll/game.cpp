@@ -9539,6 +9539,7 @@ namespace
         void(__fastcall*)(void*, void*, void*, void*, void*);
     using ReachFpCameraRebuildFn = void(__fastcall*)(void*, bool);
     using ReachFpCameraUploadFn = void(__fastcall*)(void*, void*);
+    using ReachFpWeaponSlotForDatumFn = int(__fastcall*)(int, uint32_t);
 
     struct ReachRenderHelpers
     {
@@ -9731,10 +9732,11 @@ namespace
         std::atomic<bool> installed{false};
         std::atomic<bool> armed{false};
         std::atomic<bool> teardownRequested{false};
-        // Counts all five Reach detours from wrapper entry until every
-        // trampoline/original call has returned. Teardown disables all hooks,
-        // then proves that neither a callback nor a MinHook relay ingress
-        // remains before freeing either trampoline or the retained title DLL.
+        // Counts the five full Reach wrappers through their original calls and
+        // the sixth projectile predicate while its compiled body executes.
+        // Teardown additionally scans the emitted projectile relay and every
+        // MinHook trampoline/relay slot, covering that midhook's pre-counter and
+        // post-counter windows before freeing code or the retained title DLL.
         std::atomic<int> activeCallbacks{0};
         uintptr_t base = 0;
         size_t size = 0;
@@ -9753,6 +9755,10 @@ namespace
         void* fpInterpolateTarget = nullptr;
         void* fpPaletteTarget = nullptr;
         void* fpCameraTarget = nullptr;
+        void* fpProjectileOriginTarget = nullptr;
+        void* fpProjectileOriginRelay = nullptr;
+        size_t fpProjectileOriginRelaySize = 0;
+        size_t fpProjectileOriginRelayAllocationSize = 0;
     } g_reachCamera;
     bool RestoreReachNativeWeaponIkBypass();
     static_assert(std::atomic<int>::is_always_lock_free);
@@ -9777,6 +9783,181 @@ namespace
     ReachFpPaletteFn g_reachOrigFpPalette = nullptr;
     ReachFpCameraRebuildFn g_reachOrigFpCameraRebuild = nullptr;
     ReachFpCameraUploadFn g_reachFpCameraUpload = nullptr;
+    ReachFpWeaponSlotForDatumFn g_reachFpWeaponSlotForDatum = nullptr;
+    void* g_reachOrigFpProjectileOriginDecision = nullptr;
+
+    // The stock projectile routine reaches this decision on simulation/gameplay
+    // threads, not necessarily inside the render-owner scope. Locality therefore
+    // comes from Reach's exact output-user first-person slot table: only the
+    // incoming full datum in output-user 0 slot 0 may take the native barrel
+    // origin branch. Any inactive lifecycle, exception, or other slot stays
+    // byte-for-byte stock. No tag flag is ever mutated.
+    bool ReachFpProjectileOriginPredicateBody(uint32_t weaponDatum)
+    {
+        const bool controllerAimActive =
+            TitleAdapter_GetActiveTitle() == GameTitle::HaloReach &&
+            g_reachCamera.armed.load(std::memory_order_acquire) &&
+            !g_reachCamera.teardownRequested.load(std::memory_order_acquire) &&
+            g_enabled.load(std::memory_order_acquire) &&
+            g_vrAim.load(std::memory_order_acquire) &&
+            VR_IsStereoEnabled();
+        ReachFpWeaponSlotForDatumFn const slotForDatum =
+            g_reachFpWeaponSlotForDatum;
+        if (!controllerAimActive || !slotForDatum)
+            return false;
+
+        int firstPersonSlot = -1;
+        __try
+        {
+            firstPersonSlot = slotForDatum(0, weaponDatum);
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            firstPersonSlot = -1;
+        }
+        return ReachShouldUseNativeWeaponProjectileOrigin(
+            controllerAimActive, firstPersonSlot);
+    }
+
+    // This complete unwind range is scanned during teardown. The emitted relay
+    // is scanned separately, closing both its pre-counter call window and the
+    // post-counter register-restore/tail-jump window.
+    __declspec(noinline) int __fastcall ReachFpProjectileOriginPredicate(
+        uint32_t weaponDatum)
+    {
+        int useWeaponOrigin = 0;
+        g_reachCamera.activeCallbacks.fetch_add(
+            1, std::memory_order_acq_rel);
+        __try
+        {
+            __try
+            {
+                useWeaponOrigin =
+                    ReachFpProjectileOriginPredicateBody(weaponDatum) ? 1 : 0;
+            }
+            __except (EXCEPTION_EXECUTE_HANDLER)
+            {
+                // The emitted relay intentionally has no unwind metadata. No
+                // engine or gate fault may escape across it; stock is safe.
+                useWeaponOrigin = 0;
+            }
+        }
+        __finally
+        {
+            g_reachCamera.activeCallbacks.fetch_sub(
+                1, std::memory_order_acq_rel);
+        }
+        return useWeaponOrigin;
+    }
+
+    constexpr size_t kReachFpProjectileOriginRelayAllocationSize = 0x1000;
+    constexpr size_t kReachFpProjectileOriginRelayPredicateAddressOffset = 0x6A;
+    constexpr size_t kReachFpProjectileOriginRelayTrampolineAddressOffset = 0xF7;
+    // Win64 midhook relay. It preserves every volatile GPR, RFLAGS, and XMM0-5,
+    // maintains call alignment and shadow space, reads the pinned current
+    // projectile-frame weapon datum at original RSP+0x64, and only ORs AL bit 0
+    // before tail-jumping MinHook's relocated stock AND/JNE transaction.
+    constexpr std::array<uint8_t, 0xFF> kReachFpProjectileOriginRelayTemplate{{
+        0x48,0x81,0xEC,0xD0,0x00,0x00,0x00,
+        0x48,0x89,0x44,0x24,0x20,0x48,0x89,0x4C,0x24,0x28,
+        0x48,0x89,0x54,0x24,0x30,0x4C,0x89,0x44,0x24,0x38,
+        0x4C,0x89,0x4C,0x24,0x40,0x4C,0x89,0x54,0x24,0x48,
+        0x4C,0x89,0x5C,0x24,0x50,0x9C,0x58,0x48,0x89,0x44,0x24,0x58,
+        0xF3,0x0F,0x7F,0x44,0x24,0x60,0xF3,0x0F,0x7F,0x4C,0x24,0x70,
+        0xF3,0x0F,0x7F,0x94,0x24,0x80,0x00,0x00,0x00,
+        0xF3,0x0F,0x7F,0x9C,0x24,0x90,0x00,0x00,0x00,
+        0xF3,0x0F,0x7F,0xA4,0x24,0xA0,0x00,0x00,0x00,
+        0xF3,0x0F,0x7F,0xAC,0x24,0xB0,0x00,0x00,0x00,
+        0x8B,0x8C,0x24,0x34,0x01,0x00,0x00,0x48,0xB8,
+        0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0xFF,0xD0,
+        0x88,0x84,0x24,0xC0,0x00,0x00,0x00,
+        0xF3,0x0F,0x6F,0x44,0x24,0x60,0xF3,0x0F,0x6F,0x4C,0x24,0x70,
+        0xF3,0x0F,0x6F,0x94,0x24,0x80,0x00,0x00,0x00,
+        0xF3,0x0F,0x6F,0x9C,0x24,0x90,0x00,0x00,0x00,
+        0xF3,0x0F,0x6F,0xA4,0x24,0xA0,0x00,0x00,0x00,
+        0xF3,0x0F,0x6F,0xAC,0x24,0xB0,0x00,0x00,0x00,
+        0x48,0x8B,0x4C,0x24,0x28,0x48,0x8B,0x54,0x24,0x30,
+        0x4C,0x8B,0x44,0x24,0x38,0x4C,0x8B,0x4C,0x24,0x40,
+        0x4C,0x8B,0x54,0x24,0x48,0x80,0xBC,0x24,0xC0,0x00,0x00,0x00,0x00,
+        0x74,0x09,0x48,0x8B,0x44,0x24,0x20,0x0C,0x01,0xEB,0x05,
+        0x48,0x8B,0x44,0x24,0x20,0x4C,0x8B,0x5C,0x24,0x58,
+        0x41,0x53,0x9D,0x4C,0x8B,0x5C,0x24,0x50,
+        0x48,0x8D,0xA4,0x24,0xD0,0x00,0x00,0x00,
+        0xFF,0x25,0x00,0x00,0x00,0x00,
+        0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+    }};
+    static_assert(sizeof(uintptr_t) == 8);
+    static_assert(
+        kReachFpProjectileOriginRelayPredicateAddressOffset +
+            sizeof(uintptr_t) <=
+        kReachFpProjectileOriginRelayTemplate.size());
+    static_assert(
+        kReachFpProjectileOriginRelayTrampolineAddressOffset +
+            sizeof(uintptr_t) ==
+        kReachFpProjectileOriginRelayTemplate.size());
+
+    bool ReachFpProjectileOriginRelayMatches(
+        const uint8_t* relay, size_t relaySize,
+        uintptr_t predicate, uintptr_t trampoline) noexcept
+    {
+        if (!relay || relaySize != kReachFpProjectileOriginRelayTemplate.size() ||
+            !predicate || !trampoline)
+            return false;
+        for (size_t i = 0; i < relaySize; ++i)
+        {
+            const bool predicateFixup =
+                i >= kReachFpProjectileOriginRelayPredicateAddressOffset &&
+                i < kReachFpProjectileOriginRelayPredicateAddressOffset + 8;
+            const bool trampolineFixup =
+                i >= kReachFpProjectileOriginRelayTrampolineAddressOffset &&
+                i < kReachFpProjectileOriginRelayTrampolineAddressOffset + 8;
+            if (!predicateFixup && !trampolineFixup &&
+                relay[i] != kReachFpProjectileOriginRelayTemplate[i])
+                return false;
+        }
+        uintptr_t embeddedPredicate = 0;
+        uintptr_t embeddedTrampoline = 0;
+        memcpy(&embeddedPredicate,
+               relay + kReachFpProjectileOriginRelayPredicateAddressOffset, 8);
+        memcpy(&embeddedTrampoline,
+               relay + kReachFpProjectileOriginRelayTrampolineAddressOffset, 8);
+        return embeddedPredicate == predicate &&
+            embeddedTrampoline == trampoline;
+    }
+
+    bool ReachWriteFpProjectileOriginRelay(
+        void* allocation, size_t allocationSize, uintptr_t trampoline)
+    {
+        if (!allocation ||
+            allocationSize < kReachFpProjectileOriginRelayTemplate.size() ||
+            !trampoline)
+            return false;
+        auto* const relay = static_cast<uint8_t*>(allocation);
+        DWORD oldProtection = 0;
+        if (!VirtualProtect(
+                relay, allocationSize, PAGE_READWRITE, &oldProtection))
+            return false;
+
+        memcpy(relay, kReachFpProjectileOriginRelayTemplate.data(),
+               kReachFpProjectileOriginRelayTemplate.size());
+        const uintptr_t predicate = reinterpret_cast<uintptr_t>(
+            &ReachFpProjectileOriginPredicate);
+        memcpy(relay + kReachFpProjectileOriginRelayPredicateAddressOffset,
+               &predicate, 8);
+        memcpy(relay + kReachFpProjectileOriginRelayTrampolineAddressOffset,
+               &trampoline, 8);
+        const bool exact = ReachFpProjectileOriginRelayMatches(
+            relay, kReachFpProjectileOriginRelayTemplate.size(),
+            predicate, trampoline);
+
+        DWORD ignored = 0;
+        const bool executable = VirtualProtect(
+            relay, allocationSize, PAGE_EXECUTE_READ, &ignored) != FALSE;
+        const bool flushed = executable && FlushInstructionCache(
+            GetCurrentProcess(), relay,
+            kReachFpProjectileOriginRelayTemplate.size()) != FALSE;
+        return exact && executable && flushed;
+    }
 
     constexpr size_t kReachFpLayoutCacheCapacity = 4;
     // Retail 0x2AF648 emits at most four interpolation -> palette transactions
@@ -11991,7 +12172,7 @@ namespace
     bool ScanForReachDetourIngress(bool& busy)
     {
         static bool rangesResolved = false;
-        static ReachDetourCodeRange ranges[5]{};
+        static ReachDetourCodeRange ranges[6]{};
         if (!rangesResolved)
         {
             const void* functions[] = {
@@ -12000,6 +12181,8 @@ namespace
                 reinterpret_cast<const void*>(&ReachFpInterpolate),
                 reinterpret_cast<const void*>(&ReachFpPalette),
                 reinterpret_cast<const void*>(&ReachFpCameraRebuildDetour),
+                reinterpret_cast<const void*>(
+                    &ReachFpProjectileOriginPredicate),
             };
             static_assert(_countof(functions) == _countof(ranges));
             bool resolved = true;
@@ -12018,6 +12201,7 @@ namespace
             g_reachCamera.fpInterpolateTarget,
             g_reachCamera.fpPaletteTarget,
             g_reachCamera.fpCameraTarget,
+            g_reachCamera.fpProjectileOriginTarget,
         };
         void* const trampolines[] = {
             reinterpret_cast<void*>(g_reachOrigMainRenderView),
@@ -12025,9 +12209,21 @@ namespace
             reinterpret_cast<void*>(g_reachOrigFpInterpolate),
             reinterpret_cast<void*>(g_reachOrigFpPalette),
             reinterpret_cast<void*>(g_reachOrigFpCameraRebuild),
+            g_reachOrigFpProjectileOriginDecision,
         };
         static_assert(_countof(targets) == _countof(ranges));
         static_assert(_countof(trampolines) == _countof(ranges));
+
+        const DWORD64 projectileRelay = reinterpret_cast<DWORD64>(
+            g_reachCamera.fpProjectileOriginRelay);
+        const size_t projectileRelaySize =
+            g_reachCamera.fpProjectileOriginRelaySize;
+        if ((projectileRelay == 0) != (projectileRelaySize == 0) ||
+            (projectileRelay &&
+             projectileRelay + projectileRelaySize <= projectileRelay))
+            return false;
+        const DWORD64 projectileRelayEnd =
+            projectileRelay + projectileRelaySize;
 
         ReachThreadFreeze frozenThreads;
         if (!frozenThreads.Capture())
@@ -12074,6 +12270,11 @@ namespace
                 {
                     busy = true;
                 }
+            }
+            if (projectileRelay && instruction >= projectileRelay &&
+                instruction < projectileRelayEnd)
+            {
+                busy = true;
             }
         }
         if (g_reachCamera.activeCallbacks.load(std::memory_order_acquire) != 0)
@@ -12124,6 +12325,7 @@ namespace
             g_reachCamera.fpInterpolateTarget,
             g_reachCamera.fpPaletteTarget,
             g_reachCamera.fpCameraTarget,
+            g_reachCamera.fpProjectileOriginTarget,
         };
         for (void* target : targets)
         {
@@ -12141,6 +12343,44 @@ namespace
             return false;
 
         bool removedAll = true;
+        bool projectileOriginRemoved =
+            g_reachCamera.fpProjectileOriginTarget == nullptr;
+        if (g_reachCamera.fpProjectileOriginTarget)
+        {
+            const MH_STATUS status = MH_RemoveHook(
+                g_reachCamera.fpProjectileOriginTarget);
+            if (status == MH_OK || status == MH_ERROR_NOT_CREATED)
+            {
+                g_reachCamera.fpProjectileOriginTarget = nullptr;
+                g_reachOrigFpProjectileOriginDecision = nullptr;
+                g_reachFpWeaponSlotForDatum = nullptr;
+                projectileOriginRemoved = true;
+            }
+            else
+            {
+                removedAll = false;
+                LOG("Reach FP projectile-origin cleanup: remove failed for "
+                    "%p (%d)",
+                    g_reachCamera.fpProjectileOriginTarget,
+                    static_cast<int>(status));
+            }
+        }
+        if (projectileOriginRemoved &&
+            g_reachCamera.fpProjectileOriginRelay)
+        {
+            if (VirtualFree(
+                    g_reachCamera.fpProjectileOriginRelay, 0, MEM_RELEASE))
+            {
+                g_reachCamera.fpProjectileOriginRelay = nullptr;
+                g_reachCamera.fpProjectileOriginRelaySize = 0;
+                g_reachCamera.fpProjectileOriginRelayAllocationSize = 0;
+            }
+            else
+            {
+                removedAll = false;
+                LOG("Reach FP projectile-origin cleanup: relay free failed");
+            }
+        }
         if (g_reachCamera.fpCameraTarget)
         {
             const MH_STATUS status =
@@ -12289,6 +12529,10 @@ namespace
         g_reachCamera.fpInterpolateTarget = nullptr;
         g_reachCamera.fpPaletteTarget = nullptr;
         g_reachCamera.fpCameraTarget = nullptr;
+        g_reachCamera.fpProjectileOriginTarget = nullptr;
+        g_reachCamera.fpProjectileOriginRelay = nullptr;
+        g_reachCamera.fpProjectileOriginRelaySize = 0;
+        g_reachCamera.fpProjectileOriginRelayAllocationSize = 0;
         g_reachCamera.moduleReference = nullptr;
         g_reachCamera.base = 0;
         g_reachCamera.size = 0;
@@ -12308,6 +12552,8 @@ namespace
         g_reachOrigFpPalette = nullptr;
         g_reachOrigFpCameraRebuild = nullptr;
         g_reachFpCameraUpload = nullptr;
+        g_reachFpWeaponSlotForDatum = nullptr;
+        g_reachOrigFpProjectileOriginDecision = nullptr;
         g_reachFpStatus.key.store(0,std::memory_order_release);
         g_reachFpLoggedStatusKey.store(0,std::memory_order_release);
         g_reachFpCameraUploadStatus.preparedSerial.store(
@@ -12351,6 +12597,40 @@ namespace
         const uintptr_t next=first+1;
         const uintptr_t end=base+size;
         return next>=end || sig::Find(next,static_cast<size_t>(end-next),pattern)==0;
+    }
+
+    // MinHook 1.3.4 must relocate exactly the three-byte `and al,r13b` and the
+    // following two-byte external JNE. Validate its disabled trampoline before
+    // publishing or enabling anything: native true still reaches 0x4C30D4,
+    // native false still reaches 0x4C30CA, and MinHook's relay reaches only our
+    // separately verified RX shim.
+    bool ReachColdVerifyFpProjectileOriginTrampoline(
+        uintptr_t base, const void* trampoline, const void* relay)
+    {
+        if (!base || !trampoline || !relay ||
+            !ReachColdExecutableAddress(
+                reinterpret_cast<uintptr_t>(trampoline)) ||
+            !ReachColdExecutableAddress(reinterpret_cast<uintptr_t>(relay)))
+            return false;
+        const auto* const code = static_cast<const uint8_t*>(trampoline);
+        constexpr uint8_t kAndAndExternalJne[] = {
+            0x41,0x22,0xC5,0x74,0x0E,0xFF,0x25,0x00,0x00,0x00,0x00};
+        constexpr uint8_t kAbsoluteJump[] = {
+            0xFF,0x25,0x00,0x00,0x00,0x00};
+        if (memcmp(code, kAndAndExternalJne,
+                   sizeof(kAndAndExternalJne)) != 0 ||
+            memcmp(code + 19, kAbsoluteJump, sizeof(kAbsoluteJump)) != 0 ||
+            memcmp(code + 33, kAbsoluteJump, sizeof(kAbsoluteJump)) != 0)
+            return false;
+        uintptr_t nativeTrue = 0;
+        uintptr_t nativeFalse = 0;
+        uintptr_t emittedRelay = 0;
+        memcpy(&nativeTrue, code + 11, 8);
+        memcpy(&nativeFalse, code + 25, 8);
+        memcpy(&emittedRelay, code + 39, 8);
+        return nativeTrue == base + kReachProjectileOriginNativeTrueRva &&
+            nativeFalse == base + kReachProjectileOriginStockFalseRva &&
+            emittedRelay == reinterpret_cast<uintptr_t>(relay);
     }
 
     bool ResolveReachNativeWeaponIkControl(
@@ -12477,15 +12757,45 @@ namespace
             "48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 57 41 56 41 57 48 83 EC 20 48 8B 05 ?? ?? ?? ?? 49 8B F0 0F B7 C9 4C 8B F2";
         static constexpr char kFpCameraAob[] =
             "48 89 5C 24 08 48 89 74 24 10 57 48 83 EC 40 4C 8B 41 08 48 8D 05 ?? ?? ?? ?? 48 8B D9 0F 29 74 24 30";
+        static constexpr char kProjectileFireAob[] =
+            "48 89 5C 24 20 55 56 57 41 54 41 55 41 56 41 57 48 8D AC 24 C0 D9 FF FF B8 40 27 00 00 E8 ?? ?? ?? ?? 48 2B E0";
+        static constexpr char kProjectileOriginBlockAob[] =
+            "42 8B 04 A6 F3 41 0F 59 C8 C1 E8 02 F3 0F 58 D0 F3 0F 58 D1 F3 44 0F 5F F2 41 22 C5 75 0A 41 83 BE CC 01 00 00 FF 74 7A 84 C0 74 1C";
+        static constexpr char kFpWeaponSlotForDatumAob[] =
+            "41 83 CA FF 44 8B DA 41 3B CA 74 ?? 65 48 8B 04 25 58 00 00 00 44 8B 05 ?? ?? ?? ?? BA A0 06 00 00 4E 8B 0C C0 48 63 C1 48 69 C8 A8 53 00 00 33 C0";
+        static constexpr char kFpWeaponSlotConsumerAob[] =
+            "8B 51 3C C1 FB 04 8B CB E8 ?? ?? ?? ?? 8B 15 ?? ?? ?? ?? 65 48 8B 0C 25 58 00 00 00 83 64 24 68 00 41 BB A0 06 00 00";
         if (!ReachColdExactSignatureAt(
                 base,size,kReachFpInterpolateRva,kFpInterpolateAob) ||
             !ReachColdExactSignatureAt(
                 base,size,kReachFpVisiblePaletteRva,kFpPaletteAob) ||
             !ReachColdExactSignatureAt(
                 base,size,kReachFpCameraRebuildRva,kFpCameraAob) ||
-            !ReachColdExecutableAddress(base + kReachFpCameraUploadRva))
+            !ReachColdExecutableAddress(base + kReachFpCameraUploadRva) ||
+            !ReachColdExactSignatureAt(
+                base,size,kReachProjectileFireRva,kProjectileFireAob) ||
+            !ReachColdExactSignatureAt(
+                base,size,kReachProjectileOriginBlockRva,
+                kProjectileOriginBlockAob) ||
+            !ReachColdExactSignatureAt(
+                base,size,kReachFpWeaponSlotForDatumRva,
+                kFpWeaponSlotForDatumAob) ||
+            !ReachColdExactSignatureAt(
+                base,size,kReachFpWeaponSlotConsumerRva,
+                kFpWeaponSlotConsumerAob) ||
+            !ReachVerifyRel32Call(
+                base,kReachProjectileFireCallerRva,kReachProjectileFireRva) ||
+            !ReachVerifyRel32Call(
+                base,kReachFpWeaponSlotConsumerCallRva,
+                kReachFpWeaponSlotForDatumRva) ||
+            kReachProjectileOriginDecisionRva + 5 > size ||
+            kReachProjectileOriginStockFalseRva !=
+                kReachProjectileOriginDecisionRva + 5 ||
+            kReachProjectileOriginNativeTrueRva !=
+                kReachProjectileOriginDecisionRva + 15)
         {
-            LOG("Reach FP install: exact interpolation/palette/camera "
+            LOG("Reach FP install: exact interpolation/palette/camera/"
+                "projectile-origin "
                 "signatures failed; stock Reach remains active");
             return false;
         }
@@ -12565,6 +12875,49 @@ namespace
             reinterpret_cast<void*>(base + kReachFpVisiblePaletteRva);
         void* fpCamera =
             reinterpret_cast<void*>(base + kReachFpCameraRebuildRva);
+        void* fpProjectileOrigin = reinterpret_cast<void*>(
+            base + kReachProjectileOriginDecisionRva);
+        void* fpProjectileOriginRelay = VirtualAlloc(
+            nullptr, kReachFpProjectileOriginRelayAllocationSize,
+            MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+        if (!fpProjectileOriginRelay ||
+            !ReachWriteFpProjectileOriginRelay(
+                fpProjectileOriginRelay,
+                kReachFpProjectileOriginRelayAllocationSize,
+                base + kReachProjectileOriginStockFalseRva))
+        {
+            const bool relayReleased = !fpProjectileOriginRelay ||
+                VirtualFree(fpProjectileOriginRelay, 0, MEM_RELEASE) != FALSE;
+            if (relayReleased)
+            {
+                FreeLibrary(moduleReference);
+            }
+            else
+            {
+                // Keep the unreachable allocation and exact title reference in
+                // worker-owned teardown state so a transient VirtualFree
+                // failure cannot leak one page on every install poll.
+                g_reachCamera.base = base;
+                g_reachCamera.size = size;
+                g_reachCamera.generation = generation;
+                g_reachCamera.moduleReference = moduleReference;
+                g_reachCamera.fpProjectileOriginRelay =
+                    fpProjectileOriginRelay;
+                g_reachCamera.fpProjectileOriginRelaySize =
+                    kReachFpProjectileOriginRelayTemplate.size();
+                g_reachCamera.fpProjectileOriginRelayAllocationSize =
+                    kReachFpProjectileOriginRelayAllocationSize;
+                g_reachCamera.armed.store(false, std::memory_order_release);
+                g_reachCamera.teardownRequested.store(
+                    true, std::memory_order_release);
+                g_reachCamera.installed.store(true, std::memory_order_release);
+            }
+            LOG("Reach FP install: projectile-origin relay setup failed; "
+                "%s",
+                relayReleased ? "stock Reach remains active" :
+                    "cleanup state retained for worker retry");
+            return false;
+        }
         const bool innerCreated = MH_CreateHook(inner,
                 reinterpret_cast<void*>(&ReachPlayerViewRenderDetour),
                 reinterpret_cast<void**>(&g_reachOrigPlayerViewRender)) == MH_OK;
@@ -12581,29 +12934,65 @@ namespace
                 fpCamera,
                 reinterpret_cast<void*>(&ReachFpCameraRebuildDetour),
                 reinterpret_cast<void**>(&g_reachOrigFpCameraRebuild)) == MH_OK;
+        const bool fpProjectileOriginCreated = fpCameraCreated && MH_CreateHook(
+                fpProjectileOrigin,fpProjectileOriginRelay,
+                &g_reachOrigFpProjectileOriginDecision) == MH_OK;
+        const bool fpProjectileOriginReady = fpProjectileOriginCreated &&
+            ReachWriteFpProjectileOriginRelay(
+                fpProjectileOriginRelay,
+                kReachFpProjectileOriginRelayAllocationSize,
+                reinterpret_cast<uintptr_t>(
+                    g_reachOrigFpProjectileOriginDecision)) &&
+            ReachColdVerifyFpProjectileOriginTrampoline(
+                base,g_reachOrigFpProjectileOriginDecision,
+                fpProjectileOriginRelay);
         if (!innerCreated || !outerCreated ||
-            !fpInterpolateCreated || !fpPaletteCreated || !fpCameraCreated)
+            !fpInterpolateCreated || !fpPaletteCreated || !fpCameraCreated ||
+            !fpProjectileOriginReady)
         {
             bool cleanupOk=true;
-            auto removeCreated=[&](bool created,void* target) {
+            bool innerRetained=innerCreated;
+            bool outerRetained=outerCreated;
+            bool fpInterpolateRetained=fpInterpolateCreated;
+            bool fpPaletteRetained=fpPaletteCreated;
+            bool fpCameraRetained=fpCameraCreated;
+            bool fpProjectileOriginRetained=fpProjectileOriginCreated;
+            auto removeCreated=[&](bool created,void* target,bool& retained) {
                 if (!created) return;
                 const MH_STATUS status=MH_RemoveHook(target);
-                cleanupOk=(status==MH_OK || status==MH_ERROR_NOT_CREATED) &&
-                    cleanupOk;
+                if (status==MH_OK || status==MH_ERROR_NOT_CREATED)
+                    retained=false;
+                else
+                    cleanupOk=false;
             };
-            removeCreated(fpCameraCreated,fpCamera);
-            removeCreated(fpPaletteCreated,fpPalette);
-            removeCreated(fpInterpolateCreated,fpInterpolate);
-            removeCreated(outerCreated,outer);
-            removeCreated(innerCreated,inner);
+            removeCreated(fpProjectileOriginCreated,fpProjectileOrigin,
+                          fpProjectileOriginRetained);
+            removeCreated(fpCameraCreated,fpCamera,fpCameraRetained);
+            removeCreated(fpPaletteCreated,fpPalette,fpPaletteRetained);
+            removeCreated(fpInterpolateCreated,fpInterpolate,
+                          fpInterpolateRetained);
+            removeCreated(outerCreated,outer,outerRetained);
+            removeCreated(innerCreated,inner,innerRetained);
+
+            bool fpProjectileOriginRelayRetained=true;
+            if (!fpProjectileOriginRetained)
+            {
+                if (VirtualFree(
+                        fpProjectileOriginRelay, 0, MEM_RELEASE))
+                    fpProjectileOriginRelayRetained=false;
+                else
+                    cleanupOk=false;
+            }
+            if (!innerRetained) g_reachOrigPlayerViewRender=nullptr;
+            if (!outerRetained) g_reachOrigMainRenderView=nullptr;
+            if (!fpInterpolateRetained) g_reachOrigFpInterpolate=nullptr;
+            if (!fpPaletteRetained) g_reachOrigFpPalette=nullptr;
+            if (!fpCameraRetained) g_reachOrigFpCameraRebuild=nullptr;
+            if (!fpProjectileOriginRetained)
+                g_reachOrigFpProjectileOriginDecision=nullptr;
             if (cleanupOk)
             {
                 FreeLibrary(moduleReference);
-                g_reachOrigPlayerViewRender = nullptr;
-                g_reachOrigMainRenderView = nullptr;
-                g_reachOrigFpInterpolate = nullptr;
-                g_reachOrigFpPalette = nullptr;
-                g_reachOrigFpCameraRebuild = nullptr;
             }
             else
             {
@@ -12611,12 +13000,28 @@ namespace
                 g_reachCamera.size=size;
                 g_reachCamera.generation=generation;
                 g_reachCamera.moduleReference=moduleReference;
-                g_reachCamera.innerTarget=innerCreated?inner:nullptr;
-                g_reachCamera.outerTarget=outerCreated?outer:nullptr;
+                g_reachCamera.innerTarget=innerRetained?inner:nullptr;
+                g_reachCamera.outerTarget=outerRetained?outer:nullptr;
                 g_reachCamera.fpInterpolateTarget=
-                    fpInterpolateCreated?fpInterpolate:nullptr;
-                g_reachCamera.fpPaletteTarget=fpPaletteCreated?fpPalette:nullptr;
-                g_reachCamera.fpCameraTarget=fpCameraCreated?fpCamera:nullptr;
+                    fpInterpolateRetained?fpInterpolate:nullptr;
+                g_reachCamera.fpPaletteTarget=
+                    fpPaletteRetained?fpPalette:nullptr;
+                g_reachCamera.fpCameraTarget=
+                    fpCameraRetained?fpCamera:nullptr;
+                g_reachCamera.fpProjectileOriginTarget=
+                    fpProjectileOriginRetained?fpProjectileOrigin:nullptr;
+                g_reachCamera.fpProjectileOriginRelay=
+                    fpProjectileOriginRelayRetained?
+                        fpProjectileOriginRelay:nullptr;
+                g_reachCamera.fpProjectileOriginRelaySize=
+                    fpProjectileOriginRelayRetained?
+                        kReachFpProjectileOriginRelayTemplate.size():0;
+                g_reachCamera.fpProjectileOriginRelayAllocationSize=
+                    fpProjectileOriginRelayRetained?
+                        kReachFpProjectileOriginRelayAllocationSize:0;
+                g_reachFpWeaponSlotForDatum=fpProjectileOriginRetained?
+                    reinterpret_cast<ReachFpWeaponSlotForDatumFn>(
+                        base+kReachFpWeaponSlotForDatumRva):nullptr;
                 g_reachCamera.armed.store(false,std::memory_order_release);
                 g_reachCamera.teardownRequested.store(
                     true,std::memory_order_release);
@@ -12643,8 +13048,17 @@ namespace
         g_reachCamera.fpInterpolateTarget = fpInterpolate;
         g_reachCamera.fpPaletteTarget = fpPalette;
         g_reachCamera.fpCameraTarget = fpCamera;
+        g_reachCamera.fpProjectileOriginTarget = fpProjectileOrigin;
+        g_reachCamera.fpProjectileOriginRelay = fpProjectileOriginRelay;
+        g_reachCamera.fpProjectileOriginRelaySize =
+            kReachFpProjectileOriginRelayTemplate.size();
+        g_reachCamera.fpProjectileOriginRelayAllocationSize =
+            kReachFpProjectileOriginRelayAllocationSize;
         g_reachFpCameraUpload = reinterpret_cast<ReachFpCameraUploadFn>(
             base + kReachFpCameraUploadRva);
+        g_reachFpWeaponSlotForDatum =
+            reinterpret_cast<ReachFpWeaponSlotForDatumFn>(
+                base + kReachFpWeaponSlotForDatumRva);
         g_reachCamera.installedAtMs = GetTickCount64();
         g_reachCamera.motionBlurVars[0] = {
             reachMotionBlurScale, reachMotionBlurScaleOriginal};
@@ -12683,7 +13097,8 @@ namespace
             MH_EnableHook(outer) != MH_OK ||
             MH_EnableHook(fpInterpolate) != MH_OK ||
             MH_EnableHook(fpPalette) != MH_OK ||
-            MH_EnableHook(fpCamera) != MH_OK)
+            MH_EnableHook(fpCamera) != MH_OK ||
+            MH_EnableHook(fpProjectileOrigin) != MH_OK)
         {
             // State was published before the first enable, so even a partial
             // MinHook failure can use the same disable/quiesce/remove proof as
@@ -12707,6 +13122,9 @@ namespace
             "before arming");
         LOG("Reach FP camera hook installed for the exact HREK-homologous "
             "nested workspace; per-eye execution pending");
+        LOG("Reach FP projectile origin installed: output-user 0 slot 0 alone "
+            "takes the title-native projectiles-use-weapon-origin branch; "
+            "direction and all shared weapon tags remain stock");
         LOG("Reach comfort evidence: blurScale=%llX blurMax=%llX "
             "(authored %.4f/%.4f); VR default keeps scale finite and zeros max",
             static_cast<unsigned long long>(

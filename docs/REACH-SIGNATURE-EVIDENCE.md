@@ -539,6 +539,96 @@ disable/quiesce/remove rollback, and generation invalidation. Installation
 requires exact-one AOB matches at both expected RVAs in executable memory; any
 failure leaves stock Reach active.
 
+## Local first-person native projectile origin
+
+The next isolated Reach candidate changes only the projectile start point for
+the exact local output-user-0 primary first-person weapon. It does not change
+the player/controller aim direction, mutate a shared weapon tag, enable a
+marker-direction flag, or admit AI, remote, third-person, or vehicle weapons.
+The static proof is complete for the pinned binaries; headset acceptance and
+the accepted-build pointer remain unchanged.
+
+### HREK semantics and authored weapon evidence
+
+The official HREK weapon barrel flag definition names bit 2 (mask `0x0004`)
+`projectiles use weapon origin`: instead of the flat first-person camera origin,
+the stock projectile transaction selects its already-computed weapon-marker
+origin. Bit 15 (mask `0x8000`) is the separate
+`projectile fires in marker direction` behavior. The candidate excludes bit 15
+and therefore preserves the engine's stock player-aim direction.
+
+In pinned `reach_tag_test.exe`, the projectile transaction is
+`0xDE4290`-`0xDE8198`, with ABI
+`void __fastcall(int weapon_datum_index, int16 barrel_index,
+void* firing_context, bool simulation_or_prediction)`. Its weapon-origin
+consumer is in `0xDE5289`-`0xDE52CA`. The official assault-rifle tag export has
+an empty barrel-flags field; its first- and third-person firing attachments use
+`primary_trigger`. HREK marker inspection places `primary_trigger` on the model
+centerline with +X forward. The weapon-level `force contrails to come from
+weapon barrel` secondary flag affects effects/contrails, not this projectile
+origin decision. This evidence rejects both a global tag edit and any lateral
+calibration offset.
+
+HREK also supplies the ownership lineage. Call site `0x3723EA` invokes
+`first_person_weapon_validate_weapon_index` at `0x8D2670`; that validator calls
+the slot lookup at `0x8CEED0` and succeeds only when the incoming full weapon
+datum occupies a first-person weapon slot.
+
+### Retail projectile transaction and origin branch
+
+The exact retail homolog is `0x4C2710`-`0x4C4923` (8,723 bytes), with the same
+four-argument ABI. Its complete body SHA-256 is:
+
+```text
+F924A4C5D333268264654F22746417A7D0D006850150D73C0D5944694EA77F92
+```
+
+The manifest records a 71-byte relocation-tolerant entry AOB that matches once
+at `0x4C2710` in the pinned retail executable sections. Wrapper
+`0x4B6318`-`0x4B640A` directly calls it at `0x4B63BE`; the two proven upstream
+wrapper call sites are `0x435EB6` and `0x4B62FE`. Preflight verifies the exact
+entry match, complete function hash, and the direct `0x4B63BE -> 0x4C2710`
+`rel32` edge.
+
+The origin-selection block starts at `0x4C30AC`. Its exact 72 bytes occur once
+in executable data and hash to:
+
+```text
+A1353752177431FBE68800410302A23ABB5DBEC5B8384F105E6B0D87C5B84C66
+```
+
+At `0x4C30C5`, exact bytes `41 22 C5 75 0A` (`and al,r13b; jne
+0x4C30D4`) consume the native bit-2 result. The decision bytes hash to
+`9EBF607CD187ED0E26B7FCE95DF3926F3533A2D1B3B25785027B00E34BE3FB67`.
+The false continuation is `0x4C30CA`. The true continuation reaches the stock
+copy at `0x4C30D8`-`0x4C30F4`, which moves the marker-derived origin from the
+transaction's `+0x9F0` frame storage into the projectile-origin local. Nothing
+in this bounded choice modifies projectile direction.
+
+### Exact output-user-0 primary-slot admission
+
+Retail leaf `0x2B1218`-`0x2B1273` implements
+`int __fastcall(int output_user_index, int weapon_datum_index)`. It scans the
+two first-person slots for that output user and returns slot `0`, slot `1`, or
+`-1`; the user stride is `0x53A8`, slot stride is `0x2978`, and the full datum
+is at slot `+0x3C`. Its exact 91-byte body SHA-256 is:
+
+```text
+ADBB51CBA6CBD7628E7D7B94B4AD0B4DF6C431D2F89BE315657A434B8B478DA9
+```
+
+The full-function AOB, with only its single RIP-relative displacement
+wildcarded, matches once at `0x2B1218`. First-person consumer
+`0x120FDC`-`0x1210D3` loads the full weapon datum and calls that helper at
+`0x12101A`; preflight verifies the exact `rel32` edge.
+
+The runtime admission is consequently exact: while the Reach VR transaction is
+active, call the stock leaf with output user `0` and the projectile function's
+incoming full weapon datum, and select the stock weapon-origin branch only when
+the result is primary slot `0`. Slot `1`, `-1`, any inactive runtime state, and
+all nonmatching datums retain the stock origin path. Static proof does not turn
+this pending candidate into a headset-accepted build.
+
 ## Camera-derived frustum-bounds proof
 
 The original `viewport` hypothesis is now statically identified as the

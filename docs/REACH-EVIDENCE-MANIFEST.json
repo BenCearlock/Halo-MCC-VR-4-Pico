@@ -699,6 +699,97 @@
     "static_proof_complete": true,
     "headset_accepted": false
   },
+  "native_projectile_origin": {
+    "behavior": "for only the local output-user-0 primary first-person weapon transaction, select the stock marker-derived weapon origin while preserving the stock projectile direction",
+    "retail": {
+      "projectile_fire": {
+        "function_rva": "0x004C2710",
+        "function_end_rva_exclusive": "0x004C4923",
+        "function_size": 8723,
+        "body_sha256": "F924A4C5D333268264654F22746417A7D0D006850150D73C0D5944694EA77F92",
+        "entry_aob": "48 89 5C 24 20 55 56 57 41 54 41 55 41 56 41 57 48 8D AC 24 C0 D9 FF FF B8 40 27 00 00 E8 ?? ?? ?? ?? 48 2B E0 0F 29 B4 24 30 27 00 00 0F 29 BC 24 20 27 00 00 44 0F 29 84 24 10 27 00 00 44 0F 29 8C 24 00 27 00 00",
+        "static_executable_match_count": 1,
+        "abi": "void __fastcall(int weapon_datum_index,int16 barrel_index,void* firing_context,bool simulation_or_prediction)",
+        "direct_rel32_caller_count": 1,
+        "direct_rel32_call_site_rva": "0x004B63BE",
+        "wrapper_rva": "0x004B6318",
+        "wrapper_end_rva_exclusive": "0x004B640A",
+        "wrapper_upstream_rel32_call_sites": [
+          "0x00435EB6",
+          "0x004B62FE"
+        ]
+      },
+      "origin_decision": {
+        "containing_block_rva": "0x004C30AC",
+        "containing_block_end_rva_exclusive": "0x004C30F4",
+        "containing_block_size": 72,
+        "containing_block_sha256": "A1353752177431FBE68800410302A23ABB5DBEC5B8384F105E6B0D87C5B84C66",
+        "containing_block_aob": "42 8B 04 A6 F3 41 0F 59 C8 C1 E8 02 F3 0F 58 D0 F3 0F 58 D1 F3 44 0F 5F F2 41 22 C5 75 0A 41 83 BE CC 01 00 00 FF 74 7A 84 C0 74 1C 48 8B 45 08 F2 0F 10 84 05 F0 09 00 00 8B 84 05 F8 09 00 00 F2 0F 11 45 E8 89 45 F0",
+        "static_executable_match_count": 1,
+        "decision_rva": "0x004C30C5",
+        "decision_size": 5,
+        "decision_bytes": "41 22 C5 75 0A",
+        "decision_sha256": "9EBF607CD187ED0E26B7FCE95DF3926F3533A2D1B3B25785027B00E34BE3FB67",
+        "stock_false_continuation_rva": "0x004C30CA",
+        "weapon_origin_continuation_rva": "0x004C30D4",
+        "marker_origin_copy_start_rva": "0x004C30D8",
+        "marker_origin_copy_end_rva_exclusive": "0x004C30F4",
+        "stock_semantics": "barrel flag bit 2 selects the already-computed marker origin at frame offset 0x9F0 instead of the stock camera-origin value",
+        "projectile_direction_unchanged": true
+      },
+      "output_user_weapon_slot": {
+        "function_rva": "0x002B1218",
+        "function_end_rva_exclusive": "0x002B1273",
+        "function_size": 91,
+        "body_sha256": "ADBB51CBA6CBD7628E7D7B94B4AD0B4DF6C431D2F89BE315657A434B8B478DA9",
+        "entry_aob": "41 83 CA FF 44 8B DA 41 3B CA 74 4B 65 48 8B 04 25 58 00 00 00 44 8B 05 ?? ?? ?? ?? BA A0 06 00 00 4E 8B 0C C0 48 63 C1 48 69 C8 A8 53 00 00 33 C0 49 03 0C 11 8B D0 48 83 C1 3C 44 39 19 74 14 FF C0 48 FF C2 48 81 C1 78 29 00 00 48 83 FA 02 7C E9 EB 03 44 8B D0 41 8B C2 C3",
+        "static_executable_match_count": 1,
+        "abi": "int __fastcall(int output_user_index,int weapon_datum_index)",
+        "first_person_consumer_function_rva": "0x00120FDC",
+        "first_person_consumer_function_end_rva_exclusive": "0x001210D3",
+        "first_person_consumer_rel32_call_site_rva": "0x0012101A",
+        "output_user_stride": "0x000053A8",
+        "slot_count": 2,
+        "slot_stride": "0x00002978",
+        "weapon_datum_offset": "0x0000003C",
+        "primary_slot_index": 0,
+        "not_found_result": -1
+      }
+    },
+    "hrek": {
+      "binary": "reach_tag_test.exe",
+      "projectile_fire_function_rva": "0x00DE4290",
+      "projectile_fire_function_end_rva_exclusive": "0x00DE8198",
+      "origin_consumer_start_rva": "0x00DE5289",
+      "origin_consumer_end_rva_exclusive": "0x00DE52CA",
+      "barrel_flag_definition_source": "official HREK weapon tag definition",
+      "projectiles_use_weapon_origin_name": "projectiles use weapon origin",
+      "projectiles_use_weapon_origin_bit": 2,
+      "projectiles_use_weapon_origin_mask": "0x00000004",
+      "projectile_fires_in_marker_direction_name": "projectile fires in marker direction",
+      "projectile_fires_in_marker_direction_bit": 15,
+      "projectile_fires_in_marker_direction_mask": "0x00008000",
+      "projectile_fires_in_marker_direction_excluded": true,
+      "first_person_weapon_validate_call_site_rva": "0x003723EA",
+      "first_person_weapon_validate_rva": "0x008D2670",
+      "first_person_weapon_slot_for_datum_rva": "0x008CEED0",
+      "official_assault_rifle_barrel_flags": "empty",
+      "official_assault_rifle_marker": "primary_trigger",
+      "official_assault_rifle_marker_centered_and_forward_axis": "+X"
+    },
+    "runtime_scope": {
+      "output_user_index": 0,
+      "required_slot_index": 0,
+      "incoming_full_weapon_datum_must_match": true,
+      "ai_remote_third_person_and_vehicle_weapons_excluded_by_exact_slot_match": true,
+      "shared_weapon_tag_mutation_forbidden": true,
+      "marker_direction_flag_mutation_forbidden": true,
+      "stock_player_aim_direction_preserved": true
+    },
+    "static_proof_complete": true,
+    "headset_accepted": false,
+    "accepted_pointer_advanced": false
+  },
   "preliminary_candidates": [
     {
       "id": "viewport",

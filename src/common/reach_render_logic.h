@@ -89,6 +89,43 @@ inline constexpr uintptr_t kReachFpCameraFrustumCallRva = 0x00286DD8;
 inline constexpr uintptr_t kReachFpCameraProjectionCallRva = 0x00286DEF;
 inline constexpr uintptr_t kReachFpCameraUploadCompactLeaRva = 0x00286E4F;
 inline constexpr uintptr_t kReachFpCameraUploadJumpRva = 0x00286E6A;
+// Reach's title-native projectile origin transaction. Official HREK identifies
+// weapon_barrel_flags bit 2 as `projectiles use weapon origin`: when set, the
+// stock projectile builder copies the selected first-person barrel marker into
+// the projectile origin while leaving its separately authored direction policy
+// untouched. The pinned retail homolog makes the same decision at 0x4C30C5.
+//
+// Production never mutates the shared weapon tag. A five-byte MinHook detour
+// admits only output-user 0's exact primary first-person weapon datum and makes
+// that one invocation take the already-existing native true branch.
+inline constexpr uintptr_t kReachProjectileFireRva = 0x004C2710;
+inline constexpr uintptr_t kReachProjectileFireEndRvaExclusive = 0x004C4923;
+inline constexpr size_t kReachProjectileFireBodySize = 0x2213;
+inline constexpr char kReachProjectileFireBodySha256[] =
+    "F924A4C5D333268264654F22746417A7D0D006850150D73C0D5944694EA77F92";
+inline constexpr uintptr_t kReachProjectileFireCallerRva = 0x004B63BE;
+inline constexpr uintptr_t kReachProjectileOriginBlockRva = 0x004C30AC;
+inline constexpr uintptr_t kReachProjectileOriginDecisionRva = 0x004C30C5;
+inline constexpr uintptr_t kReachProjectileOriginStockFalseRva = 0x004C30CA;
+inline constexpr uintptr_t kReachProjectileOriginNativeTrueRva = 0x004C30D4;
+inline constexpr uintptr_t kReachFpWeaponSlotForDatumRva = 0x002B1218;
+inline constexpr uintptr_t kReachFpWeaponSlotForDatumEndRvaExclusive =
+    0x002B1273;
+inline constexpr size_t kReachFpWeaponSlotForDatumBodySize = 0x005B;
+inline constexpr char kReachFpWeaponSlotForDatumBodySha256[] =
+    "ADBB51CBA6CBD7628E7D7B94B4AD0B4DF6C431D2F89BE315657A434B8B478DA9";
+inline constexpr uintptr_t kReachFpWeaponSlotConsumerRva = 0x00121012;
+inline constexpr uintptr_t kReachFpWeaponSlotConsumerCallRva = 0x0012101A;
+inline constexpr uint16_t kReachBarrelProjectilesUseWeaponOriginMask = 0x0004;
+inline constexpr uint16_t kReachBarrelProjectileFiresInMarkerDirectionMask =
+    0x8000;
+
+inline bool ReachShouldUseNativeWeaponProjectileOrigin(
+    bool controllerAimActive, int firstPersonWeaponSlot) noexcept
+{
+    return controllerAimActive && firstPersonWeaponSlot == 0;
+}
+
 struct ReachFpCameraWrapperBody
 {
     uintptr_t rva;
