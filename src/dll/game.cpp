@@ -442,24 +442,18 @@ namespace
     // Optional immutable inputs for title adapters whose render hooks already
     // own one exact prepared-frame controller/head snapshot. Halo 3 and ODST
     // continue through DesiredWristWorld and the accepted camera atomics when
-    // this is null; Reach supplies all three world poses explicitly so neither
-    // eye can re-read tracking or solve from a per-eye root.
+    // this is null; Reach supplies all three absolute world poses explicitly
+    // so neither eye can re-read tracking or solve from a per-eye root.
     struct FpExplicitPoseTargets
     {
         BoneMatrix centerRoot{};
         BoneMatrix rightWrist{};
         BoneMatrix leftWrist{};
-        // Controller targets are published as a pre-head gameplay-base plus a
-        // tracked room offset. Reach's visible palette supplies a distinct,
-        // exact render root; rebase only the offset onto that root immediately
-        // before palette/marker composition.
-        float placementBase[3]{};
         float rightScale = 1.0f;
         float leftScale = 1.0f;
         bool centerRootValid = false;
         bool rightWristValid = false;
         bool leftWristValid = false;
-        bool placementBaseValid = false;
     };
     // One context per held-weapon slot: slot 0 is the primary (right-hand)
     // weapon, slot 1 is the dual-wield secondary (left-hand) weapon. The
@@ -11043,25 +11037,6 @@ namespace
         return ReachBoneMatrixFinite(out) && isfinite(meshScale);
     }
 
-    bool ReachRebasePreparedControllerTargets(
-        const BoneMatrix& renderRoot, FpExplicitPoseTargets& targets)
-    {
-        if (!targets.placementBaseValid || !ReachBoneMatrixFinite(renderRoot))
-            return false;
-        for (float component : targets.placementBase)
-            if (!isfinite(component)) return false;
-        auto rebase = [&](BoneMatrix& target, bool valid) {
-            if (!valid) return true;
-            if (!ReachBoneMatrixFinite(target)) return false;
-            for (int axis=0;axis<3;++axis)
-                target.translation[axis]=renderRoot.translation[axis]+(
-                    target.translation[axis]-targets.placementBase[axis]);
-            return ReachBoneMatrixFinite(target);
-        };
-        return rebase(targets.rightWrist,targets.rightWristValid) &&
-            rebase(targets.leftWrist,targets.leftWristValid);
-    }
-
     bool ReachAlignRightTargetToAuthoredBarrel(
         const BoneMatrix& baseTarget, const BoneMatrix& authoredWrist,
         BoneMatrix& alignedTarget)
@@ -11231,10 +11206,11 @@ namespace
         // is only for marker/muzzle/attachment consumers and receives one rigid
         // controller transform. Every visible palette below is reconstructed
         // independently from untouchedLive into private scratch.
+        // Prepared wrists are already absolute world targets (pre-head gameplay
+        // base + tracked controller displacement). Match H3/ODST by using the
+        // center root only for world/record conversion; adding its head
+        // translation again would make the assembly drift on a physical turn.
         FpExplicitPoseTargets markerTargets=context.targets;
-        if (!ReachRebasePreparedControllerTargets(
-                markerTargets.centerRoot,markerTargets))
-            return;
         BoneMatrix alignedRight{};
         if (!ReachAlignRightTargetToAuthoredBarrel(
                 markerTargets.rightWrist,
@@ -11405,14 +11381,6 @@ namespace
                 const BoneMatrix* replacement=selectedSource;
                 FpExplicitPoseTargets targets=context.targets;
                 targets.centerRoot.scale=root->scale;
-                if (!ReachRebasePreparedControllerTargets(*root,targets))
-                {
-                    restoreStockAndInvalidate(false);
-                    if (original)
-                        original(tag,root,destination,unused,
-                                 selectedSource,boneMap);
-                    return;
-                }
                 BoneMatrix alignedRight{};
                 if (!ReachAlignRightTargetToAuthoredBarrel(
                         targets.rightWrist,
@@ -11706,9 +11674,6 @@ namespace
         }
 
         candidate.fpTargets={};
-        memcpy(candidate.fpTargets.placementBase,candidate.gameplayBasePosition,
-               sizeof(candidate.fpTargets.placementBase));
-        candidate.fpTargets.placementBaseValid=true;
         candidate.fpTargets.centerRootValid=ReachBuildCenterFpRoot(
             candidate.headCenter,candidate.fpTargets.centerRoot);
         candidate.fpTargets.rightWristValid=

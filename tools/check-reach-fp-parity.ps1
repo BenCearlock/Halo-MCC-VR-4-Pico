@@ -36,6 +36,12 @@ $forbidden = [ordered]@{
         'const\s+uint64_t\s+keep\s*=[^;]*rightControllerOwnedSourceBranch'
     'hidden left-arm branch receives the visible-hand rigid delta' =
         'if\s*\(!\(\s*leftControllerOwnedSourceBranch\s*&'
+    'prepared controller targets rebased through the render head root' =
+        'ReachRebasePreparedControllerTargets'
+    'placement base retained for a second controller-target translation' =
+        'placementBase(?:Valid)?'
+    'prepared wrist translation rebuilt from the palette root' =
+        'target\.translation\[axis\]\s*=\s*renderRoot\.translation\[axis\]'
 }
 foreach ($entry in $forbidden.GetEnumerator()) {
     if (($game + "`n" + $logic) -match $entry.Value) {
@@ -112,6 +118,16 @@ $requiredGame = [ordered]@{
         'a\.rightControllerOwnedSourceBranch==\s*b\.rightControllerOwnedSourceBranch'
     'Reach layout identity includes left controller ownership' =
         'a\.leftControllerOwnedSourceBranch==\s*b\.leftControllerOwnedSourceBranch'
+    'prepared controller target is absolute gameplay-base plus room offset' =
+        'out\.translation\[axis\]\s*=\s*gameplayBase\[axis\]\s*\+\s*offset\[axis\]\s*\+\s*basis\[axis\]\s*\*\s*standoff'
+    'prepared right target uses the pre-head gameplay base' =
+        'ReachBuildPreparedControllerTarget\(\s*tracking,false,candidate\.gameplayBasePosition'
+    'prepared left target uses the pre-head gameplay base' =
+        'ReachBuildPreparedControllerTarget\(\s*tracking,true,candidate\.gameplayBasePosition'
+    'marker path consumes the prepared absolute targets directly' =
+        'FpExplicitPoseTargets\s+markerTargets=context\.targets;\s*BoneMatrix\s+alignedRight\{\};\s*if\s*\(!ReachAlignRightTargetToAuthoredBarrel\(\s*markerTargets\.rightWrist'
+    'palette path consumes the prepared absolute targets directly' =
+        'FpExplicitPoseTargets\s+targets=context\.targets;\s*targets\.centerRoot\.scale=root->scale;\s*BoneMatrix\s+alignedRight\{\};\s*if\s*\(!ReachAlignRightTargetToAuthoredBarrel\(\s*targets\.rightWrist'
 }
 foreach ($entry in $requiredGame.GetEnumerator()) {
     if ($game -notmatch $entry.Value) {

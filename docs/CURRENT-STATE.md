@@ -181,6 +181,35 @@ and is still not stacked into the wrist work. `765604c` is a narrow left-wrist
 headset pass but not a cumulative accepted candidate; the accepted pointer
 remains `a5524d3fe58e4ed5507c27429ccca52a3d4fdf7d`.
 
+### Reach both-wrist anchor pass / remaining head-translation drift - 2026-07-25
+
+Candidate `7467d264957b9753a29f7e003b7415b8d888adfb` added only the
+independently HREK-proven right-wrist collapse anchor while retaining the
+headset-confirmed left anchor. Its exact packaged and deployed identity was:
+
+| Identity | Value |
+| --- | --- |
+| Candidate package | `out/candidates/7467d26-reach-fp-parity-20260725-124219703Z` |
+| `halo3xr.dll` SHA-256 | `7CBED662A7428644FDAAD58A780FEE329900436E620CDBC0D5B65640E710C057` |
+| `halo3xr_launcher.exe` SHA-256 | `B0098D1F73227B24BCBE79C050DD2625B0989BA203E65B2D64FE6EF2360A492F` |
+| Headset result | Both wrist-ribbon fixes looked great; the gun and both hands still followed physical head translation slightly |
+
+The installed hashes and first log line matched this exact source. Reach
+reported the exact native weapon-IK bypass, forced 47-over-52/53 floating-hands
+palettes, both-eye nested world FP projection, zero frame-order failures, and
+clean teardown. The preserved log is
+`out/test-runs/7467d26-reach-both-wrists-pass-head-drift-20260725-125800Z/halo3xr.log`,
+SHA-256 `F15C1C1A141E0315F0DF6D3A6E0F8B7238E91E5844A0A490787C372FA4BB1FA0`.
+
+This accepts the two wrist-local collapse anchors as the basis for the next
+isolated candidate, but does not advance the cumulative accepted pointer. The
+remaining motion is the separate prepared-target rebase defect: the controller
+targets already equal pre-head gameplay base plus tracked room displacement,
+then Reach alone adds the render root's head translation again. The next
+candidate removes only that second addition, matching Halo 3/ODST's absolute
+controller-world target ownership. The accepted pointer remains
+`a5524d3fe58e4ed5507c27429ccca52a3d4fdf7d`.
+
 ### Failed Reach final-palette-only candidate - 2026-07-24
 
 Candidate `abea61f0daf2b70ba779a40a3a2ad72b3debf121` implemented the

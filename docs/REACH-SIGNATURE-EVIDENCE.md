@@ -699,6 +699,20 @@ weights above isolate the residual to auxiliary source mask `0x4640`; the next
 wrist candidate retains the working left anchor and adds only the solved right-
 wrist collapse anchor.
 
+Candidate `7467d264957b9753a29f7e003b7415b8d888adfb`, package
+`out/candidates/7467d26-reach-fp-parity-20260725-124219703Z`, installed DLL
+SHA-256 `7CBED662A7428644FDAAD58A780FEE329900436E620CDBC0D5B65640E710C057`,
+then produced the expected cumulative wrist result: the user reported the
+right-hand fix was great, with the previously accepted left-hand fix retained.
+The only reported first-person ownership residual was the gun and both hands
+still following physical head motion slightly. Its exact run log is preserved
+at
+`out/test-runs/7467d26-reach-both-wrists-pass-head-drift-20260725-125800Z/halo3xr.log`,
+SHA-256 `F15C1C1A141E0315F0DF6D3A6E0F8B7238E91E5844A0A490787C372FA4BB1FA0`.
+It proves the title-native weapon-IK bypass, forced 47-over-52/53 private
+palettes, both-eye nested world projection, zero frame-order failures, and
+clean teardown.
+
 The head-turn offset is independent. `ReachBuildPreparedControllerTarget`
 already publishes the physically correct absolute target `B+C`, where `B` is
 the pre-head gameplay base and `C` is tracked controller displacement. The
@@ -706,10 +720,14 @@ Reach-only `ReachRebasePreparedControllerTargets` then substitutes
 `R+(B+C-B)=B+H+C` at both marker and palette consumers, where render root
 `R=B+H` includes tracked head translation. That double-adds `H`; a physical
 turn around the neck produces the reported small drift. Halo 3/ODST have no
-equivalent rebase, and rejected candidate `f19f39e` already recorded the same
-head-translated-root error class. Removal is intentionally reserved for a
-separate candidate after the left-ownership result. Neither result advances the
-accepted pointer or justifies changing the exact `1/3.048` world-unit mapping.
+equivalent rebase: their accepted controller-world target is built once from
+the pre-head gameplay base plus full controller displacement, and the render
+root participates only in the world-to-record conversion. Rejected candidate
+`f19f39e` already recorded the same head-translated-root error class. The
+forward isolated candidate therefore removes the Reach-only rebase at both
+marker and final-palette consumption while retaining the absolute targets,
+center/render roots for coordinate conversion, both wrist anchors, and the
+exact `1/3.048` world-unit mapping. This does not advance the accepted pointer.
 
 The same HREK binary publishes `render_first_person_fov_scale` as a type-6
 float debug control (`0x17E2250` name, `0x2015350` descriptor,
