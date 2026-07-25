@@ -729,7 +729,15 @@
       "rva": "0x000CF1A4",
       "aob": "48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 57 41 54 41 55 41 56 41 57 48 83 EC 20 33 DB 49 63 F8 38 1D ?? ?? ?? ?? 4D 8B E1 8B EA 4C 63 D9",
       "static_image_match_count": 1,
-      "abi": "bool __fastcall(int view,int id,int slot,BoneMatrix** outBones,int* outCount)",
+      "abi": "bool __fastcall(int outputUserIndex,int animationIdentity,int fpWeaponSlot,BoneMatrix** outBones,int* outCount)",
+      "direct_rel32_caller_count": 5,
+      "direct_callers": [
+        { "callsite_rva": "0x00121083", "return_rva": "0x00121088", "role": "on_demand_marker_or_attachment_transform" },
+        { "callsite_rva": "0x002AF85A", "return_rva": "0x002AF85F", "role": "fp_builder_palette_source_a" },
+        { "callsite_rva": "0x002AF8F6", "return_rva": "0x002AF8FB", "role": "fp_builder_palette_source_b" },
+        { "callsite_rva": "0x002AFEB4", "return_rva": "0x002AFEB9", "role": "fp_graph_consumer" },
+        { "callsite_rva": "0x002B0ADB", "return_rva": "0x002B0AE0", "role": "fp_graph_consumer" }
+      ],
       "source_node_bound": 120,
       "proof_complete": true,
       "headset_accepted": false

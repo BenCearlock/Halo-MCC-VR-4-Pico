@@ -10234,6 +10234,9 @@ namespace
 
         if (!g_reachHelpers.Ready() || !access.active ||
             !g_reachOwnerScope.active ||
+            !g_reachFpPairScope.armed ||
+            g_reachFpPairScope.generation!=g_reachCamera.generation ||
+            g_reachFpPairScope.preparedSerial!=access.preparedSerial ||
             access.preparedSerial != g_reachOwnerScope.preparedSerial)
             return false;
 
@@ -10298,9 +10301,6 @@ namespace
         bool completed = false;
         bool transactionValid = true;
         uint32_t capturedEyes = 0;
-        ReachBeginFpPairScope(
-            g_reachCamera.generation,access.preparedSerial,
-            g_reachOwnerScope.fpTargets);
         __try
         {
             for (uint32_t pass = 0; pass < 2; ++pass)
@@ -10432,7 +10432,11 @@ namespace
         }
         __finally
         {
-            ReachEndFpPairScope();
+            // The first-person interpolation/palette work occurs earlier in
+            // the admitted outer render. Keep that outer-owned pair scope
+            // alive across both eye renders, but do not leak an eye selection
+            // into the remainder of the stock outer transaction.
+            g_stereoEye.store(-1,std::memory_order_release);
             ReachRestoreScope(workspace, playerView, savedWorkspace, savedPv);
         }
         return completed;
@@ -10868,7 +10872,7 @@ namespace
         int view, int id, int slot, bool result,
         BoneMatrix** outBones, int* outCount)
     {
-        if (slot!=0) return;
+        if (slot!=0 || g_reachNestedOuterSuppressed) return;
         g_reachFpInterpolation={};
         if (!result || !outBones || !outCount || !*outBones ||
             !g_reachFpPairScope.armed ||
@@ -10977,6 +10981,13 @@ namespace
         uint16_t tag, const BoneMatrix* root, BoneMatrix* destination,
         uintptr_t unused, const BoneMatrix* source, const int32_t* boneMap)
     {
+        ReachFpPaletteFn original=g_reachOrigFpPalette;
+        if (g_reachNestedOuterSuppressed)
+        {
+            if (original)
+                original(tag,root,destination,unused,source,boneMap);
+            return;
+        }
         const BoneMatrix* selectedSource=source;
         ReachFpInterpolationContext& context=g_reachFpInterpolation;
         const bool contextCurrent=context.valid && source &&
@@ -11077,7 +11088,6 @@ namespace
                 }
             }
         }
-        ReachFpPaletteFn original=g_reachOrigFpPalette;
         if (original)
             original(tag,root,destination,unused,selectedSource,boneMap);
     }
@@ -11111,9 +11121,20 @@ namespace
             // The camera stack can saturate at depth three. Leaving the parent
             // TLS token visible while a nested stock call runs could let its
             // inner renderer satisfy the parent's pointers/depth by accident.
-            // Suppress the complete nested call tree, then restore the parent
-            // token even if stock raises an SEH exception.
+            // Suppress the complete nested call tree. A nested stock FP
+            // interpolation can reuse and overwrite the parent's live graph,
+            // so preserve that bounded graph as well as the owner token and
+            // restore it even if stock raises an SEH exception.
             uintptr_t nestedResult = 0;
+            BoneMatrix savedParentGraph[kReachFpMaxSourceNodeCount]{};
+            const bool parentContextValid=g_reachFpInterpolation.valid;
+            BoneMatrix* const parentGraph=g_reachFpInterpolation.source;
+            const int parentGraphCount=g_reachFpInterpolation.liveSourceCount;
+            const bool parentGraphSaved=g_reachFpInterpolation.valid &&
+                parentGraph && parentGraphCount>0 &&
+                parentGraphCount<=static_cast<int>(kReachFpMaxSourceNodeCount) &&
+                SafeReadBytes(parentGraph,savedParentGraph,
+                    static_cast<size_t>(parentGraphCount)*sizeof(BoneMatrix));
             g_reachOwnerScope = {};
             g_reachNestedOuterSuppressed = true;
             __try
@@ -11123,6 +11144,14 @@ namespace
             }
             __finally
             {
+                if (parentContextValid &&
+                    (!parentGraphSaved || !SafeWriteBytes(
+                         parentGraph,savedParentGraph,
+                         static_cast<size_t>(parentGraphCount)*
+                             sizeof(BoneMatrix))))
+                {
+                    g_reachFpInterpolation={};
+                }
                 g_reachNestedOuterSuppressed = false;
                 g_reachOwnerScope = previous;
             }
@@ -11326,6 +11355,13 @@ namespace
         candidate.renderAccess = &access;
         candidate.active = true;
         g_reachOwnerScope = candidate;
+        // Reach builds the first-person interpolation graph and visible
+        // palettes in main_render_view before it enters player_view_render.
+        // Freeze the prepared-frame targets/layouts at this admitted outer
+        // boundary so that pre-inner work can learn or apply the exact body
+        // layout, and keep the same scope across both stereo eyes.
+        ReachBeginFpPairScope(
+            epoch.generation,candidate.preparedSerial,candidate.fpTargets);
 
         uintptr_t result = 0;
         __try
@@ -11335,6 +11371,7 @@ namespace
         }
         __finally
         {
+            ReachEndFpPairScope();
             // Restore only the proven camera-pair data. The engine owns the
             // camera-stack callback at +0x2A8 and its push/pop lifetime.
             const uint8_t finalLastWindow =

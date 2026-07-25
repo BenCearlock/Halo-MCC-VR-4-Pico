@@ -36,7 +36,7 @@ it is never linked into `halo3xr.dll`. The build identity line reports
 
 Reach is fail-open: it renders exactly as stock until its runtime proof passes.
 The 50 ms title worker verifies the exact loaded Reach PE/file identity, three
-unique executable signatures, both function-body hashes, six caller edges, and
+unique executable signatures, both function-body hashes, seven caller edges, and
 fixed ranges once per sole-title admission epoch, and the Present path validates
 the exact swapchain buffer 0 and builds two private per-eye caches. Only after
 that proof and a one-second fresh-camera safety interval does the worker install

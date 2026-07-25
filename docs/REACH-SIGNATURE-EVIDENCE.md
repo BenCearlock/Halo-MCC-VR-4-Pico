@@ -260,7 +260,7 @@ remains unproven, and the special composer is a preserved negative result.
 | --- | ---: | --- | --- | --- | --- | --- | --- | --- | --- |
 | Camera-derived frustum bounds (original viewport hypothesis) | `0x287F58` | Exact stock observer passed the unique loaded-image check twice; production must repeat it | Yes, `.text`, `0x287F58`-`0x2881CC` | Yes | Nine direct callers | Yes | Yes | Static consumers and producer proven; live lifetime still open | Static role proven; hook forbidden |
 | First-person camera upload | `0x282D60` | No | Offline file only | No | No | No | No | No | Unproven |
-| FP interpolation | `0x0CF1A4` | Exact-one production AOB required | Yes | `bool __fastcall(int view,int id,int slot,BoneMatrix** out,int* count)` | Direct edges recorded below | Yes | Exact HREK/live graph correlation | 120-node bound | Production candidate; headset pending |
+| FP interpolation | `0x0CF1A4` | Exact-one production AOB required | Yes | `bool __fastcall(int outputUserIndex,int animationIdentity,int fpWeaponSlot,BoneMatrix** out,int* count)` | Direct edges recorded below | Yes | Exact HREK/live graph correlation | 120-node bound | Production candidate; headset pending |
 | Visible palette | `0x2B4EB0` | Exact-one production AOB required | Yes | `void __fastcall(uint16_t tag,const BoneMatrix* root,BoneMatrix* dst,uintptr_t,const BoneMatrix* source,const int32_t* boneMap)` | Wrapper/call edges recorded below | Yes | Exact HREK/live body maps | 47/41 output layouts | Production candidate; headset pending |
 | Special-bone composer | `0x213224` | N/A | Offline file and headset negative result | N/A | N/A | Did not drive visible FP pose | N/A | N/A | Disproven for this feature |
 
@@ -282,15 +282,28 @@ The pinned retail interpolation entry is `haloreach.dll+0x0CF1A4`. Its unique
 48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 57 41 54 41 55 41 56 41 57 48 83 EC 20 33 DB 49 63 F8 38 1D ?? ?? ?? ?? 4D 8B E1 8B EA 4C 63 D9
 ```
 
-The ABI is `bool __fastcall(int view, int id, int slot, BoneMatrix** outBones,
-int* outCount)`. Proven direct call edges include `0x2AF85A` (return
-`0x2AF85F`), `0x2AF8F6` (return `0x2AF8FB`), `0x2AFEB4` (return `0x2AFEB9`),
-and `0x2B0ADB` (return `0x2B0AE0`). The first two are immediately followed by
+The ABI is `bool __fastcall(int outputUserIndex, int animationIdentity,
+int fpWeaponSlot, BoneMatrix** outBones, int* outCount)`. The third argument is
+the primary/secondary first-person weapon slot, not a stereo eye; Reach enables
+only slot zero. The five proven direct call edges are `0x121083` (return
+`0x121088`), `0x2AF85A` (return `0x2AF85F`), `0x2AF8F6` (return `0x2AF8FB`),
+`0x2AFEB4` (return `0x2AFEB9`), and `0x2B0ADB` (return `0x2B0AE0`). The
+`0x121083` path indexes one returned `0x34`-byte matrix for an on-demand
+marker/attachment transform. The next two are immediately followed by
 separate palette builds, establishing that one live interpolated graph can feed
 the body and held-weapon/attachment palettes. The hook copies the untouched
 graph before rigidly applying the right-wrist delta to every live source node,
 bounded to 120, so marker, muzzle-flash, and attachment consumers remain on the
 same prepared-frame pose.
+
+The ordering relative to the camera transaction is also exact. Retail
+`main_render_view` calls `0x256724` at `0x0C32BE`; that calls `0x264530` at
+`0x25674F`, which calls the FP builder `0x2AF648` at `0x2645F6`. Its
+`0x2AF85A/0x2AF8F6` interpolation calls and immediately following palette
+wrappers run before `main_render_view` calls `player_view_render` at
+`0x0C33C4`. The prepared FP pair scope must therefore begin at the admitted
+outer boundary and end in that outer call's `__finally`; arming it in the inner
+player-view detour is too late.
 
 The visible-palette consumer remains at `haloreach.dll+0x2B4EB0`. Its production
 AOB is:
@@ -314,6 +327,11 @@ Spartan[47] = 0,3,1,2,5,4,6,9,10,8,7,13,12,14,11,22,26,18,21,24,19,20,15,23,16,1
 Elite[41]   = 0,1,2,3,5,4,6,7,8,9,10,14,12,11,13,22,20,18,21,19,16,23,24,17,15,27,28,25,31,32,30,26,29,35,34,39,33,40,36,38,37
 ```
 
+Preserved Spartan live evidence independently recorded tag `14674`, model
+handle `5F8AEBE0`, count 47, and all 47 values above. The map pointer alternated
+between two buffers while its contents remained identical, so production
+classification compares the bounded contents rather than pointer identity.
+
 A newly observed exact layout is recorded stock-only with its prepared serial.
 It may activate only on a later stereo pair; the frozen pair selection and
 explicit head-centre/right/left targets are shared by both eyes. Unknown,
@@ -336,6 +354,17 @@ explains why that gated root substitution appeared disabled. The production
 candidate removes the dump and root builder, snapshots corrected right aim and
 raw left tracking during prepared-frame publication, and logs only worker-read
 atomic status.
+
+Headset source `7ea6aca845a698f7994ef355e76a7361fe6f154e` ran with the exact
+candidate DLL and `arm_ik=1`, but produced no layout or active-path status and
+showed no IK. The installed hooks and maps were not the failure: that source
+began the FP scope only inside the later player-view detour, after the proven
+outer FP preparation chain above had already completed. The production
+correction moves begin/end ownership to the admitted outer transaction, retains
+only stereo-eye cleanup in the inner transaction, validates the frozen serial
+there, and prevents a suppressed nested outer render from clearing the parent
+FP context or overwriting its bounded live graph. The accepted pointer remains
+unchanged pending a new exact headset test.
 
 Both FP detours participate in callback accounting, relay/wrapper ingress scans,
 disable/quiesce/remove rollback, and generation invalidation. Installation

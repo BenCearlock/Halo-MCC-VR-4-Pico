@@ -46,7 +46,10 @@ This source contains a production, no-probe Reach FP interpolation/palette
 candidate. It preserves the headset-passing camera/culling transaction, learns
 only exact Spartan/Elite body maps stock-only, rigidly carries the bounded live
 graph for markers and attachments, and articulates the exact body palette from
-one prepared-frame centre/right/left snapshot. `arm_ik=0` retains rigid
+one prepared-frame centre/right/left snapshot. Its pair scope is frozen at the
+admitted outer `main_render_view` boundary because Reach performs FP
+interpolation/palette preparation before entering `player_view_render`; the
+same scope remains live through both eye renders. `arm_ik=0` retains rigid
 controller parenting; it does not disable Reach tracking. The installed config
 is not rewritten, so full-arm headset testing requires `arm_ik=1` and
 `floating_hands=0` before testing floating hands separately.
@@ -56,6 +59,30 @@ and the clean package manifest supplies the exact commit and SHA-256. This entry
 does **not** advance the accepted pointer above. Reach campaign Spartan is the
 acceptance target; Elite is implemented fail-open but remains separately
 unclaimed. No install or launch is authorized by this entry.
+
+### Failed Reach two-arm scope-timing result - 2026-07-24
+
+This result is evidence only and does not advance the accepted pointer above.
+
+| Identity | Value |
+| --- | --- |
+| Tested runtime source | `7ea6aca845a698f7994ef355e76a7361fe6f154e` |
+| Candidate package | `out/candidates/7ea6aca-reach-two-arm-ik-20260724-214242079Z` |
+| `halo3xr.dll` SHA-256 | `61C1DAECF3EE4D8891C88F4C973655ACDA949F61B938A865CDB628D7FB225F81` |
+| Preserved failure evidence | `out/test-runs/7ea6aca-reach-ik-no-layout-20260725-001238Z` |
+| Headset result | Reach camera/stereo and controller aim armed, but no arm IK appeared |
+
+The exact installed DLL and configuration (`arm_ik=1`, `floating_hands=0`)
+were correct. The runtime log contained no layout-learned, two-arm-active, or
+layout-rejected status. Static retail call edges explain that exact absence:
+`main_render_view` performs FP preparation through
+`0x256724 -> 0x264530 -> 0x2AF648`, including interpolation at `0x2AF85A`,
+before it calls `player_view_render` at `0x0C33C4`. Source `7ea6aca` armed the FP
+scope only in the later inner stereo transaction, so every interpolation
+callback failed the scope guard and every palette remained stock. The forward
+candidate moves scope ownership to the admitted outer boundary, preserves it
+through both eyes, and keeps nested renders stock while restoring the bounded
+parent live graph and context. No additional probe is required.
 
 ### Unaccepted Reach camera headset result - 2026-07-24
 
