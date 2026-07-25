@@ -252,14 +252,14 @@ The machine-readable copy of these identities is
 ## Preliminary function candidates
 
 Unless a row says otherwise, names below remain hypotheses rather than hook
-sites. The frustum, FP interpolation, and visible-palette entries now have the
-additional title-specific evidence recorded here. The camera-upload candidate
-remains unproven, and the special composer is a preserved negative result.
+sites. The frustum, FP camera rebuild/upload transaction, FP interpolation, and
+visible-palette entries now have the additional title-specific evidence
+recorded here. The special composer is a preserved negative result.
 
 | Candidate | RVA | Loaded-image unique | Executable range | ABI | Callers | Data flow | HREK semantics | Layout fields | Status |
 | --- | ---: | --- | --- | --- | --- | --- | --- | --- | --- |
 | Camera-derived frustum bounds (original viewport hypothesis) | `0x287F58` | Exact stock observer passed the unique loaded-image check twice; production must repeat it | Yes, `.text`, `0x287F58`-`0x2881CC` | Yes | Nine direct callers | Yes | Yes | Static consumers and producer proven; live lifetime still open | Static role proven; hook forbidden |
-| First-person camera upload | `0x282D60` | No | Offline file only | No | No | No | No | No | Unproven |
+| First-person camera rebuild/upload | `0x286C6C` -> `0x282D60` | Exact-one production AOBs required | Yes | `void(view,bool)` -> `void(compact,derived)` | Two FP-pass callers; exact tail edge | Yes | Exact HREK homologs at `0x87C4B0` -> `0x8561A0` | Compact `0x90`; secondary derived `+0x1E4`, `0xC4` | Production candidate; headset pending |
 | FP interpolation | `0x0CF1A4` | Exact-one production AOB required | Yes | `bool __fastcall(int outputUserIndex,int animationIdentity,int fpWeaponSlot,BoneMatrix** out,int* count)` | Direct edges recorded below | Yes | Exact HREK/live graph correlation | 120-node bound | Production candidate; headset pending |
 | Visible palette | `0x2B4EB0` | Exact-one production AOB required | Yes | `void __fastcall(uint16_t tag,const BoneMatrix* root,BoneMatrix* dst,uintptr_t,const BoneMatrix* source,const int32_t* boneMap)` | Wrapper/call edges recorded below | Yes | Exact HREK/live body maps | 47/41 output layouts | Production candidate; headset pending |
 | Special-bone composer | `0x213224` | N/A | Offline file and headset negative result | N/A | N/A | Did not drive visible FP pose | N/A | N/A | Disproven for this feature |
@@ -507,11 +507,35 @@ but the nine-call-site fan-out also proves this helper is shared and cannot by
 itself identify the player-eye render transaction.
 
 The first-person path is one of those callers. Inside retail function
-`0x286C6C`-`0x286EBC`, it calls the frustum helper at `0x286DD8`, calls the
-projection builder with the same camera/bounds at `0x286DEF`, then tail-jumps
-to the preliminary camera-upload candidate `0x282D60` at `0x286E6A`. This
-establishes ordering evidence for later first-person work; it does not yet
-authorize either hook.
+`0x286C6C`-`0x286EBC`, it copies the `0x90`-byte compact camera from `[RCX+8]`
+to the title-global compact block at `0xCFAC20`, calls the frustum helper at
+`0x286DD8`, calls the projection builder with the same camera/bounds and the
+current camera-stack workspace's `+0x1E4` derived block at `0x286DEF`, then
+tail-jumps to the two-pointer uploader `0x282D60` at `0x286E6A`. The uploader
+ABI is `void __fastcall(const void* compact,const void* derived)`. Its exact
+retail body is `0x282D60`-`0x282ED9`.
+
+The pinned retail identities are:
+
+- rebuild entry AOB: `48 89 5C 24 08 48 89 74 24 10 57 48 83 EC 40 4C 8B 41 08 48 8D 05 ?? ?? ?? ?? 48 8B D9 0F 29 74 24 30`, one executable match at `0x286C6C`;
+- rebuild body SHA-256: `125656AF65F61F02BA482830D307EBFDD00BBE2DF7264F155613B3FF8FAEFE58`;
+- uploader entry AOB: `48 8B C4 48 89 58 08 55 48 8D 68 A1 48 81 EC C0 00 00 00 0F 29 70 E8 4C 8D 45 F7 0F 29 78 D8 48 8B D9 48 8B C2`, one executable match at `0x282D60`;
+- uploader body SHA-256: `F9A6578992870A9F5BF8C733944A83A5A834CC95490D8D0CC7573021F452FD31`.
+
+Pinned HREK independently exposes the same transaction: rebuild
+`0x87C4B0`-`0x87C6FB` (SHA-256
+`84A1A55BBDBF98E6496CC47E9F644602B81617AB7283F94C37A88122B628A4B0`)
+calls uploader `0x8561A0`-`0x8564FD` (SHA-256
+`78D0DA6E00ED0E6564AE9FAA78A818EE50243DA2968F7ED55977803B2ABE8AF2`).
+This closes the static identity, ABI, layout, and flow proof. Runtime/headset
+acceptance remains pending.
+
+The same HREK binary publishes `render_first_person_fov_scale` as a type-6
+float debug control (`0x17E2250` name, `0x2015350` descriptor,
+`0x205A0C8` value); retail publishes the homolog at `0x9EB9F0`, `0xB408E8`,
+and `0xB445F4`. Official `tool.exe export-tag-to-xml` exports of a Reach weapon,
+`globals`, and `rasterizer_globals` contain no first-person FOV field. The
+narrow viewmodel FOV is therefore engine control state, not a weapon-tag field.
 
 ### HREK semantic corroboration
 

@@ -35,13 +35,15 @@ it is never linked into `halo3xr.dll`. The build identity line reports
 ## How the permanent Reach camera core behaves
 
 Reach is fail-open: it renders exactly as stock until its runtime proof passes.
-The 50 ms title worker verifies the exact loaded Reach PE/file identity, three
-unique executable signatures, both function-body hashes, seven caller edges, and
-fixed ranges once per sole-title admission epoch, and the Present path validates
+The 50 ms title worker verifies the exact loaded Reach PE/file identity, every
+manifest-pinned executable signature and function-body hash, the required caller
+and first-person-camera flow edges, and fixed ranges once per sole-title admission
+epoch, and the Present path validates
 the exact swapchain buffer 0 and builds two private per-eye caches. Only after
 that proof and a one-second fresh-camera safety interval does the worker install
-two hooks -- the inner `player_view_render` and outer `main_render_view` -- and
-arm the per-eye stereo transaction. Any unmet precondition, an invalid camera,
+five hooks -- inner/outer stereo, interpolation, visible palette, and the exact
+first-person camera rebuild -- and arm the per-eye transaction. Any unmet
+precondition, an invalid camera,
 or a fault falls open to one original renderer call, and Halo 3 and ODST are
 never touched. If visibility ownership was already committed, that fallback
 uses the same bounded head-centre camera/matrices rather than mixing head culling
@@ -73,6 +75,14 @@ translation is applied only to the two rasters. The angular union is conservativ
 for orientation/FOV but is not claimed to exactly enclose translated near-plane
 corners; close doorway/peripheral geometry remains an explicit headset test.
 
+During each admitted eye render, Reach first executes its complete stock
+first-person camera rebuild, including the native FOV-control side effects. The
+camera detour then substitutes that eye's already validated world compact camera
+and `0xC4` derived/projection block for the crushed viewmodel pair and reruns
+Reach's own two-pointer constant uploader. This mirrors the accepted Halo 3/ODST
+last-writer transaction; normal stock, fallback, nested, screenshot, and teardown
+paths do not enter the substitution scope.
+
 Reach also consumes the universal `motion_blur` comfort setting with the same
 player-visible outcome as the accepted Halo 3/ODST paths. After the pinned
 loaded-image proof, the worker resolves Reach's unique native type-6
@@ -97,7 +107,7 @@ is published with two fixed slots and lock-free pin/claim atomics; a changing or
 stale serial fails immediately. Present performs only the
 bounded identity/field snapshot plus `GetBuffer(0)`, device/descriptor capture,
 and COM retention described above; eye allocation and proof publication remain
-on the worker. Title teardown disables all four Reach hooks, verifies callback and
+on the worker. Title teardown disables all five Reach hooks, verifies callback and
 MinHook relay/wrapper RIP quiescence, then removes trampolines and releases the
 retained title module; a failed proof retains state and retries without rearming.
 

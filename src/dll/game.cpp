@@ -9543,6 +9543,8 @@ namespace
     using ReachCameraStateUpdaterFn = void(__fastcall*)(void*, void*);
     using ReachMatrixBuilderFn =
         void(__fastcall*)(void*, void*, void*, void*, void*);
+    using ReachFpCameraRebuildFn = void(__fastcall*)(void*, bool);
+    using ReachFpCameraUploadFn = void(__fastcall*)(void*, void*);
 
     struct ReachRenderHelpers
     {
@@ -9717,12 +9719,25 @@ namespace
     // nested stock call tree.
     thread_local bool g_reachNestedOuterSuppressed = false;
 
+    struct ReachFpCameraEyeScope
+    {
+        bool active = false;
+        uint32_t generation = 0;
+        uint32_t eye = 0;
+        uint64_t preparedSerial = 0;
+        uintptr_t workspace = 0;
+        uintptr_t playerView = 0;
+        alignas(16) unsigned char compact[kReachCompactCameraSize]{};
+        alignas(16) unsigned char derived[kReachDerivedBlockSize]{};
+    };
+    thread_local ReachFpCameraEyeScope g_reachFpCameraEyeScope;
+
     struct ReachCameraCore
     {
         std::atomic<bool> installed{false};
         std::atomic<bool> armed{false};
         std::atomic<bool> teardownRequested{false};
-        // Counts all four Reach detours from wrapper entry until every
+        // Counts all five Reach detours from wrapper entry until every
         // trampoline/original call has returned. Teardown disables all hooks,
         // then proves that neither a callback nor a MinHook relay ingress
         // remains before freeing either trampoline or the retained title DLL.
@@ -9743,6 +9758,7 @@ namespace
         bool nativeWeaponIkBypassActive = false;
         void* fpInterpolateTarget = nullptr;
         void* fpPaletteTarget = nullptr;
+        void* fpCameraTarget = nullptr;
     } g_reachCamera;
     bool RestoreReachNativeWeaponIkBypass();
     static_assert(std::atomic<int>::is_always_lock_free);
@@ -9765,6 +9781,8 @@ namespace
         uint16_t, const BoneMatrix*, BoneMatrix*, uintptr_t,
         const BoneMatrix*, const int32_t*);
     ReachFpPaletteFn g_reachOrigFpPalette = nullptr;
+    ReachFpCameraRebuildFn g_reachOrigFpCameraRebuild = nullptr;
+    ReachFpCameraUploadFn g_reachFpCameraUpload = nullptr;
 
     constexpr size_t kReachFpLayoutCacheCapacity = 4;
     // Retail 0x2AF648 emits at most four interpolation -> palette transactions
@@ -9933,6 +9951,80 @@ namespace
             }
         }
         return callReturned && restoreSucceeded;
+    }
+
+    bool ReachFpCameraEyeScopeMatchesLive() noexcept
+    {
+        const ReachFpCameraEyeScope& scope = g_reachFpCameraEyeScope;
+        const ReachOwnerScope& owner = g_reachOwnerScope;
+        const uintptr_t base = g_reachCamera.base;
+        if (!scope.active || g_reachNestedOuterSuppressed || !base ||
+            !g_reachCamera.armed.load(std::memory_order_acquire) ||
+            scope.generation != g_reachCamera.generation ||
+            scope.eye > 1 ||
+            g_stereoEye.load(std::memory_order_acquire) !=
+                static_cast<int>(scope.eye) ||
+            !owner.active || owner.workspace != scope.workspace ||
+            owner.playerView != scope.playerView ||
+            owner.preparedSerial != scope.preparedSerial ||
+            !owner.renderAccess || !owner.renderAccess->active ||
+            owner.renderAccess->preparedSerial != scope.preparedSerial)
+        {
+            return false;
+        }
+
+        const int32_t depth = *reinterpret_cast<const int32_t*>(
+            base + kReachCameraStackDepthRva);
+        if (depth < 0 || depth > 3)
+            return false;
+        const uintptr_t topWorkspace = *reinterpret_cast<const uintptr_t*>(
+            base + kReachCameraStackPointersRva +
+            static_cast<uintptr_t>(depth) * sizeof(uintptr_t));
+        return topWorkspace == scope.workspace &&
+            *reinterpret_cast<const uintptr_t*>(
+                base + kReachActiveViewRva) == scope.playerView &&
+            *reinterpret_cast<const uint32_t*>(
+                base + kReachSelectedSpecializationRva) == 0;
+    }
+
+    void ReachFpCameraRebuildBody(void* view, bool firstPersonEnabled)
+    {
+        ReachFpCameraRebuildFn original = g_reachOrigFpCameraRebuild;
+        if (!original)
+            return;
+
+        // Preserve the title's complete first-person rebuild and FOV side
+        // effects. During one exact admitted eye render, replace its final
+        // compact camera and derived/projection pair with that eye's already
+        // rebuilt world pair, then rerun Reach's own constant uploader. This is
+        // the same last-writer transaction used by Halo 3 and ODST.
+        original(view, firstPersonEnabled);
+        if (!ReachFpCameraEyeScopeMatchesLive() || !g_reachFpCameraUpload)
+            return;
+
+        ReachFpCameraEyeScope& scope = g_reachFpCameraEyeScope;
+        void* const compact = reinterpret_cast<void*>(
+            g_reachCamera.base + kReachFpCompactCameraRva);
+        void* const derived = reinterpret_cast<void*>(
+            scope.workspace + kReachSecondaryDerivedOffset);
+        memcpy(compact, scope.compact, sizeof(scope.compact));
+        memcpy(derived, scope.derived, sizeof(scope.derived));
+        g_reachFpCameraUpload(compact, derived);
+    }
+
+    __declspec(noinline) void __fastcall ReachFpCameraRebuildDetour(
+        void* view, bool firstPersonEnabled)
+    {
+        g_reachCamera.activeCallbacks.fetch_add(1, std::memory_order_acq_rel);
+        __try
+        {
+            ReachFpCameraRebuildBody(view, firstPersonEnabled);
+        }
+        __finally
+        {
+            g_reachCamera.activeCallbacks.fetch_sub(
+                1, std::memory_order_acq_rel);
+        }
     }
 
     // kReachSecondaryCompactOffset and the derived/render-bounds sub-block
@@ -10437,7 +10529,30 @@ namespace
                 // state updater cleared or moved the owner the inner render
                 // dereferences.
                 *reinterpret_cast<uintptr_t*>(reachOwnerGlobal) = entryOwner;
-                if (!ReachCallPlayerViewWithoutPatchyFog(playerView))
+                ReachFpCameraEyeScope& fpCameraScope =
+                    g_reachFpCameraEyeScope;
+                fpCameraScope.active = false;
+                fpCameraScope.generation = g_reachCamera.generation;
+                fpCameraScope.eye = policy.eye;
+                fpCameraScope.preparedSerial = access.preparedSerial;
+                fpCameraScope.workspace = workspace;
+                fpCameraScope.playerView = playerView;
+                memcpy(fpCameraScope.compact, compact,
+                       sizeof(fpCameraScope.compact));
+                memcpy(fpCameraScope.derived, primaryDerived,
+                       sizeof(fpCameraScope.derived));
+                bool renderReturned = false;
+                __try
+                {
+                    fpCameraScope.active = true;
+                    renderReturned =
+                        ReachCallPlayerViewWithoutPatchyFog(playerView);
+                }
+                __finally
+                {
+                    fpCameraScope.active = false;
+                }
+                if (!renderReturned)
                 {
                     transactionValid = false;
                     break;
@@ -11751,7 +11866,7 @@ namespace
     bool ScanForReachDetourIngress(bool& busy)
     {
         static bool rangesResolved = false;
-        static ReachDetourCodeRange ranges[4]{};
+        static ReachDetourCodeRange ranges[5]{};
         if (!rangesResolved)
         {
             const void* functions[] = {
@@ -11759,6 +11874,7 @@ namespace
                 reinterpret_cast<const void*>(&ReachPlayerViewRenderDetour),
                 reinterpret_cast<const void*>(&ReachFpInterpolate),
                 reinterpret_cast<const void*>(&ReachFpPalette),
+                reinterpret_cast<const void*>(&ReachFpCameraRebuildDetour),
             };
             static_assert(_countof(functions) == _countof(ranges));
             bool resolved = true;
@@ -11776,12 +11892,14 @@ namespace
             g_reachCamera.innerTarget,
             g_reachCamera.fpInterpolateTarget,
             g_reachCamera.fpPaletteTarget,
+            g_reachCamera.fpCameraTarget,
         };
         void* const trampolines[] = {
             reinterpret_cast<void*>(g_reachOrigMainRenderView),
             reinterpret_cast<void*>(g_reachOrigPlayerViewRender),
             reinterpret_cast<void*>(g_reachOrigFpInterpolate),
             reinterpret_cast<void*>(g_reachOrigFpPalette),
+            reinterpret_cast<void*>(g_reachOrigFpCameraRebuild),
         };
         static_assert(_countof(targets) == _countof(ranges));
         static_assert(_countof(trampolines) == _countof(ranges));
@@ -11880,6 +11998,7 @@ namespace
             g_reachCamera.innerTarget,
             g_reachCamera.fpInterpolateTarget,
             g_reachCamera.fpPaletteTarget,
+            g_reachCamera.fpCameraTarget,
         };
         for (void* target : targets)
         {
@@ -11897,6 +12016,24 @@ namespace
             return false;
 
         bool removedAll = true;
+        if (g_reachCamera.fpCameraTarget)
+        {
+            const MH_STATUS status =
+                MH_RemoveHook(g_reachCamera.fpCameraTarget);
+            if (status == MH_OK || status == MH_ERROR_NOT_CREATED)
+            {
+                g_reachCamera.fpCameraTarget = nullptr;
+                g_reachOrigFpCameraRebuild = nullptr;
+                g_reachFpCameraUpload = nullptr;
+            }
+            else
+            {
+                removedAll = false;
+                LOG("Reach FP camera cleanup: remove failed for %p (%d)",
+                    g_reachCamera.fpCameraTarget,
+                    static_cast<int>(status));
+            }
+        }
         if (g_reachCamera.fpPaletteTarget)
         {
             const MH_STATUS status =
@@ -12018,6 +12155,7 @@ namespace
         g_reachCamera.outerTarget = nullptr;
         g_reachCamera.fpInterpolateTarget = nullptr;
         g_reachCamera.fpPaletteTarget = nullptr;
+        g_reachCamera.fpCameraTarget = nullptr;
         g_reachCamera.moduleReference = nullptr;
         g_reachCamera.base = 0;
         g_reachCamera.size = 0;
@@ -12035,6 +12173,8 @@ namespace
         g_reachOrigMainRenderView = nullptr;
         g_reachOrigFpInterpolate = nullptr;
         g_reachOrigFpPalette = nullptr;
+        g_reachOrigFpCameraRebuild = nullptr;
+        g_reachFpCameraUpload = nullptr;
         g_reachFpStatus.key.store(0,std::memory_order_release);
         g_reachFpLoggedStatusKey.store(0,std::memory_order_release);
         g_reachHelpers = {};
@@ -12194,12 +12334,18 @@ namespace
             "48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 57 41 54 41 55 41 56 41 57 48 83 EC 20 33 DB 49 63 F8 38 1D ?? ?? ?? ?? 4D 8B E1 8B EA 4C 63 D9";
         static constexpr char kFpPaletteAob[] =
             "48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 57 41 56 41 57 48 83 EC 20 48 8B 05 ?? ?? ?? ?? 49 8B F0 0F B7 C9 4C 8B F2";
+        static constexpr char kFpCameraAob[] =
+            "48 89 5C 24 08 48 89 74 24 10 57 48 83 EC 40 4C 8B 41 08 48 8D 05 ?? ?? ?? ?? 48 8B D9 0F 29 74 24 30";
         if (!ReachColdExactSignatureAt(
                 base,size,kReachFpInterpolateRva,kFpInterpolateAob) ||
             !ReachColdExactSignatureAt(
-                base,size,kReachFpVisiblePaletteRva,kFpPaletteAob))
+                base,size,kReachFpVisiblePaletteRva,kFpPaletteAob) ||
+            !ReachColdExactSignatureAt(
+                base,size,kReachFpCameraRebuildRva,kFpCameraAob) ||
+            !ReachColdExecutableAddress(base + kReachFpCameraUploadRva))
         {
-            LOG("Reach FP install: exact interpolation/palette signatures failed; stock Reach remains active");
+            LOG("Reach FP install: exact interpolation/palette/camera "
+                "signatures failed; stock Reach remains active");
             return false;
         }
 
@@ -12276,6 +12422,8 @@ namespace
             reinterpret_cast<void*>(base + kReachFpInterpolateRva);
         void* fpPalette =
             reinterpret_cast<void*>(base + kReachFpVisiblePaletteRva);
+        void* fpCamera =
+            reinterpret_cast<void*>(base + kReachFpCameraRebuildRva);
         const bool innerCreated = MH_CreateHook(inner,
                 reinterpret_cast<void*>(&ReachPlayerViewRenderDetour),
                 reinterpret_cast<void**>(&g_reachOrigPlayerViewRender)) == MH_OK;
@@ -12288,8 +12436,12 @@ namespace
         const bool fpPaletteCreated = fpInterpolateCreated && MH_CreateHook(
                 fpPalette,reinterpret_cast<void*>(&ReachFpPalette),
                 reinterpret_cast<void**>(&g_reachOrigFpPalette)) == MH_OK;
+        const bool fpCameraCreated = fpPaletteCreated && MH_CreateHook(
+                fpCamera,
+                reinterpret_cast<void*>(&ReachFpCameraRebuildDetour),
+                reinterpret_cast<void**>(&g_reachOrigFpCameraRebuild)) == MH_OK;
         if (!innerCreated || !outerCreated ||
-            !fpInterpolateCreated || !fpPaletteCreated)
+            !fpInterpolateCreated || !fpPaletteCreated || !fpCameraCreated)
         {
             bool cleanupOk=true;
             auto removeCreated=[&](bool created,void* target) {
@@ -12298,6 +12450,7 @@ namespace
                 cleanupOk=(status==MH_OK || status==MH_ERROR_NOT_CREATED) &&
                     cleanupOk;
             };
+            removeCreated(fpCameraCreated,fpCamera);
             removeCreated(fpPaletteCreated,fpPalette);
             removeCreated(fpInterpolateCreated,fpInterpolate);
             removeCreated(outerCreated,outer);
@@ -12309,6 +12462,7 @@ namespace
                 g_reachOrigMainRenderView = nullptr;
                 g_reachOrigFpInterpolate = nullptr;
                 g_reachOrigFpPalette = nullptr;
+                g_reachOrigFpCameraRebuild = nullptr;
             }
             else
             {
@@ -12321,6 +12475,7 @@ namespace
                 g_reachCamera.fpInterpolateTarget=
                     fpInterpolateCreated?fpInterpolate:nullptr;
                 g_reachCamera.fpPaletteTarget=fpPaletteCreated?fpPalette:nullptr;
+                g_reachCamera.fpCameraTarget=fpCameraCreated?fpCamera:nullptr;
                 g_reachCamera.armed.store(false,std::memory_order_release);
                 g_reachCamera.teardownRequested.store(
                     true,std::memory_order_release);
@@ -12346,6 +12501,9 @@ namespace
         g_reachCamera.outerTarget = outer;
         g_reachCamera.fpInterpolateTarget = fpInterpolate;
         g_reachCamera.fpPaletteTarget = fpPalette;
+        g_reachCamera.fpCameraTarget = fpCamera;
+        g_reachFpCameraUpload = reinterpret_cast<ReachFpCameraUploadFn>(
+            base + kReachFpCameraUploadRva);
         g_reachCamera.installedAtMs = GetTickCount64();
         g_reachCamera.motionBlurVars[0] = {
             reachMotionBlurScale, reachMotionBlurScaleOriginal};
@@ -12375,7 +12533,8 @@ namespace
         if (MH_EnableHook(inner) != MH_OK ||
             MH_EnableHook(outer) != MH_OK ||
             MH_EnableHook(fpInterpolate) != MH_OK ||
-            MH_EnableHook(fpPalette) != MH_OK)
+            MH_EnableHook(fpPalette) != MH_OK ||
+            MH_EnableHook(fpCamera) != MH_OK)
         {
             // State was published before the first enable, so even a partial
             // MinHook failure can use the same disable/quiesce/remove proof as
@@ -12393,7 +12552,15 @@ namespace
             RemoveReachCameraCore();
             return false;
         }
-        LOG("Reach camera core installed: outer/inner stereo + FP interpolation/palette transaction hooked; waiting one-second fresh-camera interval before arming");
+        LOG("Reach camera core installed: outer/inner stereo + FP "
+            "interpolation/palette + per-eye world-projection camera "
+            "transactions hooked; waiting one-second fresh-camera interval "
+            "before arming");
+        LOG("Reach FP camera evidence: HREK-homologous rebuild %llX now "
+            "re-uploads each admitted eye's world compact/derived pair through "
+            "%llX (viewmodel depth uncrushed)",
+            static_cast<unsigned long long>(kReachFpCameraRebuildRva),
+            static_cast<unsigned long long>(kReachFpCameraUploadRva));
         LOG("Reach comfort evidence: blurScale=%llX blurMax=%llX "
             "(authored %.4f/%.4f); VR default keeps scale finite and zeros max",
             static_cast<unsigned long long>(

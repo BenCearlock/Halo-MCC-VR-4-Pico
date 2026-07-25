@@ -468,7 +468,8 @@ if (@($manifest.preliminary_candidates).Count -ne 5) {
 }
 foreach ($candidate in $manifest.preliminary_candidates) {
     $productionFp = $candidate.id -eq 'fp_interpolation' -or
-        $candidate.id -eq 'visible_palette'
+        $candidate.id -eq 'visible_palette' -or
+        $candidate.id -eq 'first_person_camera_upload'
     if ($candidate.proof_complete -ne $productionFp) {
         throw "Preliminary Reach candidate is incorrectly proof-complete: $($candidate.id)"
     }
@@ -578,6 +579,27 @@ foreach ($fpId in @('fp_interpolation', 'visible_palette')) {
     Write-Host ('Function {0}: exact {1}-byte AOB at RVA 0x{2:X8}' -f `
         $fpId, $pattern.Count, $expectedRva)
 }
+$fpCameraEvidence = @($manifest.preliminary_candidates | Where-Object {
+    $_.id -eq 'first_person_camera_upload'
+})
+if ($fpCameraEvidence.Count -ne 1 -or
+        $fpCameraEvidence[0].headset_accepted -ne $false -or
+        [string]$fpCameraEvidence[0].hrek_homolog.binary -cne
+            [string]$cameraEvidence.name) {
+    throw 'Reach evidence manifest must contain one statically proven, headset-pending FP camera transaction.'
+}
+Test-FunctionEvidence -Bytes $moduleBytes -Sections $sections `
+    -Evidence $fpCameraEvidence[0].rebuild `
+    -Label 'retail first-person camera rebuild'
+Test-FunctionEvidence -Bytes $moduleBytes -Sections $sections `
+    -Evidence $fpCameraEvidence[0].uploader `
+    -Label 'retail first-person camera uploader'
+Test-FunctionEvidence -Bytes $hrekBytes -Sections $hrekSections `
+    -Evidence $fpCameraEvidence[0].hrek_homolog.rebuild `
+    -Label 'HREK first-person camera rebuild'
+Test-FunctionEvidence -Bytes $hrekBytes -Sections $hrekSections `
+    -Evidence $fpCameraEvidence[0].hrek_homolog.uploader `
+    -Label 'HREK first-person camera uploader'
 Test-FunctionEvidence -Bytes $moduleBytes -Sections $sections `
     -Evidence $manifest.player_view_transaction.retail.main_render_view `
     -Label 'main_render_view'

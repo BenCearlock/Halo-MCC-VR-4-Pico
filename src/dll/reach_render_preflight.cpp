@@ -63,6 +63,7 @@ namespace
          kReachDisplaySurfaceArrayOffset + sizeof(uintptr_t)},
         {kReachDisplaySelectedRtvRva, sizeof(uintptr_t)},
         {kReachPatchyFogFlagsRva, sizeof(uint8_t)},
+        {kReachFpCompactCameraRva, kReachCompactCameraSize},
     };
 
     bool IsReadableProtection(DWORD protection) noexcept
@@ -389,20 +390,22 @@ namespace
             Hex(digest) == kReachRetailModuleSha256;
     }
 
-    bool CheckCall(
+    bool CheckRel32(
         uintptr_t base, size_t imageSize,
-        const ExpectedCall& expected) noexcept
+        uintptr_t siteRva, uintptr_t targetRva,
+        uint8_t opcode) noexcept
     {
-        if (!BoundedRva(expected.siteRva, 5, imageSize))
+        if (!BoundedRva(siteRva, 5, imageSize))
             return false;
-        const auto* call = reinterpret_cast<const uint8_t*>(
-            base + expected.siteRva);
-        const uintptr_t instruction = base + expected.siteRva;
-        if (call[0] != 0xE8 || instruction >
+        const auto* instructionBytes = reinterpret_cast<const uint8_t*>(
+            base + siteRva);
+        const uintptr_t instruction = base + siteRva;
+        if (instructionBytes[0] != opcode || instruction >
                 std::numeric_limits<uintptr_t>::max() - 5)
             return false;
         int32_t displacement = 0;
-        std::memcpy(&displacement, call + 1, sizeof(displacement));
+        std::memcpy(
+            &displacement, instructionBytes + 1, sizeof(displacement));
         const uintptr_t next = instruction + 5;
         uintptr_t actualTarget = 0;
         if (displacement >= 0)
@@ -422,7 +425,36 @@ namespace
                 return false;
             actualTarget = next - magnitude;
         }
-        return actualTarget == base + expected.targetRva;
+        return actualTarget == base + targetRva;
+    }
+
+    bool CheckCall(
+        uintptr_t base, size_t imageSize,
+        const ExpectedCall& expected) noexcept
+    {
+        return CheckRel32(
+            base, imageSize, expected.siteRva, expected.targetRva, 0xE8);
+    }
+
+    bool CheckRipRelativeLea(
+        uintptr_t base, size_t imageSize, uintptr_t siteRva,
+        uint8_t modRm, uintptr_t targetRva) noexcept
+    {
+        if (!BoundedRva(siteRva, 7, imageSize))
+            return false;
+        const auto* instruction = reinterpret_cast<const uint8_t*>(
+            base + siteRva);
+        if (instruction[0] != 0x48 || instruction[1] != 0x8D ||
+            instruction[2] != modRm)
+        {
+            return false;
+        }
+        int32_t displacement = 0;
+        std::memcpy(&displacement, instruction + 3, sizeof(displacement));
+        const intptr_t target = static_cast<intptr_t>(base + siteRva + 7) +
+            static_cast<intptr_t>(displacement);
+        return target >= 0 &&
+            static_cast<uintptr_t>(target) == base + targetRva;
     }
 
     bool CheckFixedRanges(uintptr_t base, size_t imageSize) noexcept
@@ -544,7 +576,13 @@ bool ReachRender_RunLoadedImagePreflight(
             kReachPlayerViewRenderBodySize) ||
         !ExecutableContains(
             image, kReachFrustumHelperRva,
-            kReachFrustumHelperAob.size()))
+            kReachFrustumHelperAob.size()) ||
+        !ExecutableContains(
+            image, kReachFpCameraRebuildRva,
+            kReachFpCameraRebuildBodySize) ||
+        !ExecutableContains(
+            image, kReachFpCameraUploadRva,
+            kReachFpCameraUploadBodySize))
     {
         result.failure = ReachLoadedImageFailure::ExecutableSections;
         return false;
@@ -555,6 +593,8 @@ bool ReachRender_RunLoadedImagePreflight(
     exactMask.fill(0xFF);
     std::array<uint8_t, kReachFrustumHelperAob.size()> frustumMask{};
     frustumMask.fill(0xFF);
+    std::array<uint8_t, kReachFpCameraUploadAob.size()> fpUploadMask{};
+    fpUploadMask.fill(0xFF);
     const PatternResult main = ScanExecutable(
         image, kReachMainRenderViewAob.data(), exactMask.data(),
         kReachMainRenderViewAob.size());
@@ -565,6 +605,13 @@ bool ReachRender_RunLoadedImagePreflight(
     const PatternResult frustum = ScanExecutable(
         image, kReachFrustumHelperAob.data(), frustumMask.data(),
         kReachFrustumHelperAob.size());
+    const PatternResult fpCamera = ScanExecutable(
+        image, kReachFpCameraRebuildAob.data(),
+        kReachFpCameraRebuildAobMask.data(),
+        kReachFpCameraRebuildAob.size());
+    const PatternResult fpUpload = ScanExecutable(
+        image, kReachFpCameraUploadAob.data(), fpUploadMask.data(),
+        kReachFpCameraUploadAob.size());
     result.proof.mainRenderViewMatchCount = main.count;
     result.proof.mainRenderViewAtExpectedRva =
         main.first == moduleBase + kReachMainRenderViewRva;
@@ -574,10 +621,19 @@ bool ReachRender_RunLoadedImagePreflight(
     result.proof.frustumHelperMatchCount = frustum.count;
     result.proof.frustumHelperAtExpectedRva =
         frustum.first == moduleBase + kReachFrustumHelperRva;
+    result.proof.fpCameraRebuildMatchCount = fpCamera.count;
+    result.proof.fpCameraRebuildAtExpectedRva =
+        fpCamera.first == moduleBase + kReachFpCameraRebuildRva;
+    result.proof.fpCameraUploadMatchCount = fpUpload.count;
+    result.proof.fpCameraUploadAtExpectedRva =
+        fpUpload.first == moduleBase + kReachFpCameraUploadRva;
     if (main.count != 1 || player.count != 1 || frustum.count != 1 ||
+        fpCamera.count != 1 || fpUpload.count != 1 ||
         !result.proof.mainRenderViewAtExpectedRva ||
         !result.proof.playerViewRenderAtExpectedRva ||
-        !result.proof.frustumHelperAtExpectedRva)
+        !result.proof.frustumHelperAtExpectedRva ||
+        !result.proof.fpCameraRebuildAtExpectedRva ||
+        !result.proof.fpCameraUploadAtExpectedRva)
     {
         result.failure = ReachLoadedImageFailure::SignatureIdentity;
         return false;
@@ -593,8 +649,20 @@ bool ReachRender_RunLoadedImagePreflight(
             moduleBase + kReachPlayerViewRenderRva),
         kReachPlayerViewRenderBodySize,
         kReachPlayerViewRenderBodySha256);
+    result.proof.fpCameraRebuildBodyHash = HashBytes(
+        reinterpret_cast<const void*>(
+            moduleBase + kReachFpCameraRebuildRva),
+        kReachFpCameraRebuildBodySize,
+        kReachFpCameraRebuildBodySha256);
+    result.proof.fpCameraUploadBodyHash = HashBytes(
+        reinterpret_cast<const void*>(
+            moduleBase + kReachFpCameraUploadRva),
+        kReachFpCameraUploadBodySize,
+        kReachFpCameraUploadBodySha256);
     if (!result.proof.mainRenderViewBodyHash ||
-        !result.proof.playerViewRenderBodyHash)
+        !result.proof.playerViewRenderBodyHash ||
+        !result.proof.fpCameraRebuildBodyHash ||
+        !result.proof.fpCameraUploadBodyHash)
     {
         result.failure = ReachLoadedImageFailure::BodyIdentity;
         return false;
@@ -611,6 +679,28 @@ bool ReachRender_RunLoadedImagePreflight(
     }
     result.proof.exactOuterCallerEdges = true;
     result.proof.exactInnerCallerEdge = true;
+    result.proof.exactFpCameraFlowEdges =
+        CheckCall(
+            moduleBase, moduleSize,
+            {kReachFpCameraFrustumCallRva, kReachFrustumHelperRva}) &&
+        CheckCall(
+            moduleBase, moduleSize,
+            {kReachFpCameraProjectionCallRva,
+             kReachProjectionBuilderRva}) &&
+        CheckRel32(
+            moduleBase, moduleSize, kReachFpCameraUploadJumpRva,
+            kReachFpCameraUploadRva, 0xE9) &&
+        CheckRipRelativeLea(
+            moduleBase, moduleSize, kReachFpCameraCompactLeaRva,
+            0x05, kReachFpCompactCameraRva) &&
+        CheckRipRelativeLea(
+            moduleBase, moduleSize, kReachFpCameraUploadCompactLeaRva,
+            0x0D, kReachFpCompactCameraRva);
+    if (!result.proof.exactFpCameraFlowEdges)
+    {
+        result.failure = ReachLoadedImageFailure::CallerEdges;
+        return false;
+    }
 
     result.proof.fixedDataRanges =
         CheckFixedRanges(moduleBase, moduleSize);

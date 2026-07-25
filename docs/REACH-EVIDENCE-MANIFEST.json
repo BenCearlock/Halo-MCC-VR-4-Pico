@@ -753,9 +753,66 @@
     },
     {
       "id": "first_person_camera_upload",
-      "description": "first-person camera upload candidate",
+      "description": "production Reach first-person camera rebuild and two-pointer constant-upload transaction",
       "rva": "0x00282D60",
-      "proof_complete": false
+      "rebuild": {
+        "function_rva": "0x00286C6C",
+        "function_end_rva_exclusive": "0x00286EBC",
+        "function_size": 592,
+        "entry_aob": "48 89 5C 24 08 48 89 74 24 10 57 48 83 EC 40 4C 8B 41 08 48 8D 05 ?? ?? ?? ?? 48 8B D9 0F 29 74 24 30",
+        "static_executable_match_count": 1,
+        "body_sha256": "125656AF65F61F02BA482830D307EBFDD00BBE2DF7264F155613B3FF8FAEFE58",
+        "abi": "void __fastcall(void* first_person_view,bool first_person_enabled)",
+        "compact_source_offset": "0x0008",
+        "compact_size": 144,
+        "global_compact_camera_rva": "0x00CFAC20",
+        "secondary_derived_offset": "0x01E4",
+        "derived_size": 196,
+        "frustum_call_rva": "0x00286DD8",
+        "projection_call_rva": "0x00286DEF",
+        "uploader_tail_jump_rva": "0x00286E6A"
+      },
+      "uploader": {
+        "function_rva": "0x00282D60",
+        "function_end_rva_exclusive": "0x00282ED9",
+        "function_size": 377,
+        "entry_aob": "48 8B C4 48 89 58 08 55 48 8D 68 A1 48 81 EC C0 00 00 00 0F 29 70 E8 4C 8D 45 F7 0F 29 78 D8 48 8B D9 48 8B C2",
+        "static_executable_match_count": 1,
+        "body_sha256": "F9A6578992870A9F5BF8C733944A83A5A834CC95490D8D0CC7573021F452FD31",
+        "abi": "void __fastcall(const void* compact_camera,const void* derived_projection)"
+      },
+      "hrek_homolog": {
+        "binary": "reach_tag_test.exe",
+        "rebuild": {
+          "function_rva": "0x0087C4B0",
+          "function_end_rva_exclusive": "0x0087C6FB",
+          "function_size": 587,
+          "entry_aob": "48 89 5C 24 08 57 48 83 EC 50 0F 29 74 24 40 48 8B 05 ?? ?? ?? ?? 48 33 C4 48 89 44 24 30 48 8B 41 08",
+          "static_executable_match_count": 1,
+          "body_sha256": "84A1A55BBDBF98E6496CC47E9F644602B81617AB7283F94C37A88122B628A4B0"
+        },
+        "uploader": {
+          "function_rva": "0x008561A0",
+          "function_end_rva_exclusive": "0x008564FD",
+          "function_size": 861,
+          "entry_aob": "48 8B C4 48 89 58 08 48 89 70 10 48 89 78 18 55 41 54 41 55 41 56 41 57 48 8D 68 A1 48 81 EC D0 00 00 00 0F 29 70 C8 0F 29 78 B8",
+          "static_executable_match_count": 1,
+          "body_sha256": "78D0DA6E00ED0E6564AE9FAA78A818EE50243DA2968F7ED55977803B2ABE8AF2"
+        }
+      },
+      "fov_control": {
+        "name": "render_first_person_fov_scale",
+        "type": 6,
+        "retail_name_rva": "0x009EB9F0",
+        "retail_descriptor_rva": "0x00B408E8",
+        "retail_value_rva": "0x00B445F4",
+        "hrek_name_rva": "0x017E2250",
+        "hrek_descriptor_rva": "0x02015350",
+        "hrek_value_rva": "0x0205A0C8",
+        "tag_export_result": "no first-person FOV field exists in the exported weapon, globals, or rasterizer_globals tag definitions"
+      },
+      "proof_complete": true,
+      "headset_accepted": false
     },
     {
       "id": "fp_interpolation",

@@ -65,6 +65,25 @@ inline constexpr uintptr_t kReachDisplaySurfaceRtvOffset = 0x08;
 inline constexpr uintptr_t kReachDisplaySurfaceSrvOffset = 0x18;
 inline constexpr uint32_t kReachDisplaySurfaceCount = 4;
 inline constexpr uint32_t kReachDisplayFormatR8G8B8A8Unorm = 28;
+// Reach's exact first-person camera transaction. Retail 0x286C6C copies a
+// 0x90-byte compact camera into the title-global block, rebuilds the current
+// camera-stack workspace's secondary derived block at +0x1E4, then tail-jumps
+// to the two-pointer constant uploader at 0x282D60. Pinned HREK independently
+// exposes the same transaction at 0x87C4B0 -> 0x8561A0.
+inline constexpr uintptr_t kReachFpCameraRebuildRva = 0x00286C6C;
+inline constexpr size_t kReachFpCameraRebuildBodySize = 0x0250;
+inline constexpr char kReachFpCameraRebuildBodySha256[] =
+    "125656AF65F61F02BA482830D307EBFDD00BBE2DF7264F155613B3FF8FAEFE58";
+inline constexpr uintptr_t kReachFpCameraUploadRva = 0x00282D60;
+inline constexpr size_t kReachFpCameraUploadBodySize = 0x0179;
+inline constexpr char kReachFpCameraUploadBodySha256[] =
+    "F9A6578992870A9F5BF8C733944A83A5A834CC95490D8D0CC7573021F452FD31";
+inline constexpr uintptr_t kReachFpCompactCameraRva = 0x00CFAC20;
+inline constexpr uintptr_t kReachFpCameraCompactLeaRva = 0x00286C7F;
+inline constexpr uintptr_t kReachFpCameraFrustumCallRva = 0x00286DD8;
+inline constexpr uintptr_t kReachFpCameraProjectionCallRva = 0x00286DEF;
+inline constexpr uintptr_t kReachFpCameraUploadCompactLeaRva = 0x00286E4F;
+inline constexpr uintptr_t kReachFpCameraUploadJumpRva = 0x00286E6A;
 // Reach-native type-6 float debug variables. The pinned retail table contains
 // one exact entry for each name; HREK independently corroborates the same two
 // controls and authored values (docs/REACH-SIGNATURE-EVIDENCE.md). Production
@@ -823,6 +842,32 @@ inline constexpr std::array<uint8_t, 25> kReachFrustumHelperAob{
     0x50,
 };
 
+inline constexpr std::array<uint8_t, 34> kReachFpCameraRebuildAob{
+    0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x74,
+    0x24, 0x10, 0x57, 0x48, 0x83, 0xEC, 0x40, 0x4C,
+    0x8B, 0x41, 0x08, 0x48, 0x8D, 0x05, 0x00, 0x00,
+    0x00, 0x00, 0x48, 0x8B, 0xD9, 0x0F, 0x29, 0x74,
+    0x24, 0x30,
+};
+
+inline constexpr auto kReachFpCameraRebuildAobMask = []
+{
+    std::array<uint8_t, kReachFpCameraRebuildAob.size()> mask{};
+    for (auto& byte : mask)
+        byte = 0xFF;
+    for (size_t index = 22; index <= 25; ++index)
+        mask[index] = 0;
+    return mask;
+}();
+
+inline constexpr std::array<uint8_t, 37> kReachFpCameraUploadAob{
+    0x48, 0x8B, 0xC4, 0x48, 0x89, 0x58, 0x08, 0x55,
+    0x48, 0x8D, 0x68, 0xA1, 0x48, 0x81, 0xEC, 0xC0,
+    0x00, 0x00, 0x00, 0x0F, 0x29, 0x70, 0xE8, 0x4C,
+    0x8D, 0x45, 0xF7, 0x0F, 0x29, 0x78, 0xD8, 0x48,
+    0x8B, 0xD9, 0x48, 0x8B, 0xC2,
+};
+
 inline size_t CountReachMaskedPattern(
     const uint8_t* data, size_t dataSize, const uint8_t* pattern,
     const uint8_t* mask, size_t patternSize) noexcept
@@ -857,6 +902,13 @@ struct ReachRenderCandidateProof
     uint32_t frustumHelperMatchCount = 0;
     bool frustumHelperAtExpectedRva = false;
     bool frustumHelperExecutableRange = false;
+    uint32_t fpCameraRebuildMatchCount = 0;
+    bool fpCameraRebuildAtExpectedRva = false;
+    bool fpCameraRebuildBodyHash = false;
+    uint32_t fpCameraUploadMatchCount = 0;
+    bool fpCameraUploadAtExpectedRva = false;
+    bool fpCameraUploadBodyHash = false;
+    bool exactFpCameraFlowEdges = false;
     bool exactOuterCallerEdges = false;
     bool exactInnerCallerEdge = false;
     bool fixedDataRanges = false;
@@ -875,6 +927,13 @@ inline bool ReachRenderCandidateProofComplete(
         proof.frustumHelperMatchCount == 1 &&
         proof.frustumHelperAtExpectedRva &&
         proof.frustumHelperExecutableRange &&
+        proof.fpCameraRebuildMatchCount == 1 &&
+        proof.fpCameraRebuildAtExpectedRva &&
+        proof.fpCameraRebuildBodyHash &&
+        proof.fpCameraUploadMatchCount == 1 &&
+        proof.fpCameraUploadAtExpectedRva &&
+        proof.fpCameraUploadBodyHash &&
+        proof.exactFpCameraFlowEdges &&
         proof.exactOuterCallerEdges &&
         proof.exactInnerCallerEdge &&
         proof.fixedDataRanges;

@@ -48,6 +48,16 @@ $requiredGame = [ordered]@{
         'bool\s+InstallReachCameraCore[\s\S]*?if\s*\(!ApplyReachNativeWeaponIkBypass\(\)\)'
     'native weapon IK lifecycle restore' =
         'bool\s+RemoveReachCameraCore[\s\S]*?if\s*\(!RestoreReachNativeWeaponIkBypass\(\)\)'
+    'stock first-person camera rebuild retained' =
+        'original\(view, firstPersonEnabled\)'
+    'per-eye world compact camera substitution' =
+        'memcpy\(compact, scope\.compact, sizeof\(scope\.compact\)\)'
+    'per-eye world derived projection substitution' =
+        'memcpy\(derived, scope\.derived, sizeof\(scope\.derived\)\)'
+    'stock first-person camera constant re-upload' =
+        'g_reachFpCameraUpload\(compact, derived\)'
+    'first-person camera hook lifecycle target' =
+        'g_reachCamera\.fpCameraTarget'
 }
 foreach ($entry in $requiredGame.GetEnumerator()) {
     if ($game -notmatch $entry.Value) {
@@ -64,5 +74,10 @@ if ($logic -notmatch 'kReachFpWeaponIkDisableValueRva' -or
     $logic -notmatch 'kReachFpWeaponIkDisabledEpilogueRva') {
     throw 'Reach FP parity gate missing: exact Reach native weapon-IK proof anchors.'
 }
+if ($logic -notmatch 'kReachFpCameraRebuildAob' -or
+    $logic -notmatch 'kReachFpCameraUploadAob' -or
+    $logic -notmatch 'exactFpCameraFlowEdges') {
+    throw 'Reach FP parity gate missing: exact Reach camera rebuild/upload proof anchors.'
+}
 
-Write-Host 'Reach FP Halo 3/ODST palette + native weapon-IK parity gate passed.'
+Write-Host 'Reach FP Halo 3/ODST palette + native weapon-IK + world-projection camera parity gate passed.'

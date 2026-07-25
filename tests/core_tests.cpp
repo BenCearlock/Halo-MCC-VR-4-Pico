@@ -53,6 +53,13 @@ namespace
         proof.frustumHelperMatchCount = 1;
         proof.frustumHelperAtExpectedRva = true;
         proof.frustumHelperExecutableRange = true;
+        proof.fpCameraRebuildMatchCount = 1;
+        proof.fpCameraRebuildAtExpectedRva = true;
+        proof.fpCameraRebuildBodyHash = true;
+        proof.fpCameraUploadMatchCount = 1;
+        proof.fpCameraUploadAtExpectedRva = true;
+        proof.fpCameraUploadBodyHash = true;
+        proof.exactFpCameraFlowEdges = true;
         proof.exactOuterCallerEdges = true;
         proof.exactInnerCallerEdge = true;
         proof.fixedDataRanges = true;
@@ -700,6 +707,39 @@ int main()
                   exactMask.data(), kReachMainRenderViewAob.size()) == 0,
             "Reach masked scanning fails closed on invalid buffers");
 
+        auto fpCameraEntry = kReachFpCameraRebuildAob;
+        fpCameraEntry[22] = 0x12;
+        fpCameraEntry[23] = 0x34;
+        fpCameraEntry[24] = 0x56;
+        fpCameraEntry[25] = 0x78;
+        Check(CountReachMaskedPattern(
+                  fpCameraEntry.data(), fpCameraEntry.size(),
+                  kReachFpCameraRebuildAob.data(),
+                  kReachFpCameraRebuildAobMask.data(),
+                  kReachFpCameraRebuildAob.size()) == 1,
+            "Reach FP camera signature masks only the LEA displacement");
+        fpCameraEntry.back() ^= 1;
+        Check(CountReachMaskedPattern(
+                  fpCameraEntry.data(), fpCameraEntry.size(),
+                  kReachFpCameraRebuildAob.data(),
+                  kReachFpCameraRebuildAobMask.data(),
+                  kReachFpCameraRebuildAob.size()) == 0,
+            "Reach FP camera signature rejects a changed fixed byte");
+        auto fpUploadEntry = kReachFpCameraUploadAob;
+        std::array<uint8_t, kReachFpCameraUploadAob.size()> fpUploadMask{};
+        fpUploadMask.fill(0xFF);
+        Check(CountReachMaskedPattern(
+                  fpUploadEntry.data(), fpUploadEntry.size(),
+                  kReachFpCameraUploadAob.data(), fpUploadMask.data(),
+                  kReachFpCameraUploadAob.size()) == 1,
+            "Reach FP camera uploader signature is exact");
+        fpUploadEntry[19] ^= 1;
+        Check(CountReachMaskedPattern(
+                  fpUploadEntry.data(), fpUploadEntry.size(),
+                  kReachFpCameraUploadAob.data(), fpUploadMask.data(),
+                  kReachFpCameraUploadAob.size()) == 0,
+            "Reach FP camera uploader rejects a changed fixed byte");
+
         ReachRenderCandidateProof proof =
             CompleteReachRenderCandidateProof();
         Check(ReachRenderCandidateProofComplete(proof),
@@ -721,9 +761,18 @@ int main()
               proofRejects([](auto& p) { p.playerViewRenderBodyHash = false; }) &&
               proofRejects([](auto& p) { p.frustumHelperMatchCount = 0; }) &&
               proofRejects([](auto& p) { p.frustumHelperMatchCount = 2; }) &&
-              proofRejects([](auto& p) { p.frustumHelperAtExpectedRva = false; }) &&
-              proofRejects([](auto& p) { p.frustumHelperExecutableRange = false; }) &&
-              proofRejects([](auto& p) { p.exactOuterCallerEdges = false; }) &&
+               proofRejects([](auto& p) { p.frustumHelperAtExpectedRva = false; }) &&
+               proofRejects([](auto& p) { p.frustumHelperExecutableRange = false; }) &&
+               proofRejects([](auto& p) { p.fpCameraRebuildMatchCount = 0; }) &&
+               proofRejects([](auto& p) { p.fpCameraRebuildMatchCount = 2; }) &&
+               proofRejects([](auto& p) { p.fpCameraRebuildAtExpectedRva = false; }) &&
+               proofRejects([](auto& p) { p.fpCameraRebuildBodyHash = false; }) &&
+               proofRejects([](auto& p) { p.fpCameraUploadMatchCount = 0; }) &&
+               proofRejects([](auto& p) { p.fpCameraUploadMatchCount = 2; }) &&
+               proofRejects([](auto& p) { p.fpCameraUploadAtExpectedRva = false; }) &&
+               proofRejects([](auto& p) { p.fpCameraUploadBodyHash = false; }) &&
+               proofRejects([](auto& p) { p.exactFpCameraFlowEdges = false; }) &&
+               proofRejects([](auto& p) { p.exactOuterCallerEdges = false; }) &&
               proofRejects([](auto& p) { p.exactInnerCallerEdge = false; }) &&
               proofRejects([](auto& p) { p.fixedDataRanges = false; }),
             "Reach render proof fails closed when any identity gate is absent");
