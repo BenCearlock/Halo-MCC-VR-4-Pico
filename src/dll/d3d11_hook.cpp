@@ -2,6 +2,8 @@
 #include <d3d11.h>
 #include <dxgi1_2.h>
 #include <cstdlib>
+#include <cstdint>
+#include <intrin.h>
 #include <MinHook.h>
 #include "d3d11_hook.h"
 #include "game.h"
@@ -53,14 +55,18 @@ typedef HRESULT(STDMETHODCALLTYPE* CreateSwapChainForHwndFn)(IDXGIFactory2*, IUn
 typedef HRESULT(STDMETHODCALLTYPE* CreateSwapChainFn)(IDXGIFactory*, IUnknown*,
     DXGI_SWAP_CHAIN_DESC*, IDXGISwapChain**);
 typedef BOOL(WINAPI* GetClientRectFn)(HWND, LPRECT);
+typedef BOOL(WINAPI* GetCursorPosFn)(LPPOINT);
 static CreateSwapChainForHwndFn g_origCreateSwapChainForHwnd = nullptr;
 static CreateSwapChainFn g_origCreateSwapChain = nullptr;
 static GetClientRectFn g_origGetClientRect = nullptr;
+static GetCursorPosFn g_origGetCursorPos = nullptr;
 static UINT g_forcedRenderW = 0;
 static UINT g_forcedRenderH = 0;
 static bool g_forcedMainSwapchain = false; // only force the game's own (first) swapchain
 static HWND g_gameHwnd = nullptr;          // captured at swapchain creation
 static bool g_fitActive = false;           // set once at startup: fit on AND its hooks installed
+static uintptr_t g_modBase = 0, g_modEnd = 0; // this DLL's address range (leave ImGui's cursor alone)
+static long g_cursorRemapLogs = 0;         // log only the first few menu-cursor remaps
 // Set on the game's UI thread ONLY while it synchronously processes a WM_SIZE we
 // rewrote to the full render size, so GetClientRectHook feeds MCC's own resize
 // code the full size on exactly that call stack -- never on the render thread's
@@ -123,6 +129,49 @@ static BOOL WINAPI GetClientRectHook(HWND hwnd, LPRECT rc)
         rc->right = (LONG)g_forcedRenderW;
         rc->bottom = (LONG)g_forcedRenderH;
     }
+    return ok;
+}
+
+// MCC's flat menu reads the cursor through GetCursorPos (absolute screen point)
+// and lays its clickable hit zones out in RENDER space measured from the window's
+// client origin -- it assumes 1 render pixel == 1 screen pixel. With the fit on,
+// the window is smaller than the render, so those hit zones land where the menu
+// USED to be at full size (mostly off the shrunken window) while the visible,
+// downscaled tiles sit inside it: the two diverge and clicks miss ("out of
+// zone"). Remap the cursor MCC sees into that render space, so hovering a tile
+// where it visually appears reports the cursor exactly on the tile's hit zone.
+// We leave the mod's own (ImGui F1 menu) GetCursorPos reads untouched, and only
+// remap while the cursor is actually over the game window.
+static BOOL WINAPI GetCursorPosHook(LPPOINT p)
+{
+    const BOOL ok = g_origGetCursorPos(p);
+    if (!ok || !p || !g_fitActive || !g_gameHwnd || !g_forcedRenderW || !g_forcedRenderH)
+        return ok;
+    const uintptr_t ret = (uintptr_t)_ReturnAddress();
+    if (g_modBase && ret >= g_modBase && ret < g_modEnd)
+        return ok; // our own / ImGui call -- do not remap
+    RECT rc{};
+    if (!g_origGetClientRect(g_gameHwnd, &rc))
+        return ok;
+    const int cw = rc.right - rc.left;
+    const int ch = rc.bottom - rc.top;
+    if (cw <= 0 || ch <= 0)
+        return ok;
+    POINT origin{0, 0};
+    ClientToScreen(g_gameHwnd, &origin);
+    if (p->x < origin.x || p->x >= origin.x + cw ||
+        p->y < origin.y || p->y >= origin.y + ch)
+        return ok; // cursor is not over the game window; leave it real
+    const LONG rx = origin.x + (LONG)((long long)(p->x - origin.x) * (int)g_forcedRenderW / cw);
+    const LONG ry = origin.y + (LONG)((long long)(p->y - origin.y) * (int)g_forcedRenderH / ch);
+    if (g_cursorRemapLogs < 3)
+    {
+        ++g_cursorRemapLogs;
+        LOG("fit: menu cursor remap real (%ld,%ld) -> (%ld,%ld) [client %dx%d render %ux%u]",
+            p->x, p->y, rx, ry, cw, ch, g_forcedRenderW, g_forcedRenderH);
+    }
+    p->x = rx;
+    p->y = ry;
     return ok;
 }
 
@@ -428,6 +477,20 @@ bool InstallD3D11Hooks()
         bool forceHookOk = false;
         bool clientRectHookOk = false;
 
+        // This DLL's address range, so the menu-cursor remap below can leave the
+        // mod's own (ImGui F1 menu) GetCursorPos reads alone.
+        HMODULE selfMod = nullptr;
+        if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                               GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                               (LPCWSTR)&D3D_FitActive, &selfMod) && selfMod)
+        {
+            g_modBase = (uintptr_t)selfMod;
+            const IMAGE_DOS_HEADER* dos = (const IMAGE_DOS_HEADER*)selfMod;
+            const IMAGE_NT_HEADERS* nt =
+                (const IMAGE_NT_HEADERS*)((const BYTE*)selfMod + dos->e_lfanew);
+            g_modEnd = g_modBase + nt->OptionalHeader.SizeOfImage;
+        }
+
         // Hook the DXGI factory's swapchain-creation entry points so we can force
         // MCC's backbuffer to the full launched render size. All factories in the
         // process share the same vtable implementation, so hooking the dummy
@@ -474,6 +537,16 @@ bool InstallD3D11Hooks()
                 else
                     LOG("warning: GetClientRect hook failed; the fit may crop on "
                         "resize-polling titles");
+            }
+
+            // Remap the cursor MCC reads into render space so the fitted menu is
+            // clickable (best-effort; the visible fit still works without it).
+            if (void* pGetCursorPos = (void*)GetProcAddress(user32, "GetCursorPos"))
+            {
+                if (MH_CreateHook(pGetCursorPos, (void*)&GetCursorPosHook,
+                                  (void**)&g_origGetCursorPos) != MH_OK)
+                    LOG("warning: GetCursorPos hook failed; the fitted menu may not "
+                        "be clickable");
             }
         }
 
