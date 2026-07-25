@@ -9834,24 +9834,6 @@ namespace
             {
                 useWeaponOrigin =
                     ReachFpProjectileOriginPredicateBody(weaponDatum) ? 1 : 0;
-                if (useWeaponOrigin && firingFrame)
-                {
-                    auto* frame = static_cast<unsigned char*>(firingFrame);
-                    uint64_t markerOffset = 0;
-                    memcpy(&markerOffset, frame + 8, sizeof(markerOffset));
-                    if (markerOffset < 0x2000)
-                    {
-                        float* origin = reinterpret_cast<float*>(frame + markerOffset + 0x9F0);
-                        float forward[3] = {g_aimFwdX.load(std::memory_order_relaxed), g_aimFwdY.load(std::memory_order_relaxed), g_aimFwdZ.load(std::memory_order_relaxed)};
-                        float up[3] = {g_worldUp[0].load(std::memory_order_relaxed), g_worldUp[1].load(std::memory_order_relaxed), g_worldUp[2].load(std::memory_order_relaxed)};
-                        float left[3] = {up[1]*forward[2]-up[2]*forward[1], up[2]*forward[0]-up[0]*forward[2], up[0]*forward[1]-up[1]*forward[0]};
-                        const float fl=sqrtf(forward[0]*forward[0]+forward[1]*forward[1]+forward[2]*forward[2]);
-                        const float ll=sqrtf(left[0]*left[0]+left[1]*left[1]+left[2]*left[2]);
-                        if (isfinite(fl) && isfinite(ll) && fl>1e-4f && ll>1e-4f)
-                            for (int i=0;i<3;++i)
-                                origin[i] += (forward[i]/fl)*(0.06f*kReachWorldUnitsPerMeter) + (left[i]/ll)*(0.15f*kReachWorldUnitsPerMeter);
-                    }
-                }
             }
             __except (EXCEPTION_EXECUTE_HANDLER)
             {
