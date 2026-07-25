@@ -218,6 +218,17 @@ int APIENTRY wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int)
         ReadResolutionScale(primaryExists ? primaryConfig : legacyConfig);
     const int renderWidth = ScaleEven(kNativeRenderWidth, resolutionScale);
     const int renderHeight = ScaleEven(kNativeRenderHeight, resolutionScale);
+    // Hand the DLL the EXACT render surface size we are launching with, so it can
+    // force MCC's swapchain backbuffer to this size on every machine regardless of
+    // the monitor. That decouples the headset render resolution from the desktop
+    // window: the window is shrunk to fit the monitor separately, but the surface
+    // the headset captures stays full size, so the gun/projection stay aligned.
+    // The child inherits these (CreateProcessW gets a NULL environment block).
+    wchar_t envBuf[16];
+    swprintf_s(envBuf, L"%d", renderWidth);
+    SetEnvironmentVariableW(L"HALO3XR_RENDER_W", envBuf);
+    swprintf_s(envBuf, L"%d", renderHeight);
+    SetEnvironmentVariableW(L"HALO3XR_RENDER_H", envBuf);
     wchar_t renderArgs[96];
     swprintf_s(renderArgs, L" -WINDOWED -ResX=%d -ResY=%d",
                renderWidth, renderHeight);
