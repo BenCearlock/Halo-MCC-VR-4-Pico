@@ -289,12 +289,14 @@ only slot zero. The five proven direct call edges are `0x121083` (return
 `0x121088`), `0x2AF85A` (return `0x2AF85F`), `0x2AF8F6` (return `0x2AF8FB`),
 `0x2AFEB4` (return `0x2AFEB9`), and `0x2B0ADB` (return `0x2B0AE0`). The
 `0x121083` path indexes one returned `0x34`-byte matrix for an on-demand
-marker/attachment transform. The next two are immediately followed by
-separate palette builds, establishing that one live interpolated graph can feed
-the body and held-weapon/attachment palettes. The hook copies the untouched
-graph before rigidly applying the right-wrist delta to every live source node,
-bounded to 120, so marker, muzzle-flash, and attachment consumers remain on the
-same prepared-frame pose.
+marker/attachment transform. The next two are distinct interpolation -> palette
+transactions: `0x2AF85A -> 0x2AF89D` and `0x2AF8F6 -> 0x2AF936`. Both call the
+palette wrapper `0x2B52EC`, which calls the final source-to-output builder
+`0x2B4EB0`. Their interpolation arguments have the same view/id/slot within one
+builder iteration, but the returned source pointer is transaction output and is
+not assumed stable or equal. The hook copies each untouched graph before
+rigidly applying the right-wrist delta to its live marker/muzzle/attachment
+source, bounded to 120. Visible palettes never consume that mutation.
 
 The ordering relative to the camera transaction is also exact. Retail
 `main_render_view` calls `0x256724` at `0x0C32BE`; that calls `0x264530` at
@@ -312,13 +314,18 @@ AOB is:
 48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 57 41 56 41 57 48 83 EC 20 48 8B 05 ?? ?? ?? ?? 49 8B F0 0F B7 C9 4C 8B F2
 ```
 
-The body palette is classified only by the complete exact `boneMap` fingerprint.
-Spartan has 47 palette outputs with render chains R `6/7/11`, L `4/10/14`,
-camera `5`; Elite has 41 with R `6/9/14`, L `4/7/13`, camera `5`. Mapping those
-validated outputs into animation-source order gives both layouts R `6/9/13`, L
-`5/7/11`, camera `4`. Spartan weapon graphs range through 65 live source nodes
-(the plasma-launcher case), so palette output count and source count are never
-conflated and output indices are never transplanted into source space.
+The layout-discovery palette is classified only by the complete exact `boneMap`
+fingerprint. Official HREK export proves that
+`objects\characters\spartans\fp\fp.render_model` is the 47-node first-person
+arms render model. Spartan has 47 outputs with render chains R `6/7/11`, L
+`4/10/14`, camera `5`; Elite has 41 with R `6/9/14`, L `4/7/13`, camera `5`.
+Mapping those validated outputs into animation-source order gives both layouts
+R `6/9/13`, L `5/7/11`, camera `4`. The separate HREK
+`objects\characters\spartans\fp_body\fp_body.render_model` has 82 nodes and is
+a second visible consumer, not an unrelated attachment. Spartan weapon graphs
+range through 65 live source nodes (the plasma-launcher case), and retail bounds
+the source at 120, so palette output count and source count are never conflated
+and output indices are never transplanted into source space.
 
 The complete ordered output-to-source fingerprints are pinned verbatim:
 
@@ -334,26 +341,40 @@ classification compares the bounded contents rather than pointer identity.
 
 A newly observed exact layout is recorded stock-only with its prepared serial.
 It may activate only on a later stereo pair; the frozen pair selection and
-explicit head-centre/right/left targets are shared by both eyes. Unknown,
-altered, stale-generation, non-finite, out-of-range, or unsupported palettes
-remain stock. Only the exact body palette receives articulated scratch data. The live source
-uses the same proven body prefix and appended held-object boundary, but it no
-longer has one whole-graph wrist owner: exact right-hand descendants plus every
-appended held-object/attachment node receive the right-wrist delta, exact
-left-hand descendants receive the left-wrist delta, and the remaining body nodes
-stay stock for the body-palette arm solve. The two source-space hand masks are
-required to be nonempty and disjoint; any invalid layout or non-finite candidate
-falls open without a partial write. This matches Halo 3's player-visible
-ownership: right hand and gun on the right controller, left support hand on the
-left controller, with each forearm solved to its own wrist.
+explicit head-centre/right/left targets are shared by both eyes. The frozen key
+is title generation plus interpolation view/id/slot and complete live source
+count. It deliberately excludes the temporary source pointer: retail publishes
+a source pointer per interpolation transaction, and pointer identity is used
+only to pair that transaction with its immediately following final palette.
 
-The cache key includes the interpolation view/id/slot, source pointer, live
-count, title generation, and learned body tag. A known body-tag mismatch restores
-the complete untouched live graph immediately and invalidates activation only at
-the next pair boundary; unrelated palettes, including equal-count attachments,
-do not consume or invalidate the body context.
-`arm_ik=1` solves both shoulder-elbow-wrist chains, while `arm_ik=0` retains rigid
-controller parenting. Missing left tracking leaves the authored left arm.
+The implementation mirrors Halo 3/ODST. Retail `0x2AF648` permits four bounded
+interpolation/palette transactions. Each successful Reach interpolation gets a
+separate context and untouched source snapshot. `0x2B4EB0` consumes the newest
+current context whose source pointer exactly matches its input, then reconstructs
+the complete source graph into private 120-record scratch before the stock
+builder applies that call's own `boneMap`. Consequently the 47-node arms model
+and the separate 82-node first-person body model receive the same solved wrists.
+The exact right/left hand descendants follow their respective wrists, while the
+verified appended held-object range follows the right wrist inside that same
+scratch reconstruction. No visible palette consumes the live marker graph.
+
+A known layout-tag/map mismatch restores the complete untouched source and
+invalidates activation at the next pair boundary. Unknown, stale-generation,
+non-finite, out-of-range, or unsupported layouts remain wholly stock. There is
+no body-only admission, source-owner partition, approximate mapping, or runtime
+probe fallback. `arm_ik=1` solves both shoulder-elbow-wrist chains;
+`arm_ik=0` uses the same full-source palette transaction with rigid controller
+parenting. Missing left tracking leaves the authored left arm.
+
+The exact clean runtime `6e31751c...` (installed DLL SHA-256
+`49DC585C1E57FB54D197198E2A46AE95AA1CBF0FEE565EDCD62BBE740B9E8715`)
+rejected the separated live-source owner in-headset: the log reported the
+47-node path active over a 52-node live graph, yet the user observed no change
+and the visible left hand remained stuck to the gun/right hand. Combined with
+the retail two-transaction call graph and HREK's 47-node arms / 82-node body
+split, this proves that solving only the 47-node transaction was architecturally
+insufficient. The installed DLL remains unchanged under the user's explicit
+no-rollback instruction, but the method is removed from forward source.
 
 The exact dirty runtime `e08b538f...-dirty` (installed DLL SHA-256
 `236D06940F47E38876A54DF4AFE07E4C484AED2E025865AF55121E022E1772AC`)
@@ -362,8 +383,9 @@ both raw OpenXR poses valid/tracked, a correctly sided and moving left target,
 zero target error for both body-palette wrist solves, and an active live-graph
 path, while the user still saw the left forearm move with the hand stuck to the
 gun/right-hand assembly. That result is preserved under
-`out/test-runs/e08b538-dirty-reach-hands-parented-20260725-040508Z`. It rules
-out another tracking/target/IK probe and directly motivates the partition above.
+`out/test-runs/e08b538-dirty-reach-hands-parented-20260725-040508Z`. Together
+with the unchanged `6e31751` result, it rules out both live-graph ownership
+variants and requires the H3/ODST final-palette transaction architecture above.
 
 The `f19f39e` root-only assumption is rejected. It called a locking pose getter
 from the palette path, reapplied mount trim already present in the shared aim

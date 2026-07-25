@@ -86,7 +86,7 @@ inline constexpr uintptr_t kReachFpInterpolateRva = 0x000CF1A4;
 inline constexpr uintptr_t kReachRenderModelTableRva = 0x00C1A600;
 inline constexpr uintptr_t kReachNodeRecordBlockTableRva = 0x04E39F20;
 
-// Pinned HREK first-person body layouts. The visible-palette count describes
+// Pinned HREK first-person arms layouts. The discovery-palette count describes
 // the render_model output only; it is not the animation graph's live source
 // count. Official weapon graphs retain the exact body prefix and append held
 // object nodes (Spartan reaches 65 nodes), while the retail palette consumer
@@ -196,37 +196,6 @@ struct ReachFpBodyLayout
             liveSourceNodeCount <= kReachFpMaxSourceNodeCount;
     }
 };
-
-enum class ReachFpSourceOwner : uint8_t
-{
-    Stock = 0,
-    RightHandAndWeapon,
-    LeftHand,
-};
-
-// The body prefix and appended held-object range have different owners. Arm
-// joints outside either exact hand subtree remain stock for the body IK pass.
-inline constexpr ReachFpSourceOwner ReachFpSourceOwnerForNode(
-    const ReachFpBodyLayout& layout, int32_t sourceIndex) noexcept
-{
-    if (!layout.Valid() || sourceIndex < 0 ||
-        static_cast<size_t>(sourceIndex) >= layout.liveSourceNodeCount)
-        return ReachFpSourceOwner::Stock;
-
-    const uint64_t bit = sourceIndex < 64
-        ? uint64_t{1} << static_cast<uint32_t>(sourceIndex)
-        : 0;
-    const bool left = (layout.leftHandSourceDescendants & bit) != 0;
-    const bool right = (layout.rightHandSourceDescendants & bit) != 0;
-    if (left && right)
-        return ReachFpSourceOwner::Stock;
-    if (left)
-        return ReachFpSourceOwner::LeftHand;
-    if (right || static_cast<size_t>(sourceIndex) >=
-                     layout.paletteBodyNodeCount)
-        return ReachFpSourceOwner::RightHandAndWeapon;
-    return ReachFpSourceOwner::Stock;
-}
 
 inline bool ResolveReachFpBodyLayout(
     std::span<const int32_t> paletteBoneMap,
@@ -354,14 +323,15 @@ enum class ReachFpPaletteAction : uint8_t
 {
     PassThroughLive = 0,
     LearnStockOnly,
-    ArticulateExactBody,
+    ArticulateKnownTransaction,
     RestoreStockAndInvalidate,
 };
 
-// Palette calls may surround the body with held-weapon/attachment palettes.
-// Those unrelated calls pass through without consuming the body context. Only
-// an exact supported body fingerprint learns/articulates, while a changed exact
-// body or an invalid map on the already learned body tag rolls the graph back.
+// H3/ODST reconstruct every final palette associated with a captured source,
+// not only the palette that originally identified the skeleton. Reach's first
+// palette can therefore learn the exact 47/41-node arms fingerprint, while the
+// separately submitted first-person body palette uses that frozen animation
+// layout on the next pair. A known body tag with an altered map fails closed.
 inline constexpr ReachFpPaletteAction DecideReachFpPaletteAction(
     bool contextCurrent,
     bool frozenLayoutValid,
@@ -374,15 +344,14 @@ inline constexpr ReachFpPaletteAction DecideReachFpPaletteAction(
         return ReachFpPaletteAction::PassThroughLive;
     if (exactSupportedBody && !frozenLayoutValid)
         return ReachFpPaletteAction::LearnStockOnly;
-    if (exactSupportedBody && frozenLayoutValid)
-        return exactBodyMatchesFrozen && graphTransformed
-            ? ReachFpPaletteAction::ArticulateExactBody
-            : exactBodyMatchesFrozen
-                ? ReachFpPaletteAction::PassThroughLive
-                : ReachFpPaletteAction::RestoreStockAndInvalidate;
-    if (frozenLayoutValid && learnedBodyTagMatches)
+    if (!frozenLayoutValid)
+        return ReachFpPaletteAction::PassThroughLive;
+    if ((exactSupportedBody && !exactBodyMatchesFrozen) ||
+        (learnedBodyTagMatches && !exactSupportedBody))
         return ReachFpPaletteAction::RestoreStockAndInvalidate;
-    return ReachFpPaletteAction::PassThroughLive;
+    return graphTransformed
+        ? ReachFpPaletteAction::ArticulateKnownTransaction
+        : ReachFpPaletteAction::PassThroughLive;
 }
 
 // Retail apply_distortions divides the maximum by the scale at both sites.

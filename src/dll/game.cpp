@@ -429,6 +429,9 @@ namespace
         int elbow = -1;
         int shoulder = -1;
         uint64_t wristDescendants = 0;
+        // Reach uses this exact appended held-object boundary; H3/ODST
+        // leave it disabled and retain their authored descendant masks.
+        int heldObjectStart = -1;
         int lWrist = -1;
         int lElbow = -1;
         int lShoulder = -1;
@@ -464,7 +467,7 @@ namespace
     // interpolate/palette call ordering pairs correctly.
     thread_local FpInterpolationContext g_fpInterpolationContexts[2];
     thread_local BoneMatrix g_fpUnmodifiedInterpolations[2][64];
-    thread_local BoneMatrix g_fpPaletteScratch[64];
+    thread_local BoneMatrix g_fpPaletteScratch[kReachFpMaxSourceNodeCount];
     thread_local BoneMatrix g_scopeHiddenPalette[64];
     // The render-thread IK path publishes only pointer-sized diagnostics.
     // Present consumes them and owns all logging, keeping file I/O and log
@@ -503,14 +506,17 @@ namespace
         int elbow = -1;
         int shoulder = -1;
         uint64_t wristDescendants = 0;
+        // Reach uses this exact appended held-object boundary; H3/ODST
+        // leave it disabled and retain their authored descendant masks.
+        int heldObjectStart = -1;
         int lWrist = -1;
         int lElbow = -1;
         int lShoulder = -1;
         uint64_t lWristDescendants = 0;
         bool armIk = false;
         BoneMatrix root{};
-        BoneMatrix original[64]{};
-        BoneMatrix solved[64]{};
+        BoneMatrix original[kReachFpMaxSourceNodeCount]{};
+        BoneMatrix solved[kReachFpMaxSourceNodeCount]{};
     };
 
     struct FpStereoSolveScope
@@ -3061,89 +3067,6 @@ namespace
         });
     }
 
-    // Reach's live source contains a fixed body prefix followed by held-object
-    // nodes. Give each hand one owner: right hand plus weapon on the right
-    // controller, left hand alone on the left controller. The exact body-palette
-    // path below remains responsible for shoulder and forearm articulation.
-    bool ReachApplySeparatedHandGraph(
-        const BoneMatrix& root,
-        const BoneMatrix& rightTarget, float rightScale,
-        const BoneMatrix& leftTarget, bool leftValid, float leftScale,
-        const ReachFpBodyLayout& layout, BoneMatrix* bones, int count)
-    {
-        if (!bones || count<=0 || count>120 || !layout.Valid() ||
-            layout.liveSourceNodeCount!=static_cast<size_t>(count) ||
-            !layout.rightHandSourceDescendants ||
-            (layout.rightHandSourceDescendants&
-             layout.leftHandSourceDescendants) ||
-            !isfinite(rightScale) || rightScale<=0.0f ||
-            (leftValid &&
-             (!layout.leftHandSourceDescendants ||
-              !isfinite(leftScale) || leftScale<=0.0f)))
-            return false;
-
-        BoneMatrix candidate[120]{};
-        memcpy(candidate,bones,static_cast<size_t>(count)*sizeof(BoneMatrix));
-        BoneMatrix inverseRoot{};
-        if (!InvertBoneMatrix(root,inverseRoot)) return false;
-
-        auto seat=[&](int anchor, const BoneMatrix& target, float scale,
-                      ReachFpSourceOwner owner)->bool
-        {
-            BoneMatrix wristWorld{},inverseWristWorld{},worldDelta{};
-            BoneMatrix deltaTimesRoot{},localDelta{};
-            if (!ComposeBoneMatrices(root,bones[anchor],wristWorld) ||
-                !InvertBoneMatrix(wristWorld,inverseWristWorld) ||
-                !ComposeBoneMatrices(target,inverseWristWorld,worldDelta) ||
-                !ComposeBoneMatrices(worldDelta,root,deltaTimesRoot) ||
-                !ComposeBoneMatrices(inverseRoot,deltaTimesRoot,localDelta))
-                return false;
-
-            for (int i=0;i<count;++i)
-            {
-                if (ReachFpSourceOwnerForNode(layout,i)!=owner) continue;
-                BoneMatrix transformed{};
-                if (!ComposeBoneMatrices(localDelta,bones[i],transformed))
-                    return false;
-                candidate[i]=transformed;
-            }
-
-            if (scale!=1.0f)
-            {
-                const float anchorPoint[3]={
-                    candidate[anchor].translation[0],
-                    candidate[anchor].translation[1],
-                    candidate[anchor].translation[2]};
-                for (int i=0;i<count;++i)
-                {
-                    if (ReachFpSourceOwnerForNode(layout,i)!=owner) continue;
-                    for (int axis=0;axis<3;++axis)
-                        candidate[i].translation[axis]=anchorPoint[axis]+
-                            (candidate[i].translation[axis]-anchorPoint[axis])*scale;
-                    candidate[i].scale*=scale;
-                }
-            }
-            return true;
-        };
-
-        if (!seat(layout.rightWristSource,rightTarget,rightScale,
-                  ReachFpSourceOwner::RightHandAndWeapon))
-            return false;
-        if (leftValid &&
-            !seat(layout.leftWristSource,leftTarget,leftScale,
-                  ReachFpSourceOwner::LeftHand))
-            return false;
-
-        const std::span<const float> packed{
-            reinterpret_cast<const float*>(candidate),
-            static_cast<size_t>(count)*kReachFpBoneMatrixFloatCount};
-        return ReachFpCommitGraphIfFinite(
-            packed,static_cast<size_t>(count),[&]() {
-                memcpy(bones,candidate,static_cast<size_t>(count)*sizeof(BoneMatrix));
-                return true;
-            });
-    }
-
     bool ApplyControllerToMarkerBonesFromRoot(
         BoneMatrix root, BoneMatrix* bones, int count, int wrist,
         int leftWrist, bool dual)
@@ -3372,7 +3295,8 @@ namespace
     {
         if (!context.valid || context.slot<0 || context.slot>1 ||
             source!=context.source ||
-            context.count<=0 || context.count>64 ||
+            context.count<=0 ||
+            context.count>static_cast<int>(kReachFpMaxSourceNodeCount) ||
             context.wrist<0 || context.wrist>=context.count) return false;
 
         // Dual-wield secondary (slot 1): its LEFT hand follows the left
@@ -3393,6 +3317,7 @@ namespace
                 cache.elbow == context.elbow &&
                 cache.shoulder == context.shoulder &&
                 cache.wristDescendants == context.wristDescendants &&
+                cache.heldObjectStart == context.heldObjectStart &&
                 cache.lWrist == context.lWrist &&
                 cache.lElbow == context.lElbow &&
                 cache.lShoulder == context.lShoulder &&
@@ -3446,6 +3371,7 @@ namespace
                 cache.elbow = context.elbow;
                 cache.shoulder = context.shoulder;
                 cache.wristDescendants = context.wristDescendants;
+                cache.heldObjectStart = context.heldObjectStart;
                 cache.lWrist = context.lWrist;
                 cache.lElbow = context.lElbow;
                 cache.lShoulder = context.lShoulder;
@@ -3617,6 +3543,7 @@ namespace
                 ArmProbe probeLeft{};
                 bool probeLeftValid=false;
                 auto applyArm=[&](int shoulder,int elbow,int wrist,uint64_t mask,
+                                  bool carryHeldObjects,
                                   const BoneMatrix& desired,float outSign,
                                   ArmProbe* probeOut,float shoulderDrop)->bool
                 {
@@ -3719,9 +3646,14 @@ namespace
                     ComposeBoneMatrices(desired,invWrRest,D);
                     ComposeBoneMatrices(invRoot,newSh,g_fpPaletteScratch[shoulder]);
                     ComposeBoneMatrices(invRoot,newEl,g_fpPaletteScratch[elbow]);
-                    for (int i=0;i<context.count && i<64;++i)
+                    for (int i=0;i<context.count;++i)
                     {
-                        if (!(mask&(1ull<<i))) continue;
+                        const bool handDescendant=i<64 &&
+                            (mask&(uint64_t{1}<<i));
+                        const bool heldObject=carryHeldObjects &&
+                            context.heldObjectStart>=0 &&
+                            i>=context.heldObjectStart;
+                        if (!handDescendant && !heldObject) continue;
                         BoneMatrix boneW{},newW{};
                         if (ComposeBoneMatrices(armRoot,unmod[i],boneW) &&
                             ComposeBoneMatrices(D,boneW,newW))
@@ -3734,10 +3666,10 @@ namespace
                 // the actual LEFT hand, which follows the left controller.
                 const bool handApplied=dual
                     ? applyArm(context.lShoulder,context.lElbow,context.lWrist,
-                               context.lWristDescendants,desiredWristWorld,
+                               context.lWristDescendants,true,desiredWristWorld,
                                1.0f,nullptr,0.0f)
                     : applyArm(context.shoulder,context.elbow,context.wrist,
-                               context.wristDescendants,desiredWristWorld,
+                               context.wristDescendants,true,desiredWristWorld,
                                -1.0f,nullptr,g_config.right_shoulder_drop);
                 if (handApplied)
                 {
@@ -3794,7 +3726,7 @@ namespace
                                 static std::atomic<bool> loggedDualArm{false};
                                 if (applyArm(context.lShoulder,context.lElbow,
                                              context.lWrist,context.lWristDescendants,
-                                             desiredL,1.0f,nullptr,0.0f) &&
+                                             false,desiredL,1.0f,nullptr,0.0f) &&
                                     !explicitTargets &&
                                     !loggedDualArm.exchange(true))
                                     LOG("DUAL VRIK: secondary VISIBLE hand bound to "
@@ -3813,7 +3745,7 @@ namespace
                         {
                             static std::atomic<bool> loggedLeft{false};
                             if (applyArm(context.lShoulder,context.lElbow,context.lWrist,
-                                         context.lWristDescendants,desiredLeft,1.0f,
+                                         context.lWristDescendants,false,desiredLeft,1.0f,
                                          &probeLeft,0.0f))
                             {
                                 probeLeftValid=true;
@@ -3873,17 +3805,23 @@ namespace
                     // RIGHT wrist's bones — even when the anchor switched to the
                     // left wrist, so no left-hand size value ever reached a bone
                     // ("the left arm is not scalable").
-                    auto trimSubtree=[&](int anchorBone,uint64_t mask,float scale)
+                    auto trimSubtree=[&](int anchorBone,uint64_t mask,
+                                         bool carryHeldObjects,float scale)
                     {
-                        if (scale==1.0f || !mask ||
+                        if (scale==1.0f || (!mask && !carryHeldObjects) ||
                             anchorBone<0 || anchorBone>=context.count) return;
                         const float anchor[3]={
                             g_fpPaletteScratch[anchorBone].translation[0],
                             g_fpPaletteScratch[anchorBone].translation[1],
                             g_fpPaletteScratch[anchorBone].translation[2]};
-                        for (int i=0;i<context.count && i<64;++i)
+                        for (int i=0;i<context.count;++i)
                         {
-                            if (!(mask&(1ull<<i))) continue;
+                            const bool handDescendant=i<64 &&
+                                (mask&(uint64_t{1}<<i));
+                            const bool heldObject=carryHeldObjects &&
+                                context.heldObjectStart>=0 &&
+                                i>=context.heldObjectStart;
+                            if (!handDescendant && !heldObject) continue;
                             BoneMatrix& bone=g_fpPaletteScratch[i];
                             for (int r=0;r<3;++r)
                                 bone.translation[r]=anchor[r]+
@@ -3898,18 +3836,18 @@ namespace
                     {
                         // The dual-wield carrier IS the left hand; its own gun
                         // rides that subtree, so the left size governs both.
-                        trimSubtree(context.lWrist,context.lWristDescendants,leftScale);
+                        trimSubtree(context.lWrist,context.lWristDescendants,true,leftScale);
                     }
                     else
                     {
-                        trimSubtree(context.wrist,context.wristDescendants,meshScale);
+                        trimSubtree(context.wrist,context.wristDescendants,true,meshScale);
                         // The support hand is game-animated onto the gun rather
                         // than IK-solved, but its bones are still ours to size.
                         // Exclude anything already trimmed above so a skeleton
                         // that nests the two subtrees cannot scale a bone twice.
                         trimSubtree(context.lWrist,
                                     context.lWristDescendants&~context.wristDescendants,
-                                    leftScale);
+                                    false,leftScale);
                     }
                     // NOTE: a "length squash along the barrel" is NOT possible
                     // here and must not be re-attempted: the weapon mesh is
@@ -9825,12 +9763,16 @@ namespace
     ReachFpPaletteFn g_reachOrigFpPalette = nullptr;
 
     constexpr size_t kReachFpLayoutCacheCapacity = 4;
+    // Retail 0x2AF648 emits at most four interpolation -> palette transactions
+    // per invocation (two palette banks across two held-weapon slots). Keep one
+    // bounded context for each transaction, exactly as Halo 3/ODST keep one per
+    // weapon slot, then pair the final palette by its source pointer.
+    constexpr size_t kReachFpTransactionCapacity = 4;
     struct ReachFpLayoutCacheEntry
     {
         bool valid = false;
         bool invalidateNextPair = false;
         uint32_t generation = 0;
-        const BoneMatrix* source = nullptr;
         int liveSourceCount = 0;
         int interpolationView = 0;
         int interpolationId = 0;
@@ -9853,6 +9795,7 @@ namespace
         bool transformed = false;
         uint32_t generation = 0;
         uint64_t preparedSerial = 0;
+        uint64_t captureSerial = 0;
         BoneMatrix* source = nullptr;
         int liveSourceCount = 0;
         int interpolationView = 0;
@@ -9866,7 +9809,9 @@ namespace
     thread_local ReachFpLayoutCacheEntry
         g_reachFpLayoutCache[kReachFpLayoutCacheCapacity];
     thread_local ReachFpPairScope g_reachFpPairScope;
-    thread_local ReachFpInterpolationContext g_reachFpInterpolation;
+    thread_local ReachFpInterpolationContext
+        g_reachFpInterpolations[kReachFpTransactionCapacity];
+    thread_local uint64_t g_reachFpCaptureSerial = 0;
 
     struct ReachFpStatus
     {
@@ -10649,9 +10594,9 @@ namespace
         }
     }
 
-    // Reach production first-person path. The interpolation hook preserves a
-    // bounded untouched graph and rigidly moves the live marker/attachment
-    // graph; only an exact learned body palette enters the articulated solver.
+    // Reach production first-person path. Every interpolation transaction keeps
+    // a bounded untouched graph; the live copy serves marker/attachment users,
+    // while every matching final palette reconstructs from private scratch.
     // Hot hooks perform bounded reads and atomic status publication only.
     static int SafeReadBytes(const void* src, void* dst, size_t n)
     {
@@ -10733,11 +10678,10 @@ namespace
     }
 
     const ReachFpLayoutCacheEntry* ReachFindFrozenLayout(
-        const BoneMatrix* source, int liveCount, int view, int id, int slot)
+        int liveCount, int view, int id, int slot)
     {
         for (const ReachFpLayoutCacheEntry& entry : g_reachFpPairScope.layouts)
-            if (entry.valid && entry.source==source &&
-                entry.liveSourceCount==liveCount &&
+            if (entry.valid && entry.liveSourceCount==liveCount &&
                 entry.interpolationView==view &&
                 entry.interpolationId==id &&
                 entry.interpolationSlot==slot && entry.layout.Valid())
@@ -10745,19 +10689,20 @@ namespace
         return nullptr;
     }
 
-    void ReachLearnLayout(uint16_t bodyTag, const BoneMatrix* source,
-                          int liveCount, const ReachFpBodyLayout& layout)
+    void ReachLearnLayout(const ReachFpInterpolationContext& context,
+                          uint16_t bodyTag,
+                          const ReachFpBodyLayout& layout)
     {
-        if (!source || !layout.Valid() || !g_reachFpPairScope.armed)
+        if (!context.source || !layout.Valid() || !g_reachFpPairScope.armed)
             return;
         ReachFpLayoutCacheEntry* destination=nullptr;
         for (ReachFpLayoutCacheEntry& entry : g_reachFpLayoutCache)
         {
             if (entry.valid && entry.generation==g_reachFpPairScope.generation &&
-                entry.source==source && entry.liveSourceCount==liveCount &&
-                entry.interpolationView==g_reachFpInterpolation.interpolationView &&
-                entry.interpolationId==g_reachFpInterpolation.interpolationId &&
-                entry.interpolationSlot==g_reachFpInterpolation.interpolationSlot)
+                entry.liveSourceCount==context.liveSourceCount &&
+                entry.interpolationView==context.interpolationView &&
+                entry.interpolationId==context.interpolationId &&
+                entry.interpolationSlot==context.interpolationSlot)
             {
                 if (!entry.invalidateNextPair && entry.bodyTag==bodyTag &&
                     ReachLayoutsEqual(entry.layout,layout))
@@ -10773,35 +10718,36 @@ namespace
         *destination={};
         destination->valid=true;
         destination->generation=g_reachFpPairScope.generation;
-        destination->source=source;
-        destination->liveSourceCount=liveCount;
-        destination->interpolationView=g_reachFpInterpolation.interpolationView;
-        destination->interpolationId=g_reachFpInterpolation.interpolationId;
-        destination->interpolationSlot=g_reachFpInterpolation.interpolationSlot;
+        destination->liveSourceCount=context.liveSourceCount;
+        destination->interpolationView=context.interpolationView;
+        destination->interpolationId=context.interpolationId;
+        destination->interpolationSlot=context.interpolationSlot;
         destination->bodyTag=bodyTag;
         destination->learnedPreparedSerial=g_reachFpPairScope.preparedSerial;
         destination->layout=layout;
         PublishReachFpStatus(1,static_cast<int>(layout.paletteBodyNodeCount),
-                             liveCount);
+                             context.liveSourceCount);
     }
 
-    void ReachInvalidateLayoutNextPair(const BoneMatrix* source, int liveCount)
+    void ReachInvalidateLayoutNextPair(
+        const ReachFpInterpolationContext& context)
     {
         for (ReachFpLayoutCacheEntry& entry : g_reachFpLayoutCache)
             if (entry.valid && entry.generation==g_reachFpPairScope.generation &&
-                entry.source==source && entry.liveSourceCount==liveCount &&
-                entry.interpolationView==g_reachFpInterpolation.interpolationView &&
-                entry.interpolationId==g_reachFpInterpolation.interpolationId &&
-                entry.interpolationSlot==g_reachFpInterpolation.interpolationSlot)
+                entry.liveSourceCount==context.liveSourceCount &&
+                entry.interpolationView==context.interpolationView &&
+                entry.interpolationId==context.interpolationId &&
+                entry.interpolationSlot==context.interpolationSlot)
                 entry.invalidateNextPair=true;
-        PublishReachFpStatus(3,0,liveCount);
+        PublishReachFpStatus(3,0,context.liveSourceCount);
     }
-
     void ReachBeginFpPairScope(uint32_t generation, uint64_t preparedSerial,
                                const FpExplicitPoseTargets& targets)
     {
         g_reachFpPairScope={};
-        g_reachFpInterpolation={};
+        for (auto& context : g_reachFpInterpolations)
+            context={};
+        g_reachFpCaptureSerial=0;
         g_reachFpPairScope.armed=true;
         g_reachFpPairScope.generation=generation;
         g_reachFpPairScope.preparedSerial=preparedSerial;
@@ -10832,7 +10778,9 @@ namespace
     {
         g_stereoEye.store(-1,std::memory_order_release);
         g_fpStereoSolveScope={};
-        g_reachFpInterpolation={};
+        for (auto& context : g_reachFpInterpolations)
+            context={};
+        g_reachFpCaptureSerial=0;
         g_reachFpPairScope={};
     }
 
@@ -10980,9 +10928,8 @@ namespace
         int view, int id, int slot, bool result,
         BoneMatrix** outBones, int* outCount)
     {
-        if (slot!=0 || g_reachNestedOuterSuppressed) return;
-        g_reachFpInterpolation={};
-        if (!result || !outBones || !outCount || !*outBones ||
+        if (slot!=0 || g_reachNestedOuterSuppressed || !result ||
+            !outBones || !outCount || !*outBones ||
             !g_reachFpPairScope.armed ||
             g_reachFpPairScope.generation!=g_reachCamera.generation ||
             !g_reachCamera.armed.load(std::memory_order_acquire) ||
@@ -10991,22 +10938,37 @@ namespace
         const int count=*outCount;
         if (count<=0 || count>static_cast<int>(kReachFpMaxSourceNodeCount))
             return;
-        ReachFpInterpolationContext& context=g_reachFpInterpolation;
+
+        // Retail pairs each interpolation with its palette immediately. Retain
+        // one bounded context per outstanding transaction and let the palette
+        // consume the newest exact source-pointer match, as H3/ODST do.
+        ReachFpInterpolationContext* destination=nullptr;
+        for (auto& candidate : g_reachFpInterpolations)
+            if (!candidate.valid)
+            {
+                destination=&candidate;
+                break;
+            }
+        if (!destination)
+            return;
+        *destination={};
+        ReachFpInterpolationContext& context=*destination;
         context.valid=true;
         context.generation=g_reachFpPairScope.generation;
         context.preparedSerial=g_reachFpPairScope.preparedSerial;
+        context.captureSerial=++g_reachFpCaptureSerial;
         context.source=*outBones;
         context.liveSourceCount=count;
         context.interpolationView=view;
         context.interpolationId=id;
         context.interpolationSlot=slot;
+
         const ReachFpLayoutCacheEntry* frozen=
-            ReachFindFrozenLayout(context.source,count,view,id,slot);
+            ReachFindFrozenLayout(count,view,id,slot);
         if (!frozen) return;
         context.layout=frozen->layout;
         context.bodyTag=frozen->bodyTag;
         if (!context.layout.Valid() ||
-            context.layout.paletteBodyNodeCount>64 ||
             !g_reachFpPairScope.targets.centerRootValid ||
             !g_reachFpPairScope.targets.rightWristValid ||
             !ReachBoneMatrixFinite(g_reachFpPairScope.targets.centerRoot) ||
@@ -11024,6 +10986,11 @@ namespace
             if (!ReachBoneMatrixFinite(context.untouchedLive[node]))
                 return;
         context.targets=g_reachFpPairScope.targets;
+
+        // Match the accepted H3/ODST split exactly: the live interpolation bank
+        // is only for marker/muzzle/attachment consumers and receives one rigid
+        // controller transform. Every visible palette below is reconstructed
+        // independently from untouchedLive into private scratch.
         FpExplicitPoseTargets markerTargets=context.targets;
         if (!ReachRebasePreparedControllerTargets(
                 markerTargets.centerRoot,markerTargets))
@@ -11033,12 +11000,9 @@ namespace
                 markerTargets.rightWrist,
                 context.untouchedLive[context.layout.rightWristSource],
                 alignedRight)) return;
-        if (!ReachApplySeparatedHandGraph(
-                markerTargets.centerRoot,
-                alignedRight,markerTargets.rightScale,
-                markerTargets.leftWrist,markerTargets.leftWristValid,
-                markerTargets.leftScale,context.layout,
-                context.source,count))
+        if (!ApplyControllerToMarkerBonesWithTarget(
+                markerTargets.centerRoot,alignedRight,markerTargets.rightScale,
+                context.source,count,context.layout.rightWristSource))
         {
             SafeWriteBytes(context.source,context.untouchedLive,liveBytes);
             return;
@@ -11055,7 +11019,6 @@ namespace
         }
         context.transformed=true;
     }
-
     __declspec(noinline) bool __fastcall ReachFpInterpolate(
         int view, int id, int slot, BoneMatrix** outBones, int* outCount)
     {
@@ -11101,20 +11064,39 @@ namespace
                 original(tag,root,destination,unused,source,boneMap);
             return;
         }
+
+        // Match and consume the newest outstanding interpolation transaction by
+        // exact source pointer. This is the same final-palette ownership model
+        // used by Halo 3 and ODST; no render-model palette is admitted by guess.
+        ReachFpInterpolationContext* matched=nullptr;
+        for (auto& candidate : g_reachFpInterpolations)
+        {
+            const bool current=candidate.valid && source &&
+                candidate.source==source && g_reachFpPairScope.armed &&
+                candidate.generation==g_reachCamera.generation &&
+                candidate.generation==g_reachFpPairScope.generation &&
+                candidate.preparedSerial==g_reachFpPairScope.preparedSerial;
+            if (current && (!matched ||
+                            candidate.captureSerial>matched->captureSerial))
+                matched=&candidate;
+        }
+        ReachFpInterpolationContext context{};
+        const bool contextCurrent=matched!=nullptr;
+        if (matched)
+        {
+            context=*matched;
+            matched->valid=false;
+        }
         const BoneMatrix* selectedSource=source;
-        ReachFpInterpolationContext& context=g_reachFpInterpolation;
-        const bool contextCurrent=context.valid && source &&
-            context.source==source && g_reachFpPairScope.armed &&
-            context.generation==g_reachCamera.generation &&
-            context.generation==g_reachFpPairScope.generation &&
-            context.preparedSerial==g_reachFpPairScope.preparedSerial;
+
         int paletteCount=0;
         int32_t mapCopy[64]{};
         ReachFpBodyLayout observed{};
         bool bodyLayout=false;
         if (contextCurrent && boneMap &&
             ReachResolvePaletteNodeCount(tag,paletteCount) &&
-            paletteCount>0 && paletteCount<=64 &&
+            (paletteCount==static_cast<int>(kReachSpartanFpBodyNodeCount) ||
+             paletteCount==static_cast<int>(kReachEliteFpBodyNodeCount)) &&
             SafeReadBytes(boneMap,mapCopy,
                 static_cast<size_t>(paletteCount)*sizeof(int32_t)))
         {
@@ -11135,21 +11117,25 @@ namespace
                 selectedSource=context.untouchedLive;
                 ReachRestoreFpLiveGraph(context);
             }
-            ReachInvalidateLayoutNextPair(source,context.liveSourceCount);
+            ReachInvalidateLayoutNextPair(context);
             if (relearnExactBody)
-                ReachLearnLayout(tag,source,context.liveSourceCount,observed);
+                ReachLearnLayout(context,tag,observed);
         };
+
         if (action==ReachFpPaletteAction::LearnStockOnly)
         {
-            ReachLearnLayout(tag,source,context.liveSourceCount,observed);
+            ReachLearnLayout(context,tag,observed);
         }
         else if (action==ReachFpPaletteAction::RestoreStockAndInvalidate)
         {
             restoreStockAndInvalidate(bodyLayout);
         }
-        else if (action==ReachFpPaletteAction::ArticulateExactBody)
+        else if (action==ReachFpPaletteAction::ArticulateKnownTransaction)
         {
             if (!root || !context.targets.rightWristValid ||
+                context.liveSourceCount<=0 ||
+                context.liveSourceCount>
+                    static_cast<int>(kReachFpMaxSourceNodeCount) ||
                 !ReachBoneMatrixFinite(*root))
             {
                 restoreStockAndInvalidate(false);
@@ -11158,18 +11144,22 @@ namespace
             {
                 FpInterpolationContext fp{};
                 fp.source=source;
-                fp.count=static_cast<int>(observed.paletteBodyNodeCount);
-                fp.player=0;
-                fp.slot=0;
-                fp.wrist=observed.rightWristSource;
-                fp.cameraControl=observed.cameraControlSource;
-                fp.elbow=observed.rightElbowSource;
-                fp.shoulder=observed.rightShoulderSource;
-                fp.wristDescendants=observed.rightHandSourceDescendants;
-                fp.lWrist=observed.leftWristSource;
-                fp.lElbow=observed.leftElbowSource;
-                fp.lShoulder=observed.leftShoulderSource;
-                fp.lWristDescendants=observed.leftHandSourceDescendants;
+                fp.count=context.liveSourceCount;
+                fp.player=context.interpolationView;
+                fp.slot=context.interpolationSlot;
+                fp.wrist=context.layout.rightWristSource;
+                fp.cameraControl=context.layout.cameraControlSource;
+                fp.elbow=context.layout.rightElbowSource;
+                fp.shoulder=context.layout.rightShoulderSource;
+                fp.wristDescendants=
+                    context.layout.rightHandSourceDescendants;
+                fp.heldObjectStart=static_cast<int>(
+                    context.layout.paletteBodyNodeCount);
+                fp.lWrist=context.layout.leftWristSource;
+                fp.lElbow=context.layout.leftElbowSource;
+                fp.lShoulder=context.layout.leftShoulderSource;
+                fp.lWristDescendants=
+                    context.layout.leftHandSourceDescendants;
                 fp.valid=true;
                 selectedSource=context.untouchedLive;
                 const BoneMatrix* replacement=selectedSource;
@@ -11178,11 +11168,25 @@ namespace
                 if (!ReachRebasePreparedControllerTargets(*root,targets))
                 {
                     restoreStockAndInvalidate(false);
-                    ReachFpPaletteFn original=g_reachOrigFpPalette;
                     if (original)
-                        original(tag,root,destination,unused,selectedSource,boneMap);
+                        original(tag,root,destination,unused,
+                                 selectedSource,boneMap);
                     return;
                 }
+                BoneMatrix alignedRight{};
+                if (!ReachAlignRightTargetToAuthoredBarrel(
+                        targets.rightWrist,
+                        context.untouchedLive[
+                            context.layout.rightWristSource],
+                        alignedRight))
+                {
+                    restoreStockAndInvalidate(false);
+                    if (original)
+                        original(tag,root,destination,unused,
+                                 selectedSource,boneMap);
+                    return;
+                }
+                targets.rightWrist=alignedRight;
                 const bool reconstructed=ReconstructVisiblePaletteSource(
                     tag,fp,*root,source,replacement,&targets,
                     context.untouchedLive);
@@ -11202,17 +11206,25 @@ namespace
                         const uint64_t keep=fp.wristDescendants|
                             fp.lWristDescendants;
                         for (int i=0;i<fp.count;++i)
-                            if (!(keep&(uint64_t{1}<<i)))
+                        {
+                            const bool hand=i<64 &&
+                                (keep&(uint64_t{1}<<i));
+                            const bool held=fp.heldObjectStart>=0 &&
+                                i>=fp.heldObjectStart;
+                            if (!hand && !held)
                                 g_fpPaletteScratch[i].scale=0.0001f;
+                        }
                     }
-                    PublishReachFpStatus(2,fp.count,context.liveSourceCount);
+                    PublishReachFpStatus(
+                        2,static_cast<int>(
+                            context.layout.paletteBodyNodeCount),
+                        context.liveSourceCount);
                 }
             }
         }
         if (original)
             original(tag,root,destination,unused,selectedSource,boneMap);
     }
-
     __declspec(noinline) void __fastcall ReachFpPalette(
         uint16_t tag, const BoneMatrix* root, BoneMatrix* destination,
         uintptr_t unused, const BoneMatrix* source, const int32_t* boneMap)
@@ -11247,15 +11259,28 @@ namespace
             // so preserve that bounded graph as well as the owner token and
             // restore it even if stock raises an SEH exception.
             uintptr_t nestedResult = 0;
-            BoneMatrix savedParentGraph[kReachFpMaxSourceNodeCount]{};
-            const bool parentContextValid=g_reachFpInterpolation.valid;
-            BoneMatrix* const parentGraph=g_reachFpInterpolation.source;
-            const int parentGraphCount=g_reachFpInterpolation.liveSourceCount;
-            const bool parentGraphSaved=g_reachFpInterpolation.valid &&
-                parentGraph && parentGraphCount>0 &&
-                parentGraphCount<=static_cast<int>(kReachFpMaxSourceNodeCount) &&
-                SafeReadBytes(parentGraph,savedParentGraph,
-                    static_cast<size_t>(parentGraphCount)*sizeof(BoneMatrix));
+            struct ParentGraphSnapshot
+            {
+                bool contextValid = false;
+                bool graphSaved = false;
+                BoneMatrix* graph = nullptr;
+                int count = 0;
+                BoneMatrix records[kReachFpMaxSourceNodeCount]{};
+            } savedParents[kReachFpTransactionCapacity]{};
+            for (size_t i=0;i<kReachFpTransactionCapacity;++i)
+            {
+                const ReachFpInterpolationContext& context=
+                    g_reachFpInterpolations[i];
+                ParentGraphSnapshot& saved=savedParents[i];
+                saved.contextValid=context.valid;
+                saved.graph=context.source;
+                saved.count=context.liveSourceCount;
+                saved.graphSaved=context.valid && saved.graph &&
+                    saved.count>0 &&
+                    saved.count<=static_cast<int>(kReachFpMaxSourceNodeCount) &&
+                    SafeReadBytes(saved.graph,saved.records,
+                        static_cast<size_t>(saved.count)*sizeof(BoneMatrix));
+            }
             g_reachOwnerScope = {};
             g_reachNestedOuterSuppressed = true;
             __try
@@ -11265,13 +11290,15 @@ namespace
             }
             __finally
             {
-                if (parentContextValid &&
-                    (!parentGraphSaved || !SafeWriteBytes(
-                         parentGraph,savedParentGraph,
-                         static_cast<size_t>(parentGraphCount)*
-                             sizeof(BoneMatrix))))
+                for (size_t i=0;i<kReachFpTransactionCapacity;++i)
                 {
-                    g_reachFpInterpolation={};
+                    const ParentGraphSnapshot& saved=savedParents[i];
+                    if (saved.contextValid &&
+                        (!saved.graphSaved || !SafeWriteBytes(
+                             saved.graph,saved.records,
+                             static_cast<size_t>(saved.count)*
+                                 sizeof(BoneMatrix))))
+                        g_reachFpInterpolations[i]={};
                 }
                 g_reachNestedOuterSuppressed = false;
                 g_reachOwnerScope = previous;

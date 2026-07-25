@@ -198,11 +198,16 @@ performs a clean rebuild and tests the one cumulative Release configuration,
 then records the permanent Reach preflight, capture, engine-write, camera-core,
 and runtime-hook fields in the candidate manifest.
 
-The command refuses a dirty worktree, reconfigures, rebuilds, reruns tests, and
-creates a new directory such as:
+The command refuses a dirty worktree and runs
+`tools/check-reach-fp-parity.ps1` before configuring. Packaging fails if the
+rejected single-context, body-only, or separated-live-owner paths reappear, or
+if bounded per-transaction contexts, exact source-pointer palette matching,
+full-source scratch reconstruction, the appended held-object boundary, or the
+repository parity contract are missing. It then reconfigures, rebuilds, reruns
+tests, and creates a new directory such as:
 
 ```text
-out/candidates/1a2b3c4-reach-private-20260723-120000000Z/
+out/candidates/1a2b3c4-reach-fp-parity-20260723-120000000Z/
 ```
 
 It contains only the DLL, launcher, license, generic manual, and a

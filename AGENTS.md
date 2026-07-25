@@ -29,6 +29,19 @@ Halo 3's headset-confirmed player experience is the reference for every other
 title: controls, camera ownership, stereo presentation, transitions, HUD,
 weapons, comfort, configuration, and lifecycle recovery.
 
+- **Strict implementation-parity rule:** when Halo 3/ODST already implement a
+  player-visible feature through a proven engine transaction, every later title
+  must reuse that same transaction architecture. For first-person hands and
+  weapons, this specifically means one bounded interpolation context per engine
+  source/palette transaction, source-pointer matching at every final visible
+  palette, and reconstruction into private scratch before the stock palette
+  builder. A title adapter may supply only verified title-specific call sites,
+  layouts, counts, and mappings. Do not substitute live-graph parenting,
+  body-only admission, inferred ownership masks, probes-as-runtime-behavior, or
+  fallback/approximation paths. If exact transaction parity is not yet proven,
+  stop at stock behavior and continue static evidence work.
+- `tools/check-reach-fp-parity.ps1` is a mandatory candidate-packaging gate.
+  Do not bypass, weaken, or remove it to make a candidate package.
 - Reuse shared behavior. Put only verified engine-specific signatures,
   layouts, skeleton facts, and calibration in a title adapter.
 - Never copy a Halo 3 offset, structure member, bone, marker, tag meaning, or

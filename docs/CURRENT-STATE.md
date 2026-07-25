@@ -40,28 +40,62 @@ milestone, not a public release or tag. The public known-good product remains
 - This result does not authorize or claim Reach camera, stereo, 6DOF, aim,
   movement, HUD, IK, haptics, or lifecycle hooks.
 
-### Current unaccepted Reach two-arm IK candidate
+### Current unaccepted Reach final-palette parity candidate
 
-This source contains a production, no-probe Reach FP interpolation/palette
-candidate. It preserves the headset-passing camera/culling transaction and
-learns only exact Spartan/Elite body maps stock-only. To match Halo 3, the live
-graph has separate hand owners: exact right-hand descendants plus the appended
-held-object/attachment range follow the right controller, exact left-hand
-descendants follow the left controller, and shoulder/forearm nodes stay out of
-either rigid seat for the exact two-arm body-palette solve. Both paths consume
-one prepared-frame centre/right/left snapshot. Its pair scope is frozen at the
-admitted outer `main_render_view` boundary because Reach performs FP
-interpolation/palette preparation before entering `player_view_render`; the
-same scope remains live through both eye renders. `arm_ik=0` retains rigid
-controller parenting; it does not disable Reach tracking. The installed config
-is not rewritten, so full-arm headset testing requires `arm_ik=1` and
-`floating_hands=0` before testing floating hands separately.
+The forward source now uses the same first-person transaction architecture as
+Halo 3/ODST. Retail Reach builder `0x2AF648` makes separate interpolation then
+palette submissions at `0x2AF85A -> 0x2B52EC` and
+`0x2AF8F6 -> 0x2B52EC`. Official HREK tags independently identify the two
+visible consumers: `objects\characters\spartans\fp\fp.render_model` is the
+47-node first-person arms model, while
+`objects\characters\spartans\fp_body\fp_body.render_model` is the separate
+82-node first-person body model. Treating only the 47-node submission as visible
+was not parity and is rejected.
 
-The Release build, core tests, and offline Reach evidence preflight must pass,
-and the clean package manifest supplies the exact commit and SHA-256. This entry
-does **not** advance the accepted pointer above. Reach campaign Spartan is the
-acceptance target; Elite is implemented fail-open but remains separately
-unclaimed. No install or launch is authorized by this entry.
+The exact 47/41-node Spartan/Elite map still performs stock-only layout
+discovery. On a later pair, that verified animation layout is selected by title
+generation plus interpolation view/id/slot and full live count, not by a
+temporary source-buffer address. Each retail interpolation transaction receives
+its own bounded context. Each final palette consumes the newest exact
+source-pointer match and reconstructs the complete live source (through the
+retail 120-node bound) from its untouched snapshot into private scratch before
+calling the stock palette builder. The 47-node arms palette and the 82-node body
+palette therefore receive the same right- and left-wrist solution. The exact
+appended held-object range inherits the solved right-wrist delta inside that
+same reconstruction.
+
+As in Halo 3/ODST, the mutated live interpolation graph exists only for
+marker/muzzle/attachment consumers and receives one rigid right-controller
+transform. No visible palette consumes it. The failed Reach-only separated-hand
+live-graph owner, body-only admission gate, and source-pointer-keyed layout cache
+have been removed; they are not dormant fallbacks. Unknown or invalid layouts
+remain wholly stock rather than partially modified.
+
+This entry does **not** advance the accepted pointer above. Build/test/preflight
+success is not a headset result. The currently installed `6e31751` DLL remains
+unchanged under the user's explicit no-rollback instruction, and no replacement
+installation or launch is authorized by this entry.
+
+### Failed Reach separated-hand graph result - 2026-07-24
+
+This result is evidence only and does not advance the accepted pointer above.
+
+| Identity | Value |
+| --- | --- |
+| Tested runtime source | `6e31751cce1dd78a315f5418be8d7d2736e1f2a9` |
+| Candidate package | `out/candidates/6e31751-reach-two-arm-ik-20260725-042432527Z` |
+| `halo3xr.dll` SHA-256 | `49DC585C1E57FB54D197198E2A46AE95AA1CBF0FEE565EDCD62BBE740B9E8715` |
+| Headset result | Nothing changed: the left forearm moved, but the visible left hand remained stuck to the gun/right-hand assembly |
+
+The installed hash and first log line matched this exact clean source, and the
+log reported the Reach two-arm path active with a 47-node palette over a
+52-node live graph. This rejects the separated source-owner change. Combined
+with retail `0x2AF648` and the official HREK 47-node arms / 82-node body split,
+the result identifies the architectural fault: `6e31751` admitted and solved
+only the 47-node palette transaction while allowing the second visible body
+palette to consume stock/live data. Per the user's explicit instruction, this
+failed DLL is not rolled back in the MCC installation; it is simply not an
+accepted pointer or basis for the forward implementation.
 
 ### Failed Reach whole-graph hand-parenting result - 2026-07-24
 
@@ -75,15 +109,13 @@ This result is evidence only and does not advance the accepted pointer above.
 | Headset result | The left forearm moved, but the left hand remained stuck to the gun/right-hand assembly instead of tracking independently |
 
 The runtime proved both OpenXR aim poses valid and tracked, put the left target
-on the correct side, and reported both exact body-palette wrists at their targets
-with zero error. The live graph also ran. Controller tracking, snapshot
-publication, and the analytic wrist solve are therefore ruled out. The failed
-source still assigned the right wrist whole-graph ownership and then attempted
-to peel the left subtree back off. That ownership model is rejected. The forward
-candidate partitions the already proven source ranges directly: right-hand plus
-appended held-object nodes go right, left-hand descendants go left, and all other
-body nodes remain for the exact body-palette arm solve. No further runtime probe
-is required.
+on the correct side, and reported both exact 47-node arms-palette wrists at
+their targets with zero error. The live graph also ran. Controller tracking,
+snapshot publication, and the analytic wrist solve are therefore ruled out.
+The later `6e31751` separated-owner result also produced no visible change, so
+both live-graph ownership models are rejected. The forward path no longer uses
+either model for visible geometry; it reconstructs every final palette from its
+own untouched interpolation transaction, matching Halo 3/ODST.
 
 ### Failed Reach two-arm scope-timing result - 2026-07-24
 

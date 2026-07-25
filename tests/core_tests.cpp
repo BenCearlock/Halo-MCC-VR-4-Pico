@@ -284,25 +284,6 @@ int main()
                   spartan.rightHandSourceDescendants ==
                       0x00007C1F07E02000ull,
             "Reach Spartan maps exact hand descendants into source order");
-        Check(ReachFpSourceOwnerForNode(spartan,spartan.rightShoulderSource) ==
-                      ReachFpSourceOwner::Stock &&
-                  ReachFpSourceOwnerForNode(spartan,spartan.rightElbowSource) ==
-                      ReachFpSourceOwner::Stock &&
-                  ReachFpSourceOwnerForNode(spartan,spartan.leftShoulderSource) ==
-                      ReachFpSourceOwner::Stock &&
-                  ReachFpSourceOwnerForNode(spartan,spartan.leftElbowSource) ==
-                      ReachFpSourceOwner::Stock &&
-                  ReachFpSourceOwnerForNode(spartan,spartan.rightWristSource) ==
-                      ReachFpSourceOwner::RightHandAndWeapon &&
-                  ReachFpSourceOwnerForNode(spartan,spartan.leftWristSource) ==
-                      ReachFpSourceOwner::LeftHand &&
-                  ReachFpSourceOwnerForNode(spartan,47) ==
-                      ReachFpSourceOwner::RightHandAndWeapon &&
-                  ReachFpSourceOwnerForNode(spartan,64) ==
-                      ReachFpSourceOwner::RightHandAndWeapon &&
-                  ReachFpSourceOwnerForNode(spartan,65) ==
-                      ReachFpSourceOwner::Stock,
-            "Reach live graph gives each hand one controller owner and keeps arm joints stock");
     }
 
     {
@@ -320,7 +301,6 @@ int main()
                   ReachFpSourceIndexIsHeldObject(spartan, 64) &&
                   !ReachFpSourceIndexIsHeldObject(spartan, 65),
             "Reach Spartan held-object range covers appended indices 47 through 64");
-
         ReachFpBodyLayout maximumSource{};
         Check(ResolveReachFpBodyLayout(
                   spartanMap, kReachFpMaxSourceNodeCount, maximumSource) &&
@@ -499,10 +479,10 @@ int main()
         const Action body = decide(true, true, true, true, true, true);
         const Action followingWeapon =
             decide(true, true, true, false, false, false);
-        Check(precedingWeapon == Action::PassThroughLive &&
-                  body == Action::ArticulateExactBody &&
-                  followingWeapon == Action::PassThroughLive,
-            "Reach body context survives preceding and following weapon palettes");
+        Check(precedingWeapon == Action::ArticulateKnownTransaction &&
+                  body == Action::ArticulateKnownTransaction &&
+                  followingWeapon == Action::ArticulateKnownTransaction,
+            "Reach reconstructs every final palette in a known source transaction");
         Check(decide(true, true, true, true, false, true) ==
                   Action::RestoreStockAndInvalidate &&
                   decide(true, true, true, true, false, false) ==
@@ -510,11 +490,11 @@ int main()
                   decide(true, true, false, false, false, true) ==
                   Action::RestoreStockAndInvalidate,
             "Reach changed maps, body-tag transitions, and invalid known-body maps restore stock");
-        Check(decide(true, true, true, false, false, false) ==
+        Check(decide(true, true, false, false, false, false) ==
                   Action::PassThroughLive &&
                   decide(false, true, true, true, true, true) ==
                   Action::PassThroughLive,
-            "Reach unsupported palettes and stale contexts cannot consume the body path");
+            "Reach unsolved and stale transactions remain stock");
     }
 
     {

@@ -55,6 +55,12 @@ try {
         throw "Refusing to package: HEAD does not descend from accepted source $acceptedSource."
     }
 
+    & powershell -NoProfile -ExecutionPolicy Bypass -File `
+        (Join-Path $repoRoot 'tools\check-reach-fp-parity.ps1')
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Reach FP Halo 3/ODST transaction parity gate failed.'
+    }
+
     Invoke-Tool { & cmake --preset $packagePreset }
     if ($LASTEXITCODE -ne 0) {
         throw "CMake configure failed for preset $packagePreset."
@@ -86,7 +92,7 @@ try {
     }
 
     $createdUtc = [DateTime]::UtcNow
-    $packageId = '{0}-{1}-{2}' -f $commit.Substring(0, 7), 'reach-two-arm-ik',
+    $packageId = '{0}-{1}-{2}' -f $commit.Substring(0, 7), 'reach-fp-parity',
         $createdUtc.ToString("yyyyMMdd-HHmmssfff'Z'")
     $packageDir = Join-Path $candidateRoot $packageId
     if (Test-Path -LiteralPath $packageDir) {
@@ -142,6 +148,7 @@ try {
         reach_controller_aim_enabled = $true
         reach_two_arm_ik_guarded = $true
         reach_fp_interpolation_palette_transaction = $true
+        reach_fp_h3_odst_transaction_parity_gate = $true
         reach_copyresource_enabled = $true
         reach_engine_memory_writes_enabled = $true
         reach_runtime_hooks_enabled = $true
