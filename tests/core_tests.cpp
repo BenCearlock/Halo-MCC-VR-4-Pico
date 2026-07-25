@@ -299,6 +299,9 @@ int main()
                   (spartan.leftControllerOwnedSourceBranch ^
                    spartan.leftHandSourceDescendants) ==
                       kReachLeftControllerOwnedAuxiliarySourceMask &&
+                  (spartan.leftControllerOwnedSourceBranch &
+                   ~spartan.leftHandSourceDescendants) ==
+                      kReachLeftControllerOwnedAuxiliarySourceMask &&
                   (spartan.leftHandSourceDescendants &
                    kReachLeftControllerOwnedAuxiliarySourceMask) == 0 &&
                   (spartan.leftControllerOwnedSourceBranch &
@@ -376,6 +379,9 @@ int main()
                       0x0000001E1E0F99A0ull &&
                   (elite.leftControllerOwnedSourceBranch ^
                    elite.leftHandSourceDescendants) ==
+                      kReachLeftControllerOwnedAuxiliarySourceMask &&
+                  (elite.leftControllerOwnedSourceBranch &
+                   ~elite.leftHandSourceDescendants) ==
                       kReachLeftControllerOwnedAuxiliarySourceMask &&
                   (elite.leftHandSourceDescendants &
                    kReachLeftControllerOwnedAuxiliarySourceMask) == 0 &&

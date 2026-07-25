@@ -214,8 +214,9 @@ inline constexpr uint64_t kReachEliteRightHandPaletteMask =
 // The official Spartan and Elite FP graphs share this exact hidden left-arm
 // source prefix: l_upperarm=5, l_forearm=7, l_humerus=8, l_radius=12. HREK
 // vertex weights prove these four nodes close every skinning edge from the
-// visible left-hand subtree. They receive the left-controller rigid delta but
-// remain outside the visible hand mask.
+// visible left-hand subtree. They remain outside the visible hand mask, but
+// Reach must co-locate their collapsed records at the solved left wrist so
+// blended glove/undersuit vertices cannot bridge several hidden joint pivots.
 inline constexpr uint64_t kReachLeftControllerOwnedAuxiliarySourceMask =
     0x00000000000011A0ull;
 

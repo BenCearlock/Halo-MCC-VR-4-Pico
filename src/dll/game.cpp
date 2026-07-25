@@ -11092,9 +11092,11 @@ namespace
     // The shared rigid (arm_ik=0) reconstruction intentionally carries the
     // whole weapon assembly from the right wrist; that is correct for the gun.
     // HREK proves the visible left-hand skin is also weighted across its hidden
-    // upper-arm/forearm/humerus/radius branch. Apply one final private-palette
-    // wrist delta to that exact influence closure, then let presentation keep
-    // only the hand visible. Live animation/marker graphs remain untouched.
+    // upper-arm/forearm/humerus/radius branch. Apply the controller delta only
+    // to the visible hand. The later Reach-only presentation pass co-locates
+    // those hidden influence records at the solved wrist before collapsing
+    // them, so their geometry disappears without pulling the glove back toward
+    // four separate arm pivots. Live animation/marker graphs remain untouched.
     bool ReachBindFloatingLeftHandToController(
         const BoneMatrix& renderRoot, const FpInterpolationContext& fp,
         uint64_t leftControllerOwnedSourceBranch,
@@ -11134,8 +11136,7 @@ namespace
 
         for (int node=0;node<fp.count && node<64;++node)
         {
-            if (!(leftControllerOwnedSourceBranch&
-                  (uint64_t{1}<<node)))
+            if (!(fp.lWristDescendants&(uint64_t{1}<<node)))
                 continue;
             BoneMatrix transformed{};
             if (!ComposeBoneMatrices(
@@ -11452,6 +11453,12 @@ namespace
                     {
                         const uint64_t keep=fp.wristDescendants|
                             fp.lWristDescendants;
+                        const uint64_t hiddenLeft=
+                            context.layout.leftControllerOwnedSourceBranch&
+                            ~fp.lWristDescendants;
+                        BoneMatrix collapsedAtLeftWrist=
+                            g_fpPaletteScratch[fp.lWrist];
+                        collapsedAtLeftWrist.scale=0.0001f;
                         for (int i=0;i<fp.count;++i)
                         {
                             const bool hand=i<64 &&
@@ -11459,7 +11466,18 @@ namespace
                             const bool held=fp.heldObjectStart>=0 &&
                                 i>=fp.heldObjectStart;
                             if (!hand && !held)
-                                g_fpPaletteScratch[i].scale=0.0001f;
+                            {
+                                if (i<64 &&
+                                    (hiddenLeft&(uint64_t{1}<<i)))
+                                {
+                                    g_fpPaletteScratch[i]=
+                                        collapsedAtLeftWrist;
+                                }
+                                else
+                                {
+                                    g_fpPaletteScratch[i].scale=0.0001f;
+                                }
+                            }
                         }
                     }
                     PublishReachFpStatus(

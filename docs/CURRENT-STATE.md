@@ -94,10 +94,10 @@ palette ownership, not a failed projection swap or native IK overwrite.
 
 Official HREK exports identify the exact leak. Spartan glove vertices blend
 `l_hand` with its parent `l_forearm`, while every `flair_forearm` permutation is
-rigid on `l_radius`. The left-hand descendant mask was correct for visibility,
-but hidden left-arm influences still received the right-controller rigid move.
-The next isolated candidate gives the complete HREK-proven hidden left branch
-the left-controller delta while keeping those auxiliary nodes collapsed.
+rigid on `l_radius`. Candidate `754b34b` therefore tested moving the complete
+hidden left influence branch with the controller while retaining hand-only
+visibility. Its exact headset failure below proves that ownership alone is not
+enough when those hidden records are still collapsed at separate joint pivots.
 
 The head-turn offset is a separate Reach-only defect: prepared wrist targets
 are already absolute `gameplayBase + tracked room offset`, but the rejected
@@ -105,6 +105,43 @@ diagnostic-era render-root rebase adds tracked head translation again at both
 marker and palette consumption. Its removal remains a separate headset
 candidate so the two behavioral corrections are not stacked. `fe0c48e` remains
 unaccepted and does not advance the pointer above.
+
+### Failed Reach left-branch ownership / collapse-pivot result - 2026-07-25
+
+Candidate `754b34b2acfdae81c6dbd833d3b7bd7b0e1e7b3d` moved the exact
+HREK-proven left influence closure with the left controller, then retained the
+existing hand-only visibility mask. Its exact packaged and deployed identity
+was:
+
+| Identity | Value |
+| --- | --- |
+| Candidate package | `out/candidates/754b34b-reach-fp-parity-20260725-115117345Z` |
+| `halo3xr.dll` SHA-256 | `BE95F23246B5AAAD1C0C492C7C4660D3EEDB075D0A610B47BF924129C899EDD0` |
+| `halo3xr_launcher.exe` SHA-256 | `3A8C3216B64C910E6EB60029D3DA63CA9305BD857297C47F227B7E7163CABFE0` |
+| Headset result | Slightly better, but a severe black wrist/forearm ribbon still stretched from the independently tracked left hand; gun and both hands still drifted slightly with physical head turns |
+
+The installed hashes and first log line matched this exact candidate. Reach
+reported the Spartan 47-over-52 private palette, native weapon-IK bypass, and
+both-eye nested world FP projection active with no palette validation,
+finite-value, or frame-order warning. The preserved log is
+`out/test-runs/754b34b-reach-wrist-collapse-fail-20260725-070700Z/halo3xr.log`,
+SHA-256 `ED23B61BE925F78FB6C52B3A7258808EE66B41B5FBA20B4E79A5B012A9D8F9C5`.
+
+The official HREK mesh exporter resolves the remaining artifact. In both
+Spartan arms meshes, all 103 nondegenerate left `spartan_rubber_suit` triangles
+span two to four of `l_upperarm`, `l_forearm`, `l_humerus`, and `l_radius`.
+The glove independently has 58 `l_forearm`/`l_hand` cross-weight vertices over
+96 triangles. The failed candidate moved those records together, but the final
+floating-hands pass still assigned scale `0.0001` at four distinct arm-joint
+translations. Linear skinning therefore drew the photographed strip between
+those collapsed pivots. Elite independently has 51 cross-weight vertices over
+83 hand/forearm triangles plus 96 body triangles spanning multiple auxiliary
+bones. The replacement candidate collapses all four hidden auxiliary records at
+the final solved left-wrist record, retaining the hand-only visible mask.
+
+The head-turn drift remains the separate prepared-target rebase defect described
+above and is not stacked into this wrist candidate. `754b34b` is failed and does
+not advance the accepted pointer.
 
 ### Failed Reach final-palette-only candidate - 2026-07-24
 

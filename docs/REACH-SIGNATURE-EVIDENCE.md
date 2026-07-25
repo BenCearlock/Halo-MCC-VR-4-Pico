@@ -370,13 +370,15 @@ parenting. Missing left tracking leaves the authored left arm.
 The Reach candidate path has one user-approved temporary Reach-only presentation
 policy: Reach always emits floating hands regardless of the shared
 `arm_ik`/`floating_hands` values. After the complete private source
-reconstruction, the exact HREK/retail left-controller influence branch receives
-a rigid delta from its reconstructed wrist to the prepared left-controller
-wrist. The visible keep mask remains the narrower left-hand descendants. The
-right-hand mask and appended held-object range remain on the right-controller
-transaction, and all non-hand/non-held nodes are collapsed in the same private
-scratch before the stock palette builder. No live graph, Halo 3 path, ODST path,
-or shared configuration is changed.
+reconstruction, the exact HREK/retail left-hand descendants receive a rigid
+delta from their reconstructed wrist to the prepared left-controller wrist.
+The visible keep mask remains those narrower left-hand descendants. Immediately
+before hidden-node collapse, the four auxiliary skin-influence records are
+co-located at the final solved left-wrist record and assigned the same tiny
+collapse scale as other hidden nodes. The right-hand mask and appended held
+object range remain on the right-controller transaction. This all occurs in the
+same private scratch before the stock palette builder; no live graph, Halo 3
+path, ODST path, or shared configuration is changed.
 
 This branch/visibility split is pinned by official mod-tool geometry, not a
 runtime ownership guess. The Spartan
@@ -394,6 +396,23 @@ exact source prefix. The hidden auxiliary mask is therefore `0x11A0`, producing
 Spartan controller ownership `0x000003E0F81F99A0` and Elite ownership
 `0x0000001E1E0F99A0`. Their original hand-only visibility masks remain
 `0x000003E0F81F8800` and `0x0000001E1E0F8800` respectively.
+
+Candidate `754b34b2acfdae81c6dbd833d3b7bd7b0e1e7b3d` proved that applying
+the left rigid delta to that complete branch while later collapsing each hidden
+record in place is insufficient. Its exact DLL SHA-256 was
+`BE95F23246B5AAAD1C0C492C7C4660D3EEDB075D0A610B47BF924129C899EDD0`;
+the headset showed a severe black strip from the left wrist. Direct standard
+HREK `tool.exe export-render-model-mesh` output explains it. Both Spartan arms
+meshes contain 71 left-side `spartan_rubber_suit` vertices and 103 nondegenerate
+triangles, every one spanning two to four auxiliary bones. The glove has the 58
+cross-weight vertices above over 96 triangles. Elite independently has 51
+`l_forearm`/`l_hand` cross-weight vertices over 83 triangles and 96 body
+triangles spanning multiple auxiliary bones. Collapsing the four auxiliary
+records at their separate absolute joint translations therefore creates a
+skinned strip between those pivots. Co-locating those records at source wrist
+11 before applying the tiny hidden scale collapses the strip to one wrist-local
+point without admitting arm geometry into the visible mask. The separate
+Spartan/Elite `fp_body` meshes use lower-body nodes and are not this artifact.
 
 That palette transaction is necessary but not sufficient. Accepted Halo 3 and
 ODST also bypass the native flat-screen weapon-IK stage after palette solving,
@@ -623,6 +642,17 @@ controller and a small hand/gun offset during physical head turns. The runtime
 also reported the 47-over-52 private palette and native weapon-IK bypass active,
 so the fragment is the hidden left influence leak proven above rather than a
 projection failure.
+
+Candidate `754b34b2acfdae81c6dbd833d3b7bd7b0e1e7b3d`, package
+`out/candidates/754b34b-reach-fp-parity-20260725-115117345Z`, installed DLL
+SHA-256 `BE95F23246B5AAAD1C0C492C7C4660D3EEDB075D0A610B47BF924129C899EDD0`,
+then produced a second failed headset result: the left hand was slightly better,
+but the black wrist strip remained severe and the physical-head-turn drift was
+unchanged. The exact runtime identity, 47-over-52 Spartan palette, weapon-IK
+bypass, and both-eye nested projection were verified. HREK mesh evidence above
+isolates the remaining strip to the four separately positioned hidden collapse
+pivots, so the forward wrist candidate replaces that failed behavior with one
+solved-wrist collapse anchor.
 
 The head-turn offset is independent. `ReachBuildPreparedControllerTarget`
 already publishes the physically correct absolute target `B+C`, where `B` is

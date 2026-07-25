@@ -32,6 +32,8 @@ $forbidden = [ordered]@{
         'ReachFpCameraRebuildBody[\s\S]*?PublishReachFpCameraUpload\(scope\)[\s\S]*?g_reachFpCameraUpload\(compact,\s*derived\)'
     'hidden left-arm ownership admitted into the visible keep mask' =
         'const\s+uint64_t\s+keep\s*=[^;]*leftControllerOwnedSourceBranch'
+    'hidden left-arm branch receives the visible-hand rigid delta' =
+        'if\s*\(!\(\s*leftControllerOwnedSourceBranch\s*&'
 }
 foreach ($entry in $forbidden.GetEnumerator()) {
     if (($game + "`n" + $logic) -match $entry.Value) {
@@ -86,10 +88,16 @@ $requiredGame = [ordered]@{
         'ReachBindFloatingLeftHandToController\(\s*\*root,fp,\s*context\.layout\.leftControllerOwnedSourceBranch,\s*targets\)'
     'Reach forced floating-hands presentation' =
         'Reach ignores floating_hands config'
-    'Reach exact left-arm influence branch binding' =
-        'leftControllerOwnedSourceBranch&\s*\(uint64_t\{1\}<<node\)'
+    'Reach exact left-hand-only controller delta' =
+        'if\s*\(!\(\s*fp\.lWristDescendants\s*&\s*\(uint64_t\{1\}\s*<<\s*node\)\s*\)'
     'Reach hidden left-arm branch excluded from visibility' =
         'const\s+uint64_t\s+keep=fp\.wristDescendants\|\s*fp\.lWristDescendants'
+    'Reach hidden influence branch derived from exact ownership' =
+        'const\s+uint64_t\s+hiddenLeft=\s*context\.layout\.leftControllerOwnedSourceBranch&\s*~fp\.lWristDescendants'
+    'Reach hidden influences collapse at solved left wrist' =
+        'BoneMatrix\s+collapsedAtLeftWrist=\s*g_fpPaletteScratch\[fp\.lWrist\];\s*collapsedAtLeftWrist\.scale=0\.0001f;'
+    'Reach hidden influence records use wrist collapse anchor' =
+        'if\s*\(i<64\s*&&\s*\(hiddenLeft&\(uint64_t\{1\}<<i\)\)\)\s*\{\s*g_fpPaletteScratch\[i\]=\s*collapsedAtLeftWrist;'
     'Reach layout identity includes left controller ownership' =
         'a\.leftControllerOwnedSourceBranch==\s*b\.leftControllerOwnedSourceBranch'
 }
