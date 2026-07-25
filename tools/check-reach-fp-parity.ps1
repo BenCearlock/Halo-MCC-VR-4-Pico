@@ -58,6 +58,12 @@ $requiredGame = [ordered]@{
         'g_reachFpCameraUpload\(compact, derived\)'
     'first-person camera hook lifecycle target' =
         'g_reachCamera\.fpCameraTarget'
+    'Reach private-palette left controller binding' =
+        'ReachBindFloatingLeftHandToController\(\*root,fp,targets\)'
+    'Reach forced floating-hands presentation' =
+        'Reach ignores floating_hands config'
+    'Reach exact left-hand source mask only' =
+        'fp\.lWristDescendants&\(uint64_t\{1\}<<node\)'
 }
 foreach ($entry in $requiredGame.GetEnumerator()) {
     if ($game -notmatch $entry.Value) {

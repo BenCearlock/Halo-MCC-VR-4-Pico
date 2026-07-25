@@ -11043,6 +11043,72 @@ namespace
         return ReachBoneMatrixFinite(alignedTarget);
     }
 
+    // Reach's official Spartan/Elite body maps resolve the left wrist to source
+    // node 11 and publish the complete source-space left-hand descendant mask.
+    // The shared rigid (arm_ik=0) reconstruction intentionally carries the
+    // whole weapon assembly from the right wrist; that is correct for the gun
+    // but leaves Reach's independently visible floating left hand on the right
+    // controller. Apply one final, private-palette-only wrist delta to exactly
+    // that proven left-hand mask. Live animation/marker graphs remain untouched.
+    bool ReachBindFloatingLeftHandToController(
+        const BoneMatrix& renderRoot, const FpInterpolationContext& fp,
+        const FpExplicitPoseTargets& targets)
+    {
+        if (!targets.leftWristValid)
+            return true;
+        if (!ReachBoneMatrixFinite(renderRoot) ||
+            !ReachBoneMatrixFinite(targets.leftWrist) ||
+            fp.count<=0 ||
+            fp.count>static_cast<int>(kReachFpMaxSourceNodeCount) ||
+            fp.lWrist<0 || fp.lWrist>=fp.count ||
+            fp.lWrist>=64 ||
+            !(fp.lWristDescendants&(uint64_t{1}<<fp.lWrist)))
+        {
+            return false;
+        }
+
+        BoneMatrix currentWristWorld{}, inverseCurrentWrist{}, worldDelta{};
+        BoneMatrix inverseRoot{}, deltaRoot{}, recordDelta{};
+        if (!ComposeBoneMatrices(
+                renderRoot,g_fpPaletteScratch[fp.lWrist],currentWristWorld) ||
+            !InvertBoneMatrix(currentWristWorld,inverseCurrentWrist) ||
+            !ComposeBoneMatrices(
+                targets.leftWrist,inverseCurrentWrist,worldDelta) ||
+            !InvertBoneMatrix(renderRoot,inverseRoot) ||
+            !ComposeBoneMatrices(worldDelta,renderRoot,deltaRoot) ||
+            !ComposeBoneMatrices(inverseRoot,deltaRoot,recordDelta))
+        {
+            return false;
+        }
+
+        for (int node=0;node<fp.count && node<64;++node)
+        {
+            if (!(fp.lWristDescendants&(uint64_t{1}<<node)))
+                continue;
+            BoneMatrix transformed{};
+            if (!ComposeBoneMatrices(
+                    recordDelta,g_fpPaletteScratch[node],transformed) ||
+                !ReachBoneMatrixFinite(transformed))
+            {
+                return false;
+            }
+            g_fpPaletteScratch[node]=transformed;
+        }
+
+        BoneMatrix verifiedWrist{};
+        if (!ComposeBoneMatrices(
+                renderRoot,g_fpPaletteScratch[fp.lWrist],verifiedWrist) ||
+            !ReachBoneMatrixFinite(verifiedWrist))
+        {
+            return false;
+        }
+        for (int axis=0;axis<3;++axis)
+            if (fabsf(verifiedWrist.translation[axis]-
+                      targets.leftWrist.translation[axis])>0.01f)
+                return false;
+        return true;
+    }
+
     void ReachCaptureFpInterpolation(
         int view, int id, int slot, bool result,
         BoneMatrix** outBones, int* outCount)
@@ -11310,7 +11376,10 @@ namespace
                     tag,fp,*root,source,replacement,&targets,
                     context.untouchedLive);
                 selectedSource=replacement;
-                bool outputFinite=reconstructed;
+                const bool leftHandBound=reconstructed &&
+                    selectedSource==g_fpPaletteScratch &&
+                    ReachBindFloatingLeftHandToController(*root,fp,targets);
+                bool outputFinite=reconstructed && leftHandBound;
                 for (int i=0;outputFinite && i<fp.count;++i)
                     outputFinite=ReachBoneMatrixFinite(g_fpPaletteScratch[i]);
                 if (!outputFinite)
@@ -11319,8 +11388,12 @@ namespace
                 }
                 else
                 {
-                    if (g_config.floating_hands &&
-                        selectedSource==g_fpPaletteScratch)
+                    // Reach temporarily forces the accepted floating-hands
+                    // presentation independent of the universal config. The
+                    // exact hand masks and held-object boundary come from the
+                    // pinned HREK/retail body maps; no arm or body geometry is
+                    // admitted into this title's visible FP palette.
+                    if (selectedSource==g_fpPaletteScratch)
                     {
                         const uint64_t keep=fp.wristDescendants|
                             fp.lWristDescendants;
@@ -12595,9 +12668,10 @@ namespace
             LOG("Reach FP layout learned stock-only: body=%d live=%d; eligible next prepared pair",
                 bodyCount,liveCount);
         else if (code==2)
-            LOG("Reach FP two-arm path active: body=%d live=%d arm_ik=%d floating_hands=%d",
-                bodyCount,liveCount,static_cast<int>(g_config.arm_ik),
-                static_cast<int>(g_config.floating_hands));
+            LOG("Reach FP forced floating-hands active: body=%d live=%d "
+                "arm_ik=%d (Reach ignores floating_hands config; left palette "
+                "is independently controller-bound)",
+                bodyCount,liveCount,static_cast<int>(g_config.arm_ik));
         else if (code==3)
             LOG("Reach FP layout changed or failed validation at live=%d; next pair remains stock",
                 liveCount);

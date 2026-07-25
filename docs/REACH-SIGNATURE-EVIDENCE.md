@@ -367,6 +367,16 @@ probe fallback. `arm_ik=1` solves both shoulder-elbow-wrist chains;
 `arm_ik=0` uses the same full-source palette transaction with rigid controller
 parenting. Missing left tracking leaves the authored left arm.
 
+The current headset candidate has one user-approved temporary Reach-only
+presentation policy: Reach always emits floating hands regardless of the shared
+`arm_ik`/`floating_hands` values. After the complete private source
+reconstruction, the exact HREK/retail left-hand source mask receives a rigid
+delta from its reconstructed wrist to the prepared left-controller wrist. The
+right-hand mask and appended held-object range remain on the right-controller
+transaction. Non-hand/non-held nodes are then collapsed in the same private
+scratch before the stock palette builder. No live graph, Halo 3 path, ODST path,
+or shared configuration is changed.
+
 That palette transaction is necessary but not sufficient. Accepted Halo 3 and
 ODST also bypass the native flat-screen weapon-IK stage after palette solving,
 preventing a weapon-authored support-hand marker from overriding the controller

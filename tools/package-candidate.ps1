@@ -156,6 +156,7 @@ try {
         reach_two_arm_ik_guarded = $true
         reach_fp_interpolation_palette_transaction = $true
         reach_fp_h3_odst_transaction_parity_gate = $true
+        reach_forced_floating_hands = $true
         reach_copyresource_enabled = $true
         reach_engine_memory_writes_enabled = $true
         reach_runtime_hooks_enabled = $true
@@ -170,7 +171,7 @@ try {
                 sha256 = $launcherHash
             }
         }
-        note = 'Not accepted until this exact DLL hash passes the Reach Spartan two-arm IK/headset matrix plus Halo 3 and ODST regressions.'
+        note = 'Reach temporarily forces independently controller-bound floating hands regardless of shared arm_ik/floating_hands settings. Not accepted until this exact DLL hash passes the Reach Spartan/Elite headset matrix plus Halo 3 and ODST regressions.'
     }
 
     $manifestPath = Join-Path $packageDir 'CANDIDATE-MANIFEST.json'

@@ -101,6 +101,14 @@ two-arm IK through the proven interpolation and visible-palette boundaries.
 Native HUD remains withheld. Reach aim/IK are not release-accepted until the
 exact packaged DLL passes the headset matrix and Halo 3/ODST regressions.
 
+For the current Reach headset candidate, the user explicitly approved one
+temporary title-specific presentation difference: Reach forces floating hands
+regardless of the universal `arm_ik` and `floating_hands` values. Its verified
+right hand plus appended held-object range remain right-controller-owned; the
+verified left-hand source mask receives its own left-controller wrist delta in
+private final-palette scratch, and every non-hand/non-held Reach FP node is
+collapsed. Halo 3 and ODST still consume the universal settings unchanged.
+
 Signature scanning, file hashing, resource allocation, critical sections, and
 candidate logging stay out of all Reach engine render callbacks. Exact tracking
 is published with two fixed slots and lock-free pin/claim atomics; a changing or

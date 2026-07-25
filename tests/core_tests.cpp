@@ -291,6 +291,15 @@ int main()
                   spartan.rightHandSourceDescendants ==
                       0x00007C1F07E02000ull,
             "Reach Spartan maps exact hand descendants into source order");
+        Check((spartan.leftHandSourceDescendants &
+                   (uint64_t{1} << spartan.leftWristSource)) != 0 &&
+                  (spartan.rightHandSourceDescendants &
+                   (uint64_t{1} << spartan.rightWristSource)) != 0 &&
+                  (spartan.leftHandSourceDescendants &
+                   spartan.rightHandSourceDescendants) == 0 &&
+                  (spartan.leftHandSourceDescendants >>
+                   spartan.paletteBodyNodeCount) == 0,
+            "Reach Spartan floating hands are disjoint exact wrist subtrees and exclude held objects");
     }
 
     {
@@ -343,6 +352,15 @@ int main()
                   ReachFpSourceIndexIsHeldObject(elite, 58) &&
                   !ReachFpSourceIndexIsHeldObject(elite, 59),
             "Reach Elite maps exact hand sets and appended held-object range");
+        Check((elite.leftHandSourceDescendants &
+                   (uint64_t{1} << elite.leftWristSource)) != 0 &&
+                  (elite.rightHandSourceDescendants &
+                   (uint64_t{1} << elite.rightWristSource)) != 0 &&
+                  (elite.leftHandSourceDescendants &
+                   elite.rightHandSourceDescendants) == 0 &&
+                  (elite.leftHandSourceDescendants >>
+                   elite.paletteBodyNodeCount) == 0,
+            "Reach Elite floating hands are disjoint exact wrist subtrees and exclude held objects");
     }
 
     {
