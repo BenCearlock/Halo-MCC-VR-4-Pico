@@ -9789,7 +9789,6 @@ namespace
     ReachFpCameraUploadFn g_reachFpCameraUpload = nullptr;
     ReachFpWeaponSlotForDatumFn g_reachFpWeaponSlotForDatum = nullptr;
     void* g_reachOrigFpProjectileOriginDecision = nullptr;
-    bool ReachTransformProjectileMarkerOriginLocal(float* origin);
 
     // The stock projectile routine reaches this decision on simulation/gameplay
     // threads, not necessarily inside the render-owner scope. Locality therefore
@@ -9839,23 +9838,6 @@ namespace
             {
                 useWeaponOrigin =
                     ReachFpProjectileOriginPredicateBody(weaponDatum) ? 1 : 0;
-                if (useWeaponOrigin && firingFrame)
-                {
-                    // Reach's true bit-2 continuation consumes the local
-                    // marker point at firing_frame + barrel_offset + 0x9F0.
-                    // Apply the same record-space delta as the visible
-                    // primary_trigger marker; world-space mutation was the
-                    // previous failed experiment.
-                    auto* const frame=static_cast<unsigned char*>(firingFrame);
-                    uint64_t barrelOffset=0;
-                    memcpy(&barrelOffset,frame+0x08,sizeof(barrelOffset));
-                    if (barrelOffset<0x2000)
-                    {
-                        float* const markerOrigin=reinterpret_cast<float*>(
-                            frame+barrelOffset+0x9F0);
-                        ReachTransformProjectileMarkerOriginLocal(markerOrigin);
-                    }
-                }
             }
             __except (EXCEPTION_EXECUTE_HANDLER)
             {
@@ -11358,33 +11340,6 @@ namespace
             return false;
         }
         return SafeWriteBytes(output,&transformed,sizeof(transformed));
-    }
-
-    bool ReachTransformProjectileMarkerOriginLocal(float* origin)
-    {
-        if (!origin || g_reachFpMarkerQueryTransform.generation.load(
-                std::memory_order_acquire)!=g_reachCamera.generation)
-            return false;
-        BoneMatrix delta{};
-        if (!LoadAtomicBoneMatrix(
-                g_reachFpMarkerQueryTransform.recordDelta,delta) ||
-            g_reachFpMarkerQueryTransform.generation.load(
-                std::memory_order_acquire)!=g_reachCamera.generation)
-            return false;
-        float source[3]{};
-        if (!SafeReadBytes(origin,source,sizeof(source))) return false;
-        for (float component : source)
-            if (!isfinite(component)) return false;
-        float transformed[3]{};
-        for (int row=0;row<3;++row)
-        {
-            float rotated=0.0f;
-            for (int column=0;column<3;++column)
-                rotated+=delta.rotation[column*3+row]*source[column];
-            transformed[row]=delta.translation[row]+delta.scale*rotated;
-            if (!isfinite(transformed[row])) return false;
-        }
-        return SafeWriteBytes(origin,transformed,sizeof(transformed));
     }
 
     // Reach's official Spartan/Elite body maps resolve the left wrist to source
