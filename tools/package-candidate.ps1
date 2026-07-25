@@ -4,8 +4,9 @@ param()
 # Halo MCC VR is one cumulative build: Halo 3 + ODST + Halo: Reach, all
 # permanent and fail-open. There is a single `release` preset and no Reach
 # on/off switch. This stages one unaccepted local candidate under out/candidates
-# after a clean rebuild and passing tests; it never copies to MCC and never
-# labels rebuilt bytes as an accepted release.
+# after a clean rebuild and passing tests, then automatically installs those
+# exact manifest-verified bytes into the dedicated MCC mod directory. It never
+# launches MCC and never labels rebuilt bytes as an accepted release.
 
 $ErrorActionPreference = 'Stop'
 
@@ -124,7 +125,7 @@ try {
         (Get-FileHash -LiteralPath $launcherPath -Algorithm SHA256).Hash
 
     $manifest = [ordered]@{
-        schema_version = 5
+        schema_version = 6
         status = 'UNTESTED_LOCAL_CANDIDATE'
         accepted = $false
         package_id = $packageId
@@ -137,6 +138,12 @@ try {
             odst = $true
             reach = $true
             reach_render = $true
+        }
+        deployment_policy = [ordered]@{
+            automatic_after_package = $true
+            installer = 'tools/install-candidate.ps1'
+            launches_mcc = $false
+            changes_config = $false
         }
         # Reach is now a permanent, fail-open per-eye camera core.
         reach_permanent = $true
@@ -177,6 +184,13 @@ try {
     Write-Host "Source:   $commit"
     Write-Host "DLL:      $dllHash"
     Write-Host "Launcher: $launcherHash"
+
+    & powershell -NoProfile -ExecutionPolicy Bypass -File `
+        (Join-Path $repoRoot 'tools\install-candidate.ps1') `
+        -CandidateDir $packageDir
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Candidate was packaged but automatic installation failed.'
+    }
 }
 finally {
     Pop-Location

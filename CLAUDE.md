@@ -21,17 +21,22 @@ the acceptance test.
 3. Configure, build, and test the cumulative Release preset described in
    `BUILDING.md`. Stop on any compiler or test failure.
 4. Package only into the repository's ignored `out/` directory.
-5. Do not copy files into MCC or launch the game unless the user explicitly asks
-   to test that exact candidate.
+5. A successful candidate package automatically installs its exact
+   manifest-verified DLL and launcher into the dedicated `Halo_MCC_VR` folder
+   after confirming MCC is closed, preserving the previous install, and
+   verifying installed hashes. Never launch the game or change configuration.
 6. For a requested headset test, record the source commit, DLL SHA-256, unique
    package path, embedded log source/configuration, title coverage, and result.
    Verify the installed file's hash separately; the log does not contain it.
 7. Advance `docs/CURRENT-STATE.md` only after explicit headset acceptance.
 8. Revert failed behavior before making another candidate.
 
-There are intentionally no deploy, restore, installer, or uninstaller scripts.
-The old scripts could build ODST support off or restore an older DLL. Installation
-is manual and confined to a dedicated `Halo_MCC_VR` folder.
+`tools/install-candidate.ps1` is the only deployment path and is invoked
+automatically by `tools/package-candidate.ps1` after every clean candidate build.
+It accepts only a manifest-backed package under `out/candidates`, requires MCC
+closed, preserves the prior DLL/launcher/log/config under `out/deploy-backups`,
+verifies staged and installed hashes, never launches MCC, and never changes
+`halomccvr.cfg`. Old deploy/restore scripts remain forbidden.
 
 ## Non-negotiable implementation rules
 

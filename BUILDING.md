@@ -196,7 +196,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\package-candidate.ps
 There are no title switches or alternate candidate presets. The command always
 performs a clean rebuild and tests the one cumulative Release configuration,
 then records the permanent Reach preflight, capture, engine-write, camera-core,
-and runtime-hook fields in the candidate manifest.
+and runtime-hook fields in the candidate manifest. After packaging succeeds it
+automatically invokes `tools/install-candidate.ps1` for those exact bytes.
 
 The command refuses a dirty worktree and runs
 `tools/check-reach-fp-parity.ps1` before configuring. Packaging fails if the
@@ -215,12 +216,15 @@ It contains only the DLL, launcher, license, generic manual, and a
 `CANDIDATE-MANIFEST.json` with the full commit, base release 0.2.2, ODST and
 Reach build states, explicit `reach_controller_input_enabled` and
 `reach_runtime_hooks_enabled` states, exact file sizes, and SHA-256 hashes. It
-never copies to MCC, never reuses a candidate directory, and never labels
-rebuilt bytes as release 0.2.2.
+never reuses a candidate directory and never labels rebuilt bytes as release
+0.2.2.
 
-Deployment is manual and requires explicit user approval for that exact
-candidate. A rebuild uses the accepted source/configuration but remains
-unaccepted until its exact hash passes a headset test.
+Deployment is automatic after the clean package completes. The installer accepts
+only the new manifest-backed directory under `out/candidates`, requires MCC and
+the launcher closed, preserves the prior DLL/launcher/log/config under
+`out/deploy-backups`, verifies staged and installed hashes, and leaves
+`halomccvr.cfg` unchanged. It never launches MCC. A rebuild remains unaccepted
+until its exact installed hash passes a headset test.
 
 ## Inspect the published 0.2.2 source
 

@@ -116,8 +116,11 @@ original value during verified teardown. There is no runtime probe, skeleton
 guess, alternate owner, or fallback implementation. Headset acceptance is
 pending.
 
-The failed `cd0a7c1` DLL remains installed unchanged under the user's explicit
-no-rollback instruction. No forward-corrected DLL has been installed or launched.
+The forward-corrected candidate `d721068ac6ace2f2d2b6c8107c2f3d18494e43bd`
+is installed with DLL SHA-256
+`46ABD7BFF4AAF083A8CEF6AB174831458A06FAE7EBA85815D327ACECE2ABF226`.
+The installed hash was verified separately, `arm_ik=1` and `floating_hands=0`
+remain unchanged, MCC was not launched, and headset acceptance is pending.
 
 ### Failed Reach separated-hand graph result - 2026-07-24
 
@@ -568,7 +571,11 @@ ODST on the accepted build:
 - Never write guessed camera, animation, model-root, or CHUD offsets.
 - Unique signatures only; fail open to stock rendering.
 - Never patch game files or interact with Easy Anti-Cheat.
-- No automatic deploy, restore, install, uninstall, or launch scripts.
+- A successful candidate package automatically installs only its exact
+  manifest-verified DLL/launcher through `tools/install-candidate.ps1`, with MCC
+  closed, the prior install preserved, and post-copy hashes verified. It never
+  launches MCC or changes `halomccvr.cfg`; restore/uninstall scripts remain
+  forbidden.
 
 ## Candidate and acceptance workflow
 
@@ -576,14 +583,15 @@ ODST on the accepted build:
 2. Make one behavioral change and give it a unique commit.
 3. Build and test the cumulative Release preset from `BUILDING.md`.
 4. Use the safe package command to create a unique candidate under `out/`;
-   never overwrite the accepted ZIP or reuse a candidate directory.
-5. Deploy only after the user explicitly requests that exact candidate.
-6. Record source commit, DLL hash, unique package path, embedded log
+   never overwrite the accepted ZIP or reuse a candidate directory. After every
+   successful build/test/package, it automatically backs up the current install,
+   deploys that exact candidate, and verifies the installed hashes.
+5. Record source commit, DLL hash, unique package path, embedded log
    source/configuration, title coverage, and headset result. Verify the installed
    hash separately because the log does not contain it.
-7. Advance this pointer only after explicit acceptance. A failed or untested
+6. Advance this pointer only after explicit acceptance. A failed or untested
    candidate is reverted and does not advance the line.
-8. Run a Halo 3 regression whenever shared code or cross-title lifecycle state
+7. Run a Halo 3 regression whenever shared code or cross-title lifecycle state
    changes.
 
 ## Evidence map
