@@ -9823,7 +9823,7 @@ namespace
     // is scanned separately, closing both its pre-counter call window and the
     // post-counter register-restore/tail-jump window.
     __declspec(noinline) int __fastcall ReachFpProjectileOriginPredicate(
-        uint32_t weaponDatum)
+        uint32_t weaponDatum, void* firingFrame)
     {
         int useWeaponOrigin = 0;
         g_reachCamera.activeCallbacks.fetch_add(
@@ -9834,6 +9834,24 @@ namespace
             {
                 useWeaponOrigin =
                     ReachFpProjectileOriginPredicateBody(weaponDatum) ? 1 : 0;
+                if (useWeaponOrigin && firingFrame)
+                {
+                    auto* frame = static_cast<unsigned char*>(firingFrame);
+                    uint64_t markerOffset = 0;
+                    memcpy(&markerOffset, frame + 8, sizeof(markerOffset));
+                    if (markerOffset < 0x2000)
+                    {
+                        float* origin = reinterpret_cast<float*>(frame + markerOffset + 0x9F0);
+                        float forward[3] = {g_aimFwdX.load(std::memory_order_relaxed), g_aimFwdY.load(std::memory_order_relaxed), g_aimFwdZ.load(std::memory_order_relaxed)};
+                        float up[3] = {g_worldUp[0].load(std::memory_order_relaxed), g_worldUp[1].load(std::memory_order_relaxed), g_worldUp[2].load(std::memory_order_relaxed)};
+                        float left[3] = {up[1]*forward[2]-up[2]*forward[1], up[2]*forward[0]-up[0]*forward[2], up[0]*forward[1]-up[1]*forward[0]};
+                        const float fl=sqrtf(forward[0]*forward[0]+forward[1]*forward[1]+forward[2]*forward[2]);
+                        const float ll=sqrtf(left[0]*left[0]+left[1]*left[1]+left[2]*left[2]);
+                        if (isfinite(fl) && isfinite(ll) && fl>1e-4f && ll>1e-4f)
+                            for (int i=0;i<3;++i)
+                                origin[i] += (forward[i]/fl)*(0.08f*kReachWorldUnitsPerMeter) + (left[i]/ll)*(0.05f*kReachWorldUnitsPerMeter);
+                    }
+                }
             }
             __except (EXCEPTION_EXECUTE_HANDLER)
             {
@@ -9851,13 +9869,13 @@ namespace
     }
 
     constexpr size_t kReachFpProjectileOriginRelayAllocationSize = 0x1000;
-    constexpr size_t kReachFpProjectileOriginRelayPredicateAddressOffset = 0x6A;
-    constexpr size_t kReachFpProjectileOriginRelayTrampolineAddressOffset = 0xF7;
+    constexpr size_t kReachFpProjectileOriginRelayPredicateAddressOffset = 0x6D;
+    constexpr size_t kReachFpProjectileOriginRelayTrampolineAddressOffset = 0xFA;
     // Win64 midhook relay. It preserves every volatile GPR, RFLAGS, and XMM0-5,
     // maintains call alignment and shadow space, reads the pinned current
     // projectile-frame weapon datum at original RSP+0x64, and only ORs AL bit 0
     // before tail-jumping MinHook's relocated stock AND/JNE transaction.
-    constexpr std::array<uint8_t, 0xFF> kReachFpProjectileOriginRelayTemplate{{
+    constexpr std::array<uint8_t, 0x102> kReachFpProjectileOriginRelayTemplate{{
         0x48,0x81,0xEC,0xD0,0x00,0x00,0x00,
         0x48,0x89,0x44,0x24,0x20,0x48,0x89,0x4C,0x24,0x28,
         0x48,0x89,0x54,0x24,0x30,0x4C,0x89,0x44,0x24,0x38,
@@ -9868,7 +9886,7 @@ namespace
         0xF3,0x0F,0x7F,0x9C,0x24,0x90,0x00,0x00,0x00,
         0xF3,0x0F,0x7F,0xA4,0x24,0xA0,0x00,0x00,0x00,
         0xF3,0x0F,0x7F,0xAC,0x24,0xB0,0x00,0x00,0x00,
-        0x8B,0x8C,0x24,0x34,0x01,0x00,0x00,0x48,0xB8,
+        0x8B,0x8C,0x24,0x34,0x01,0x00,0x00,0x48,0x89,0xEA,0x48,0xB8,
         0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0xFF,0xD0,
         0x88,0x84,0x24,0xC0,0x00,0x00,0x00,
         0xF3,0x0F,0x6F,0x44,0x24,0x60,0xF3,0x0F,0x6F,0x4C,0x24,0x70,
