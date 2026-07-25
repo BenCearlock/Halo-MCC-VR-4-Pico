@@ -9786,111 +9786,6 @@ namespace
     ReachFpWeaponSlotForDatumFn g_reachFpWeaponSlotForDatum = nullptr;
     void* g_reachOrigFpProjectileOriginDecision = nullptr;
 
-    // The firing transaction and visible first-person interpolation are
-    // separate. Publish the same complete world-space transform that moves the
-    // live marker graph from its authored wrist to the controller-owned wrist.
-    // The stock firing frame already owns the exact weapon barrel marker; this
-    // keeps that marker and the displayed barrel in one shared transaction.
-    struct ReachFpMuzzleTransform
-    {
-        AtomicBoneMatrix worldDelta{};
-        std::atomic<uint32_t> generation{0};
-    } g_reachFpMuzzleTransform;
-
-    bool ReachBuildFpMuzzleWorldDelta(
-        const BoneMatrix& centerRoot, const BoneMatrix& authoredWrist,
-        const BoneMatrix& controllerWrist, float meshScale,
-        BoneMatrix& worldDelta)
-    {
-        if (!isfinite(meshScale) || meshScale <= 0.0f)
-            return false;
-        BoneMatrix authoredWristWorld{}, inverseAuthoredWristWorld{}, rigid{};
-        if (!ComposeBoneMatrices(
-                centerRoot, authoredWrist, authoredWristWorld) ||
-            !InvertBoneMatrix(authoredWristWorld, inverseAuthoredWristWorld) ||
-            !ComposeBoneMatrices(
-                controllerWrist, inverseAuthoredWristWorld, rigid))
-        {
-            return false;
-        }
-
-        // The live marker graph applies the right-hand size trim around the
-        // solved controller wrist. Include that same uniform transform, so a
-        // gun-scale setting cannot split visible and physical muzzle positions.
-        if (meshScale != 1.0f)
-        {
-            BoneMatrix scaleAboutController{};
-            scaleAboutController.scale=meshScale;
-            scaleAboutController.rotation[0]=1.0f;
-            scaleAboutController.rotation[4]=1.0f;
-            scaleAboutController.rotation[8]=1.0f;
-            for (int axis=0;axis<3;++axis)
-                scaleAboutController.translation[axis]=
-                    controllerWrist.translation[axis]*(1.0f-meshScale);
-            if (!ComposeBoneMatrices(
-                    scaleAboutController,rigid,worldDelta))
-            {
-                return false;
-            }
-        }
-        else
-        {
-            worldDelta=rigid;
-        }
-        return isfinite(worldDelta.scale) &&
-            isfinite(worldDelta.translation[0]) &&
-            isfinite(worldDelta.translation[1]) &&
-            isfinite(worldDelta.translation[2]);
-    }
-
-    void ReachPublishFpMuzzleWorldDelta(
-        uint32_t generation, const BoneMatrix& centerRoot,
-        const BoneMatrix& authoredWrist, const BoneMatrix& controllerWrist,
-        float meshScale)
-    {
-        BoneMatrix delta{};
-        if (!ReachBuildFpMuzzleWorldDelta(
-                centerRoot,authoredWrist,controllerWrist,meshScale,delta))
-        {
-            return;
-        }
-        g_reachFpMuzzleTransform.generation.store(0,std::memory_order_release);
-        StoreAtomicBoneMatrix(g_reachFpMuzzleTransform.worldDelta,delta);
-        g_reachFpMuzzleTransform.generation.store(
-            generation,std::memory_order_release);
-    }
-
-    bool ReachTransformProjectileMarkerOrigin(float origin[3])
-    {
-        if (!origin ||
-            g_reachFpMuzzleTransform.generation.load(
-                std::memory_order_acquire) != g_reachCamera.generation)
-        {
-            return false;
-        }
-        BoneMatrix delta{};
-        if (!LoadAtomicBoneMatrix(g_reachFpMuzzleTransform.worldDelta,delta) ||
-            g_reachFpMuzzleTransform.generation.load(
-                std::memory_order_acquire) != g_reachCamera.generation)
-        {
-            return false;
-        }
-        float source[3]={origin[0],origin[1],origin[2]};
-        for (float component : source)
-            if (!isfinite(component)) return false;
-        float transformed[3]{};
-        for (int row=0;row<3;++row)
-        {
-            float rotated=0.0f;
-            for (int column=0;column<3;++column)
-                rotated+=delta.rotation[column*3+row]*source[column];
-            transformed[row]=delta.translation[row]+delta.scale*rotated;
-            if (!isfinite(transformed[row])) return false;
-        }
-        memcpy(origin,transformed,sizeof(transformed));
-        return true;
-    }
-
     // The stock projectile routine reaches this decision on simulation/gameplay
     // threads, not necessarily inside the render-owner scope. Locality therefore
     // comes from Reach's exact output-user first-person slot table: only the
@@ -9939,23 +9834,6 @@ namespace
             {
                 useWeaponOrigin =
                     ReachFpProjectileOriginPredicateBody(weaponDatum) ? 1 : 0;
-                if (useWeaponOrigin && firingFrame)
-                {
-                    // Retail's true continuation copies this exact marker point
-                    // from [firing_frame + barrel_offset + 0x9F0]. The barrel
-                    // offset is stored by the transaction at +0x08. Transform
-                    // the stock-derived marker in place; stock direction stays
-                    // untouched.
-                    auto* const frame=static_cast<unsigned char*>(firingFrame);
-                    uint64_t barrelOffset=0;
-                    memcpy(&barrelOffset,frame+0x08,sizeof(barrelOffset));
-                    if (barrelOffset<0x2000)
-                    {
-                        auto* const markerOrigin=reinterpret_cast<float*>(
-                            frame+barrelOffset+0x9F0);
-                        ReachTransformProjectileMarkerOrigin(markerOrigin);
-                    }
-                }
             }
             __except (EXCEPTION_EXECUTE_HANDLER)
             {
@@ -11536,13 +11414,6 @@ namespace
                 return;
             }
         }
-        // Publish only after the exact live marker graph commit succeeded. The
-        // simulation hook consumes this full transform to move Reach's own
-        // barrel marker, never a hand target or a guessed aim-space offset.
-        ReachPublishFpMuzzleWorldDelta(
-            context.generation,markerTargets.centerRoot,
-            context.untouchedLive[context.layout.rightWristSource],
-            alignedRight,markerTargets.rightScale);
         context.transformed=true;
     }
     __declspec(noinline) bool __fastcall ReachFpInterpolate(
