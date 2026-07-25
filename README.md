@@ -20,8 +20,8 @@ expect incomplete hardware and gameplay coverage.
 ## What works
 
 - Per-eye stereo and 6DOF head tracking.
-- Motion-controller input, weapon aim, floating hands, snap/smooth turning,
-  melee, grenades, and menu control.
+- Motion-controller input, weapon aim, arm IK, snap/smooth turning, melee,
+  grenades, and menu control.
 - Native HUD, authored floating weapon crosshair, scopes, resolution scaling,
   comfort controls, and a shared F1 configuration menu.
 - Halo 3 campaign behavior, including cutscenes, pause/resume, death/respawn,
@@ -36,9 +36,6 @@ Known limitations:
 - MCC can retain multiple title modules after switching games. If a level
   returns to the menu, fully close and restart MCC.
 - ODST brightness stays at the game default.
-- Arm IK is experimental and currently broken (the wrist/arm roots stretch away
-  from the hands), so it is disabled by default on every title. Floating hands
-  is the supported hand mode.
 - Broader ODST weapon, turret, passenger-gun, vehicle, co-op, headset, and
   long-session coverage is still needed.
 

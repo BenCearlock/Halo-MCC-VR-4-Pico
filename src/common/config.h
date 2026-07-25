@@ -206,21 +206,21 @@ struct Config
     // upper-body VRIK plan (docs/VRIK-ROADMAP.md).
     bool body_wip = false;
 
-    // VRIK arm IK — EXPERIMENTAL, CURRENTLY BROKEN / UNSUPPORTED. When ON it
-    // bends the first-person arm (shoulder planted, elbow solved, hand+gun to
-    // the controller); in practice the wrist/arm roots visibly stretch away
-    // from the hands, so it ships OFF on every title. OFF = the supported rigid
-    // parent (the whole hand+gun assembly follows the controller), which is what
-    // the floating-hands default renders. Leave this off unless you are testing.
-    bool arm_ik = false;
+    // VRIK arm IK: bend the first-person arm (shoulder planted, elbow solved,
+    // hand+gun to the controller) instead of rigid-parenting the whole
+    // assembly. ON = articulated arm (the accepted, working Halo 3 / ODST
+    // behavior); OFF = the previous rigid parent. Required on Halo 3 / ODST, so
+    // it stays ON by default. Reach's first-person weapon RENDERING is still
+    // experimental (its FP layer warps), but that is a Reach render-path issue,
+    // not the IK math — do not disable IK globally to work around it.
+    bool arm_ik = true;
 
-    // Floating-hands presentation — the SUPPORTED default hand mode on every
-    // title. Shows only the hands and the guns they hold; the upper arms and
-    // forearms are hidden. Pure render filter over the untouched solve: the
-    // hands are still tracked to the controllers exactly as before, and every
-    // aim/dual-wield calculation is unchanged. It only collapses the non-hand,
-    // non-gun bones in the final visible palette so their geometry disappears,
-    // which keeps the (unsupported) arm IK out of sight.
+    // Floating-hands presentation (ON by default). Shows only the hands and the
+    // guns they hold; the upper arms and forearms are hidden. This is a pure
+    // render filter layered ON TOP of the untouched VRIK solve: the hands are
+    // still tracked to the controllers exactly as before, and every arm/aim/
+    // dual-wield calculation is unchanged. It only collapses the non-hand,
+    // non-gun bones in the final visible palette so their geometry disappears.
     bool floating_hands = true;
 
     // Lower the RIGHT (weapon) shoulder so Master Chief's arm doesn't clip up
