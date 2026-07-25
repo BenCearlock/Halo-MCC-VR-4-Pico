@@ -634,6 +634,16 @@ int main()
               kReachPatchyFogSkipMask == 0x08,
             "Reach VR patchy-fog policy sets and restores only the exact proven skip bit");
 
+        Check(kReachFpWeaponIkDecisionPreludeRva == 0x002B506E &&
+              kReachFpWeaponIkDisableCompareRva == 0x002B507F &&
+              kReachFpWeaponIkDisableBranchRva == 0x002B5085 &&
+              kReachFpWeaponIkDisabledEpilogueRva == 0x002B52D1 &&
+              kReachFpWeaponIkDisableNameRva == 0x009F2AD8 &&
+              kReachFpWeaponIkDisableEntryRva == 0x00B3AEB8 &&
+              kReachFpWeaponIkDisableValueRva == 0x04E38B61 &&
+              kReachDebugBooleanType == 5,
+            "Reach native weapon-IK bypass pins the exact named control and stock no-IK edge");
+
         std::array<uint8_t, kReachMainRenderViewAob.size()> exactMask{};
         exactMask.fill(0xFF);
         std::array<uint8_t, kReachMainRenderViewAob.size() * 2 + 1>

@@ -85,6 +85,19 @@ inline constexpr uintptr_t kReachFpVisiblePaletteRva = 0x002B4EB0;
 inline constexpr uintptr_t kReachFpInterpolateRva = 0x000CF1A4;
 inline constexpr uintptr_t kReachRenderModelTableRva = 0x00C1A600;
 inline constexpr uintptr_t kReachNodeRecordBlockTableRva = 0x04E39F20;
+// Exact Reach counterpart to the accepted Halo 3/ODST native weapon-IK
+// bypass. HREK's debug-variable table names the type-5 boolean
+// `debug_animation_fp_weapon_ik_disable`; its homologous post-palette routine
+// checks that byte and jumps to the existing no-weapon-IK epilogue before the
+// support-hand solve. Retail repeats the same control flow at these RVAs.
+inline constexpr uintptr_t kReachFpWeaponIkDecisionPreludeRva = 0x002B506E;
+inline constexpr uintptr_t kReachFpWeaponIkDisableCompareRva = 0x002B507F;
+inline constexpr uintptr_t kReachFpWeaponIkDisableBranchRva = 0x002B5085;
+inline constexpr uintptr_t kReachFpWeaponIkDisabledEpilogueRva = 0x002B52D1;
+inline constexpr uintptr_t kReachFpWeaponIkDisableNameRva = 0x009F2AD8;
+inline constexpr uintptr_t kReachFpWeaponIkDisableEntryRva = 0x00B3AEB8;
+inline constexpr uintptr_t kReachFpWeaponIkDisableValueRva = 0x04E38B61;
+inline constexpr uint64_t kReachDebugBooleanType = 5;
 
 // Pinned HREK first-person arms layouts. The discovery-palette count describes
 // the render_model output only; it is not the animation graph's live source

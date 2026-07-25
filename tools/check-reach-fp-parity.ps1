@@ -4,7 +4,8 @@ param()
 # Static packaging gate for the strict Halo 3/ODST first-person transaction
 # contract. This is intentionally narrow: it rejects the exact Reach-only
 # architectures already disproven in-headset and requires the source-level
-# invariants that keep every final palette on the shared reconstruction path.
+# invariants that keep every final palette on the shared reconstruction path
+# and bypass the title's native flat-screen support-hand weapon IK.
 
 $ErrorActionPreference = 'Stop'
 $repoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
@@ -41,6 +42,12 @@ $requiredGame = [ordered]@{
         'fp\.heldObjectStart\s*=\s*static_cast<int>\([\s\S]*?context\.layout\.paletteBodyNodeCount\)'
     'private untouched source reconstruction' =
         'ReconstructVisiblePaletteSource\([\s\S]*?context\.untouchedLive\)'
+    'title-native weapon IK disable control' =
+        'debug_animation_fp_weapon_ik_disable'
+    'all-or-nothing native weapon IK bypass' =
+        'bool\s+InstallReachCameraCore[\s\S]*?if\s*\(!ApplyReachNativeWeaponIkBypass\(\)\)'
+    'native weapon IK lifecycle restore' =
+        'bool\s+RemoveReachCameraCore[\s\S]*?if\s*\(!RestoreReachNativeWeaponIkBypass\(\)\)'
 }
 foreach ($entry in $requiredGame.GetEnumerator()) {
     if ($game -notmatch $entry.Value) {
@@ -53,5 +60,9 @@ if ($logic -notmatch 'ArticulateKnownTransaction') {
 if ($agents -notmatch 'Strict implementation-parity rule') {
     throw 'Reach FP parity gate missing: repository parity contract.'
 }
+if ($logic -notmatch 'kReachFpWeaponIkDisableValueRva' -or
+    $logic -notmatch 'kReachFpWeaponIkDisabledEpilogueRva') {
+    throw 'Reach FP parity gate missing: exact Reach native weapon-IK proof anchors.'
+}
 
-Write-Host 'Reach FP Halo 3/ODST transaction parity gate passed.'
+Write-Host 'Reach FP Halo 3/ODST palette + native weapon-IK parity gate passed.'

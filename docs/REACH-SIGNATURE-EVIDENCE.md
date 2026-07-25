@@ -347,7 +347,8 @@ count. It deliberately excludes the temporary source pointer: retail publishes
 a source pointer per interpolation transaction, and pointer identity is used
 only to pair that transaction with its immediately following final palette.
 
-The implementation mirrors Halo 3/ODST. Retail `0x2AF648` permits four bounded
+The palette half of the implementation mirrors Halo 3/ODST. Retail `0x2AF648`
+permits four bounded
 interpolation/palette transactions. Each successful Reach interpolation gets a
 separate context and untouched source snapshot. `0x2B4EB0` consumes the newest
 current context whose source pointer exactly matches its input, then reconstructs
@@ -366,15 +367,49 @@ probe fallback. `arm_ik=1` solves both shoulder-elbow-wrist chains;
 `arm_ik=0` uses the same full-source palette transaction with rigid controller
 parenting. Missing left tracking leaves the authored left arm.
 
+That palette transaction is necessary but not sufficient. Accepted Halo 3 and
+ODST also bypass the native flat-screen weapon-IK stage after palette solving,
+preventing a weapon-authored support-hand marker from overriding the controller
+wrist. Candidate `abea61f0...` omitted this accepted stage and therefore was not
+implementation parity despite reconstructing both observed Reach palettes.
+
+Reach's corresponding control is title-proven rather than inferred. In pinned
+HREK `reach_tag_test.exe`, the debug-variable descriptor at RVA `0x201AD98`
+contains name pointer `0x1417E93B8`, type `5`, and value pointer
+`0x144F40A60`; the name is exactly
+`debug_animation_fp_weapon_ik_disable`. The homologous post-palette function
+compares that byte at RVA `0x008D3162`; its `JNE` at `0x008D3169` targets
+`0x008D338B`, the existing epilogue before the support-hand solve.
+
+Pinned retail repeats the exact semantic edge. The debug descriptor is at
+`0x00B3AEB8`, its name at `0x009F2AD8`, its type is `5`, and its runtime value
+slot is `0x04E38B61`. The following 39-byte executable AOB occurs exactly once
+at `0x002B506E`:
+
+```text
+41 0F B7 86 2C 53 00 00 66 85 C0 0F 8E 52 02 00 00 38 1D DC 3A B8 04 0F 85 46 02 00 00 48 8B 15 C6 88 99 00 0F BF C8
+```
+
+Its compare at `0x002B507F` resolves RIP-relative to `0x04E38B61`; its `JNE`
+at `0x002B5085` targets the existing no-weapon-IK epilogue at `0x002B52D1`.
+Production resolves the boolean by exact name, then requires all table, type,
+value, AOB, compare-target, and branch-target facts above before setting it to
+one. The original value is restored only after every Reach detour is disabled
+and quiescent. Any mismatch leaves Reach wholly stock. This is the Reach title
+adapter for the same accepted Halo 3/ODST behavior, not a probe or fallback.
+
 The exact clean runtime `6e31751c...` (installed DLL SHA-256
 `49DC585C1E57FB54D197198E2A46AE95AA1CBF0FEE565EDCD62BBE740B9E8715`)
 rejected the separated live-source owner in-headset: the log reported the
 47-node path active over a 52-node live graph, yet the user observed no change
-and the visible left hand remained stuck to the gun/right hand. Combined with
-the retail two-transaction call graph and HREK's 47-node arms / 82-node body
-split, this proves that solving only the 47-node transaction was architecturally
-insufficient. The installed DLL remains unchanged under the user's explicit
-no-rollback instruction, but the method is removed from forward source.
+and the visible left hand remained stuck to the gun/right hand. It rejects the
+separated source-owner method. The later exact `abea61f0...` runtime, DLL
+SHA-256 `61C70876A8BC883D5277A7070EF38E2CB350476B6BFAFD1943B96C6EF67ADF91`,
+reconstructed both palette transactions and produced the same headset result.
+That later failure disproves the claim that the second palette transaction alone
+was the remaining cause and isolates the omitted native weapon-IK bypass above.
+The `abea61f` DLL remains installed unchanged under the user's explicit
+no-rollback instruction; neither failed method advances the accepted pointer.
 
 The exact dirty runtime `e08b538f...-dirty` (installed DLL SHA-256
 `236D06940F47E38876A54DF4AFE07E4C484AED2E025865AF55121E022E1772AC`)
@@ -385,7 +420,9 @@ path, while the user still saw the left forearm move with the hand stuck to the
 gun/right-hand assembly. That result is preserved under
 `out/test-runs/e08b538-dirty-reach-hands-parented-20260725-040508Z`. Together
 with the unchanged `6e31751` result, it rules out both live-graph ownership
-variants and requires the H3/ODST final-palette transaction architecture above.
+variants. Together with `abea61f`, it requires both halves of the accepted
+H3/ODST architecture above: final-palette reconstruction and native weapon-IK
+bypass.
 
 The `f19f39e` root-only assumption is rejected. It called a locking pose getter
 from the palette path, reapplied mount trim already present in the shared aim

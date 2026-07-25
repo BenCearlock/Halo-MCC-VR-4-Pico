@@ -488,6 +488,53 @@ foreach ($candidate in $manifest.preliminary_candidates) {
 }
 
 $moduleBytes = [IO.File]::ReadAllBytes($ModulePath)
+$nativeWeaponIk = $manifest.native_weapon_ik_bypass
+if ($null -eq $nativeWeaponIk -or
+        $nativeWeaponIk.static_proof_complete -ne $true -or
+        $nativeWeaponIk.headset_accepted -ne $false -or
+        [string]$nativeWeaponIk.retail.control_name -cne
+            'debug_animation_fp_weapon_ik_disable' -or
+        [string]$nativeWeaponIk.hrek.control_name -cne
+            'debug_animation_fp_weapon_ik_disable' -or
+        [int]$nativeWeaponIk.retail.control_type -ne 5 -or
+        [int]$nativeWeaponIk.hrek.control_type -ne 5 -or
+        [string]$nativeWeaponIk.hrek.binary -cne
+            [string]$cameraEvidence.name) {
+    throw 'Reach native weapon-IK evidence identity is incomplete or inconsistent.'
+}
+$hrekBytes = [IO.File]::ReadAllBytes($cameraEvidencePath)
+$weaponIkImages = @(
+    [pscustomobject]@{
+        Label = 'retail native weapon-IK decision'
+        Bytes = $moduleBytes
+        Sections = $sections
+        Evidence = $nativeWeaponIk.retail
+    },
+    [pscustomobject]@{
+        Label = 'HREK native weapon-IK decision'
+        Bytes = $hrekBytes
+        Sections = $hrekSections
+        Evidence = $nativeWeaponIk.hrek
+    }
+)
+foreach ($image in $weaponIkImages) {
+    $pattern = [int[]]@(Convert-AobTokens `
+        ([string]$image.Evidence.decision_aob) $image.Label)
+    $matches = @(Find-ExecutableAobMatches `
+        $image.Bytes $image.Sections $pattern)
+    $expectedRva = [uint64](Convert-HexUInt32 `
+        ([string]$image.Evidence.decision_aob_rva) "$($image.Label) RVA")
+    $expectedCount = [int]$image.Evidence.static_executable_match_count
+    if ($expectedCount -ne 1 -or $matches.Count -ne 1 -or
+            $matches[0] -ne $expectedRva) {
+        $rendered = ($matches | ForEach-Object {
+            '0x{0:X8}' -f $_
+        }) -join ', '
+        throw "$($image.Label) AOB mismatch: expected one at 0x$('{0:X8}' -f $expectedRva), got [$rendered]."
+    }
+    Write-Host ('Function {0}: exact {1}-byte AOB at RVA 0x{2:X8}' -f `
+        $image.Label, $pattern.Count, $expectedRva)
+}
 $frustumEvidence = @($manifest.preliminary_candidates | Where-Object {
     $_.id -eq 'viewport'
 })

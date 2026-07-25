@@ -9738,9 +9738,13 @@ namespace
         bool motionBlurResolved = false;
         bool motionBlurSuppressed = false;
         uint8_t* patchyFogFlags = nullptr;
+        uint8_t* nativeWeaponIkDisable = nullptr;
+        uint8_t nativeWeaponIkDisableOriginal = 0;
+        bool nativeWeaponIkBypassActive = false;
         void* fpInterpolateTarget = nullptr;
         void* fpPaletteTarget = nullptr;
     } g_reachCamera;
+    bool RestoreReachNativeWeaponIkBypass();
     static_assert(std::atomic<int>::is_always_lock_free);
 
     // Published only after the matching eye was rendered and copied. The
@@ -11979,6 +11983,13 @@ namespace
         if (!DisableAndRemoveReachHooks())
             return false;
 
+        if (!RestoreReachNativeWeaponIkBypass())
+        {
+            LOG("Reach camera cleanup: native weapon-IK disable could not be "
+                "restored; retaining the exact title module for retry");
+            return false;
+        }
+
         const bool restoreReachBlur = g_reachCamera.motionBlurSuppressed;
         if (!ReachRestoreMotionBlurValues())
         {
@@ -12017,6 +12028,9 @@ namespace
         g_reachCamera.motionBlurResolved = false;
         g_reachCamera.motionBlurSuppressed = false;
         g_reachCamera.patchyFogFlags = nullptr;
+        g_reachCamera.nativeWeaponIkDisable = nullptr;
+        g_reachCamera.nativeWeaponIkDisableOriginal = 0;
+        g_reachCamera.nativeWeaponIkBypassActive = false;
         g_reachOrigPlayerViewRender = nullptr;
         g_reachOrigMainRenderView = nullptr;
         g_reachOrigFpInterpolate = nullptr;
@@ -12058,6 +12072,112 @@ namespace
         return next>=end || sig::Find(next,static_cast<size_t>(end-next),pattern)==0;
     }
 
+    bool ResolveReachNativeWeaponIkControl(
+        uintptr_t base, size_t size, uint8_t*& slot, uint8_t& original)
+    {
+        slot = nullptr;
+        original = 0;
+        static constexpr char kDecisionAob[] =
+            "41 0F B7 86 2C 53 00 00 66 85 C0 0F 8E 52 02 00 00 "
+            "38 1D DC 3A B8 04 0F 85 46 02 00 00 48 8B 15 C6 88 "
+            "99 00 0F BF C8";
+        if (!ReachColdExactSignatureAt(
+                base, size, kReachFpWeaponIkDecisionPreludeRva,
+                kDecisionAob) ||
+            kReachFpWeaponIkDisableEntryRva >= size ||
+            24 > size - kReachFpWeaponIkDisableEntryRva)
+        {
+            return false;
+        }
+
+        uint8_t* const resolved = reinterpret_cast<uint8_t*>(
+            FindDebugVarFloat(
+                base, size, "debug_animation_fp_weapon_ik_disable"));
+        const auto* entry = reinterpret_cast<const uint8_t*>(
+            base + kReachFpWeaponIkDisableEntryRva);
+        uintptr_t entryName = 0;
+        uint64_t entryType = 0;
+        uintptr_t entryValue = 0;
+        memcpy(&entryName, entry, sizeof(entryName));
+        memcpy(&entryType, entry + 8, sizeof(entryType));
+        memcpy(&entryValue, entry + 16, sizeof(entryValue));
+        if (!resolved ||
+            reinterpret_cast<uintptr_t>(resolved) !=
+                base + kReachFpWeaponIkDisableValueRva ||
+            entryName != base + kReachFpWeaponIkDisableNameRva ||
+            entryType != kReachDebugBooleanType ||
+            entryValue != reinterpret_cast<uintptr_t>(resolved))
+        {
+            return false;
+        }
+
+        const auto* compare = reinterpret_cast<const uint8_t*>(
+            base + kReachFpWeaponIkDisableCompareRva);
+        const auto* branch = reinterpret_cast<const uint8_t*>(
+            base + kReachFpWeaponIkDisableBranchRva);
+        if (compare[0] != 0x38 || compare[1] != 0x1D ||
+            branch[0] != 0x0F || branch[1] != 0x85)
+        {
+            return false;
+        }
+        int32_t flagDisplacement = 0;
+        int32_t branchDisplacement = 0;
+        memcpy(&flagDisplacement, compare + 2, sizeof(flagDisplacement));
+        memcpy(&branchDisplacement, branch + 2, sizeof(branchDisplacement));
+        const uintptr_t flagTarget = static_cast<uintptr_t>(
+            static_cast<intptr_t>(base + kReachFpWeaponIkDisableCompareRva + 6) +
+            flagDisplacement);
+        const uintptr_t disabledTarget = static_cast<uintptr_t>(
+            static_cast<intptr_t>(base + kReachFpWeaponIkDisableBranchRva + 6) +
+            branchDisplacement);
+        if (flagTarget != reinterpret_cast<uintptr_t>(resolved) ||
+            disabledTarget != base + kReachFpWeaponIkDisabledEpilogueRva ||
+            !ReachColdExecutableAddress(disabledTarget) ||
+            !SafeReadByte(resolved, &original) || original > 1)
+        {
+            return false;
+        }
+        slot = resolved;
+        return true;
+    }
+
+    bool ApplyReachNativeWeaponIkBypass()
+    {
+        uint8_t* const slot = g_reachCamera.nativeWeaponIkDisable;
+        uint8_t current = 0;
+        if (!slot || !SafeReadByte(slot, &current) ||
+            current != g_reachCamera.nativeWeaponIkDisableOriginal ||
+            !SafeWriteByte(slot, 1))
+        {
+            return false;
+        }
+        g_reachCamera.nativeWeaponIkBypassActive = true;
+        if (!SafeReadByte(slot, &current) || current != 1)
+            return false;
+        LOG("Reach VRIK: native support-hand weapon IK disabled through the "
+            "title's exact debug_animation_fp_weapon_ik_disable control; "
+            "shared controller solver owns both arms");
+        return true;
+    }
+
+    bool RestoreReachNativeWeaponIkBypass()
+    {
+        if (!g_reachCamera.nativeWeaponIkBypassActive)
+            return true;
+        uint8_t* const slot = g_reachCamera.nativeWeaponIkDisable;
+        uint8_t current = 0;
+        if (!slot || !SafeReadByte(slot, &current) || current > 1 ||
+            !SafeWriteByte(
+                slot, g_reachCamera.nativeWeaponIkDisableOriginal) ||
+            !SafeReadByte(slot, &current) ||
+            current != g_reachCamera.nativeWeaponIkDisableOriginal)
+        {
+            return false;
+        }
+        g_reachCamera.nativeWeaponIkBypassActive = false;
+        return true;
+    }
+
     bool InstallReachCameraCore(uintptr_t base, size_t size, uint32_t generation)
     {
         if (g_reachCamera.installed.load(std::memory_order_acquire))
@@ -12084,6 +12204,17 @@ namespace
                 base,size,kReachFpVisiblePaletteRva,kFpPaletteAob))
         {
             LOG("Reach FP install: exact interpolation/palette signatures failed; stock Reach remains active");
+            return false;
+        }
+
+        uint8_t* reachNativeWeaponIkDisable = nullptr;
+        uint8_t reachNativeWeaponIkDisableOriginal = 0;
+        if (!ResolveReachNativeWeaponIkControl(
+                base, size, reachNativeWeaponIkDisable,
+                reachNativeWeaponIkDisableOriginal))
+        {
+            LOG("Reach FP install: exact native weapon-IK disable proof failed; "
+                "stock Reach remains active");
             return false;
         }
 
@@ -12227,6 +12358,10 @@ namespace
         g_reachCamera.motionBlurResolved = true;
         g_reachCamera.motionBlurSuppressed = false;
         g_reachCamera.patchyFogFlags = reachPatchyFogFlags;
+        g_reachCamera.nativeWeaponIkDisable = reachNativeWeaponIkDisable;
+        g_reachCamera.nativeWeaponIkDisableOriginal =
+            reachNativeWeaponIkDisableOriginal;
+        g_reachCamera.nativeWeaponIkBypassActive = false;
         for (int eye = 0; eye < 2; ++eye)
         {
             g_reachRenderFovSerial[eye].store(0, std::memory_order_release);
@@ -12252,6 +12387,13 @@ namespace
             // teardownRequested makes the worker retry instead of re-arming.
             LOG("Reach camera install: MinHook enable failed; requesting "
                 "verified teardown");
+            RemoveReachCameraCore();
+            return false;
+        }
+        if (!ApplyReachNativeWeaponIkBypass())
+        {
+            LOG("Reach camera install: native weapon-IK bypass failed; "
+                "requesting verified teardown of the complete parity transaction");
             RemoveReachCameraCore();
             return false;
         }

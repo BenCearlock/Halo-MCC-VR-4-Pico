@@ -35,8 +35,12 @@ weapons, comfort, configuration, and lifecycle recovery.
   weapons, this specifically means one bounded interpolation context per engine
   source/palette transaction, source-pointer matching at every final visible
   palette, and reconstruction into private scratch before the stock palette
-  builder. A title adapter may supply only verified title-specific call sites,
-  layouts, counts, and mappings. Do not substitute live-graph parenting,
+  builder. It also requires bypassing the title's native flat-screen
+  support-hand weapon IK through a statically verified existing no-weapon-IK
+  path, so that native IK cannot overwrite the controller-owned wrist after the
+  palette solve. A title adapter may supply only verified title-specific call
+  sites, layouts, counts, mappings, and no-weapon-IK control edge. Do not
+  substitute live-graph parenting,
   body-only admission, inferred ownership masks, probes-as-runtime-behavior, or
   fallback/approximation paths. If exact transaction parity is not yet proven,
   stop at stock behavior and continue static evidence work.

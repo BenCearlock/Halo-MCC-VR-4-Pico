@@ -1,6 +1,6 @@
 # Current state
 
-Authoritative as of 2026-07-24. This file is the only active accepted-build
+Authoritative as of 2026-07-25. This file is the only active accepted-build
 pointer. Detailed pre-cleanup experiments remain available in Git history; they
 are evidence, not instructions.
 
@@ -40,10 +40,11 @@ milestone, not a public release or tag. The public known-good product remains
 - This result does not authorize or claim Reach camera, stereo, 6DOF, aim,
   movement, HUD, IK, haptics, or lifecycle hooks.
 
-### Current unaccepted Reach final-palette parity candidate
+### Failed Reach final-palette-only candidate - 2026-07-24
 
-The forward source now uses the same first-person transaction architecture as
-Halo 3/ODST. Retail Reach builder `0x2AF648` makes separate interpolation then
+Candidate `abea61f0daf2b70ba779a40a3a2ad72b3debf121` implemented the
+final-palette reconstruction architecture described below. Retail Reach builder
+`0x2AF648` makes separate interpolation then
 palette submissions at `0x2AF85A -> 0x2B52EC` and
 `0x2AF8F6 -> 0x2B52EC`. Official HREK tags independently identify the two
 visible consumers: `objects\characters\spartans\fp\fp.render_model` is the
@@ -71,10 +72,39 @@ live-graph owner, body-only admission gate, and source-pointer-keyed layout cach
 have been removed; they are not dormant fallbacks. Unknown or invalid layouts
 remain wholly stock rather than partially modified.
 
-This entry does **not** advance the accepted pointer above. Build/test/preflight
-success is not a headset result. The currently installed `6e31751` DLL remains
-unchanged under the user's explicit no-rollback instruction, and no replacement
-installation or launch is authorized by this entry.
+The installed DLL SHA-256 was
+`61C70876A8BC883D5277A7070EF38E2CB350476B6BFAFD1943B96C6EF67ADF91`.
+The runtime first line matched source `abea61f0...`; Reach armed and reported
+`body=47 live=52 arm_ik=1 floating_hands=0`. The headset result was still no
+visible change: the forearm moved while the left hand remained attached to the
+gun/right hand. Evidence is preserved under
+`out/test-runs/abea61f-reach-fp-parity-no-visible-change-20260725-052246Z`.
+This candidate is failed and does **not** advance the accepted pointer.
+
+### Current unaccepted Reach native weapon-IK parity correction
+
+The missing accepted Halo 3/ODST behavior is now identified exactly: after the
+palette transaction, both accepted titles bypass native flat-screen weapon IK
+so its support-hand solve cannot reattach the controller-owned hand to the gun.
+The final-palette candidate omitted that stage.
+
+Pinned HREK exposes the type-5 boolean
+`debug_animation_fp_weapon_ik_disable`. Its table entry at `0x201AD98` points to
+value `0x4F40A60`; the post-palette homolog compares that byte at `0x8D3162`
+and jumps to its existing no-weapon-IK epilogue at `0x8D338B`. Pinned retail
+Reach repeats the same edge: the unique decision AOB at `0x2B506E` compares
+exact value `0x4E38B61` at `0x2B507F`, and `0x2B5085` jumps to epilogue
+`0x2B52D1` when it is nonzero.
+
+Forward source resolves the control by its exact name, requires the exact table
+entry/type/value, unique retail AOB, RIP-relative value target, and stock branch
+target, then sets the title-native boolean for the lifetime of the complete Reach
+VR transaction and restores its original value during verified teardown. There
+is no runtime probe, skeleton guess, alternate owner, or fallback implementation.
+Build, tests, and static preflight pass; headset acceptance is still pending.
+
+The failed `abea61f` DLL remains installed unchanged under the user's explicit
+no-rollback instruction. No later DLL has been installed or launched.
 
 ### Failed Reach separated-hand graph result - 2026-07-24
 
