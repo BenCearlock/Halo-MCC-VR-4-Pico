@@ -298,6 +298,22 @@ not assumed stable or equal. The hook copies each untouched graph before
 rigidly applying the right-wrist delta to its live marker/muzzle/attachment
 source, bounded to 120. Visible palettes never consume that mutation.
 
+The same `0x121083` caller is `first_person_weapon_get_marker`, entry
+`haloreach.dll+0x120FDC` through `+0x1210D3`. Its exact entry signature is:
+
+```text
+48 89 5C 24 08 48 89 74 24 10 57 48 83 EC 40 49 8B F0 0F B7 FA 45 84 C9 0F 84 C1 00 00 00 66 83 FA FE 0F 8F B7 00 00 00 F6 41 50 0F 0F 84 AD 00 00 00 0F BE 59 50
+```
+
+Its ABI is `void __fastcall(firstPersonWeapon, uint16_t markerIndex,
+BoneMatrix* outMatrix, bool firstPerson)`. After the interpolation returns at
+`0x121088`, retail masks the selected marker index and copies exactly one
+`0x34`-byte `BoneMatrix` to `outMatrix`. The direct marker-output hook is
+therefore limited to the returned local output-user-0 primary-weapon matrix;
+it applies the same already-published record-space right-wrist delta used by
+the visible first-person marker graph. It never edits the firing frame, hand
+palettes, weapon tags, projectile direction, or an unbounded marker bank.
+
 The ordering relative to the camera transaction is also exact. Retail
 `main_render_view` calls `0x256724` at `0x0C32BE`; that calls `0x264530` at
 `0x25674F`, which calls the FP builder `0x2AF648` at `0x2645F6`. Its

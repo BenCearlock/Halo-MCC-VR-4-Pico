@@ -116,6 +116,16 @@ inline constexpr char kReachFpWeaponSlotForDatumBodySha256[] =
     "ADBB51CBA6CBD7628E7D7B94B4AD0B4DF6C431D2F89BE315657A434B8B478DA9";
 inline constexpr uintptr_t kReachFpWeaponSlotConsumerRva = 0x00121012;
 inline constexpr uintptr_t kReachFpWeaponSlotConsumerCallRva = 0x0012101A;
+inline constexpr uintptr_t kReachFpMarkerQueryRva = 0x00120FDC;
+inline constexpr uintptr_t kReachFpMarkerQueryEndRvaExclusive = 0x001210D3;
+// first_person_weapon_get_marker calls the same first-person interpolation
+// source at 0x121083, then copies exactly one 0x34-byte marker/attachment
+// matrix at this return address. This is the title-native primary_trigger
+// visual-muzzle consumer, not a palette transaction.
+inline constexpr uintptr_t kReachFpMarkerQueryInterpolationCallRva =
+    0x00121083;
+inline constexpr uintptr_t kReachFpMarkerQueryInterpolationReturnRva =
+    0x00121088;
 inline constexpr uint16_t kReachBarrelProjectilesUseWeaponOriginMask = 0x0004;
 inline constexpr uint16_t kReachBarrelProjectileFiresInMarkerDirectionMask =
     0x8000;

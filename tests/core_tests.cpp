@@ -770,11 +770,15 @@ int main()
               kReachFpWeaponSlotForDatumBodySize == 0x5B &&
               kReachFpWeaponSlotConsumerRva == 0x00121012 &&
               kReachFpWeaponSlotConsumerCallRva == 0x0012101A &&
+              kReachFpMarkerQueryRva == 0x00120FDC &&
+              kReachFpMarkerQueryEndRvaExclusive == 0x001210D3 &&
+              kReachFpMarkerQueryInterpolationCallRva == 0x00121083 &&
+              kReachFpMarkerQueryInterpolationReturnRva == 0x00121088 &&
               kReachBarrelProjectilesUseWeaponOriginMask == 0x0004 &&
               kReachBarrelProjectileFiresInMarkerDirectionMask == 0x8000 &&
               (kReachBarrelProjectilesUseWeaponOriginMask &
                kReachBarrelProjectileFiresInMarkerDirectionMask) == 0,
-            "Reach projectile origin admits only armed output-user-0 slot 0 and preserves the separate marker-direction policy");
+            "Reach projectile and primary-trigger marker paths pin their exact retail consumers and preserve the separate marker-direction policy");
 
         std::array<uint8_t, kReachMainRenderViewAob.size()> exactMask{};
         exactMask.fill(0xFF);
