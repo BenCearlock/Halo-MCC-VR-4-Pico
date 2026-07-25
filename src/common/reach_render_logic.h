@@ -515,8 +515,8 @@ inline constexpr uint8_t ReachPatchyFogRestoredFlags(
 // remains independently adjustable through g_worldScale.
 inline constexpr float kReachWorldUnitsPerMeter = 1.0f / 3.048f;
 // Small Reach-only muzzle alignment trim in the authored controller basis.
-inline constexpr float kReachMuzzleForwardMeters = 0.025f;
-inline constexpr float kReachMuzzleLeftMeters = 0.018f;
+inline constexpr float kReachMuzzleForwardMeters = 0.080f;
+inline constexpr float kReachMuzzleLeftMeters = 0.050f;
 inline constexpr uintptr_t kReachPlayerViewCameraStateOffset = 0x03B0;
 inline constexpr uintptr_t kReachPlayerViewCurrentMatricesOffset = 0x0490;
 inline constexpr uintptr_t kReachPlayerViewPreviousMatricesOffset = 0x0760;
