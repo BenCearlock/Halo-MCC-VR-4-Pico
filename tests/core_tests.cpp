@@ -288,10 +288,29 @@ int main()
                   spartan.cameraControlSource == 4,
             "Reach Spartan resolves the exact source arm and camera anchors");
         Check(spartan.leftHandSourceDescendants ==
-                      0x000003E0F81F8800ull &&
-                  spartan.rightHandSourceDescendants ==
-                      0x00007C1F07E02000ull,
+                       0x000003E0F81F8800ull &&
+                   spartan.rightHandSourceDescendants ==
+                       0x00007C1F07E02000ull,
             "Reach Spartan maps exact hand descendants into source order");
+        Check(kReachLeftControllerOwnedAuxiliarySourceMask ==
+                      0x00000000000011A0ull &&
+                  spartan.leftControllerOwnedSourceBranch ==
+                      0x000003E0F81F99A0ull &&
+                  (spartan.leftControllerOwnedSourceBranch ^
+                   spartan.leftHandSourceDescendants) ==
+                      kReachLeftControllerOwnedAuxiliarySourceMask &&
+                  (spartan.leftHandSourceDescendants &
+                   kReachLeftControllerOwnedAuxiliarySourceMask) == 0 &&
+                  (spartan.leftControllerOwnedSourceBranch &
+                   spartan.rightHandSourceDescendants) == 0 &&
+                  (spartan.leftControllerOwnedSourceBranch >>
+                   spartan.paletteBodyNodeCount) == 0,
+            "Reach Spartan left controller owns the exact hidden skin-influence closure");
+        auto brokenSpartanOwnership = spartan;
+        brokenSpartanOwnership.leftControllerOwnedSourceBranch ^=
+            uint64_t{1} << 12;
+        Check(!brokenSpartanOwnership.Valid(),
+            "Reach Spartan rejects an incomplete left controller influence branch");
         Check((spartan.leftHandSourceDescendants &
                    (uint64_t{1} << spartan.leftWristSource)) != 0 &&
                   (spartan.rightHandSourceDescendants &
@@ -353,6 +372,18 @@ int main()
                   ReachFpSourceIndexIsHeldObject(elite, 58) &&
                   !ReachFpSourceIndexIsHeldObject(elite, 59),
             "Reach Elite maps exact hand sets and appended held-object range");
+        Check(elite.leftControllerOwnedSourceBranch ==
+                      0x0000001E1E0F99A0ull &&
+                  (elite.leftControllerOwnedSourceBranch ^
+                   elite.leftHandSourceDescendants) ==
+                      kReachLeftControllerOwnedAuxiliarySourceMask &&
+                  (elite.leftHandSourceDescendants &
+                   kReachLeftControllerOwnedAuxiliarySourceMask) == 0 &&
+                  (elite.leftControllerOwnedSourceBranch &
+                   elite.rightHandSourceDescendants) == 0 &&
+                  (elite.leftControllerOwnedSourceBranch >>
+                   elite.paletteBodyNodeCount) == 0,
+            "Reach Elite left controller owns the exact shared hidden arm branch");
         Check((elite.leftHandSourceDescendants &
                    (uint64_t{1} << elite.leftWristSource)) != 0 &&
                   (elite.rightHandSourceDescendants &

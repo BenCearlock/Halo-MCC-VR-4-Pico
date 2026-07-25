@@ -591,7 +591,7 @@ if ($fpCameraEvidence.Count -ne 1 -or
 $fpRebuild = $fpCameraEvidence[0].rebuild
 if ([string]$fpRebuild.nested_workspace_rva -cne '0x00CFAC20' -or
         [string]$fpRebuild.nested_compact_offset -cne '0x0000' -or
-        [string]$fpRebuild.secondary_derived_offset -cne '0x01E4' -or
+        [string]$fpRebuild.nested_secondary_derived_offset -cne '0x01E4' -or
         [string]$fpRebuild.nested_callback_offset -cne '0x02A8' -or
         [string]$fpRebuild.nested_callback_rva -cne '0x0000C380' -or
         [string]$fpRebuild.first_person_view_rva -cne '0x00BB8F68') {

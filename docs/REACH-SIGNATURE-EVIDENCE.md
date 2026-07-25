@@ -370,12 +370,30 @@ parenting. Missing left tracking leaves the authored left arm.
 The Reach candidate path has one user-approved temporary Reach-only presentation
 policy: Reach always emits floating hands regardless of the shared
 `arm_ik`/`floating_hands` values. After the complete private source
-reconstruction, the exact HREK/retail left-hand source mask receives a rigid
-delta from its reconstructed wrist to the prepared left-controller wrist. The
+reconstruction, the exact HREK/retail left-controller influence branch receives
+a rigid delta from its reconstructed wrist to the prepared left-controller
+wrist. The visible keep mask remains the narrower left-hand descendants. The
 right-hand mask and appended held-object range remain on the right-controller
-transaction. Non-hand/non-held nodes are then collapsed in the same private
+transaction, and all non-hand/non-held nodes are collapsed in the same private
 scratch before the stock palette builder. No live graph, Halo 3 path, ODST path,
 or shared configuration is changed.
+
+This branch/visibility split is pinned by official mod-tool geometry, not a
+runtime ownership guess. The Spartan
+`objects\characters\spartans\fp\fp.render_model` SHA-256 is
+`FBC63B8C93569EBDBB8002FCAA1916AF6E525659EE43F360CB05CE9D7F2D3D4F`.
+In both active arms meshes, 58 glove vertices cross the `l_forearm`/`l_hand`
+edge (55 two-node vertices and three three-node blends), and all five
+`flair_forearm` permutations are rigid on `l_radius`. Closing every weighted
+edge from the visible left hand adds output nodes `l_upperarm`, `l_forearm`,
+`l_humerus`, and `l_radius`, which map through the pinned fingerprint to source
+nodes `{5,7,8,12}`. The Elite FP render model SHA-256 is
+`A98AF9323023FFEB516DFA25525B4F5BAC216B021F1C8D5DD8A78797781BF2FD`;
+its skin independently repeats the `l_forearm`/`l_hand` edge and shares that
+exact source prefix. The hidden auxiliary mask is therefore `0x11A0`, producing
+Spartan controller ownership `0x000003E0F81F99A0` and Elite ownership
+`0x0000001E1E0F99A0`. Their original hand-only visibility masks remain
+`0x000003E0F81F8800` and `0x0000001E1E0F8800` respectively.
 
 That palette transaction is necessary but not sufficient. Accepted Halo 3 and
 ODST also bypass the native flat-screen weapon-IK stage after palette solving,
@@ -596,11 +614,27 @@ top to equal outer default workspace `0xC9FAE0` and selected
 pushed nested workspace `0xCFAC20`, so that guard necessarily returned before
 the copy and uploader transaction. Even without the guard, the outer derived
 destination was wrong: the exact destination is `0xCFAC20+0x1E4 = 0xCFAE04`.
-The corrected nested-workspace candidate is pending headset validation, and the
-accepted pointer remains unchanged. This failed swap does not justify a new
-controller calibration: Reach's head, eye, and controller publications share
-the same `1/3.048` world-unit mapping; the viewmodel remained in its native
-compressed projection during this test.
+Corrected candidate `fe0c48e4282fc17d05ca2de0d8dcaa36c95483dd`, package
+`out/candidates/fe0c48e-reach-fp-parity-20260725-094807875Z`, installed DLL
+SHA-256 `5D1767B492A5369EABAD312B10F5528588D76B2AD4B647BCB64284717F310E1A`,
+then reported both-eye nested world-camera uploads in-headset. The next user
+observation isolated a small left fragment/ribbon following the right
+controller and a small hand/gun offset during physical head turns. The runtime
+also reported the 47-over-52 private palette and native weapon-IK bypass active,
+so the fragment is the hidden left influence leak proven above rather than a
+projection failure.
+
+The head-turn offset is independent. `ReachBuildPreparedControllerTarget`
+already publishes the physically correct absolute target `B+C`, where `B` is
+the pre-head gameplay base and `C` is tracked controller displacement. The
+Reach-only `ReachRebasePreparedControllerTargets` then substitutes
+`R+(B+C-B)=B+H+C` at both marker and palette consumers, where render root
+`R=B+H` includes tracked head translation. That double-adds `H`; a physical
+turn around the neck produces the reported small drift. Halo 3/ODST have no
+equivalent rebase, and rejected candidate `f19f39e` already recorded the same
+head-translated-root error class. Removal is intentionally reserved for a
+separate candidate after the left-ownership result. Neither result advances the
+accepted pointer or justifies changing the exact `1/3.048` world-unit mapping.
 
 The same HREK binary publishes `render_first_person_fov_scale` as a type-6
 float debug control (`0x17E2250` name, `0x2015350` descriptor,

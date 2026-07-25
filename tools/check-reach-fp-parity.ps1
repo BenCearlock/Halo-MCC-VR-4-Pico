@@ -30,6 +30,8 @@ $forbidden = [ordered]@{
         'kReachFpCompactCameraRva'
     'FP camera success published before the uploader returns' =
         'ReachFpCameraRebuildBody[\s\S]*?PublishReachFpCameraUpload\(scope\)[\s\S]*?g_reachFpCameraUpload\(compact,\s*derived\)'
+    'hidden left-arm ownership admitted into the visible keep mask' =
+        'const\s+uint64_t\s+keep\s*=[^;]*leftControllerOwnedSourceBranch'
 }
 foreach ($entry in $forbidden.GetEnumerator()) {
     if (($game + "`n" + $logic) -match $entry.Value) {
@@ -81,11 +83,15 @@ $requiredGame = [ordered]@{
     'exact both-eye first-person camera success log' =
         'LOG\("Reach per-eye FP camera ACTIVE:'
     'Reach private-palette left controller binding' =
-        'ReachBindFloatingLeftHandToController\(\*root,fp,targets\)'
+        'ReachBindFloatingLeftHandToController\(\s*\*root,fp,\s*context\.layout\.leftControllerOwnedSourceBranch,\s*targets\)'
     'Reach forced floating-hands presentation' =
         'Reach ignores floating_hands config'
-    'Reach exact left-hand source mask only' =
-        'fp\.lWristDescendants&\(uint64_t\{1\}<<node\)'
+    'Reach exact left-arm influence branch binding' =
+        'leftControllerOwnedSourceBranch&\s*\(uint64_t\{1\}<<node\)'
+    'Reach hidden left-arm branch excluded from visibility' =
+        'const\s+uint64_t\s+keep=fp\.wristDescendants\|\s*fp\.lWristDescendants'
+    'Reach layout identity includes left controller ownership' =
+        'a\.leftControllerOwnedSourceBranch==\s*b\.leftControllerOwnedSourceBranch'
 }
 foreach ($entry in $requiredGame.GetEnumerator()) {
     if ($game -notmatch $entry.Value) {
@@ -103,6 +109,10 @@ $requiredLogic = [ordered]@{
         'fpView\s*==\s*moduleBase\s*\+\s*kReachFpCameraViewRva'
     'first-person wrapper body hashes in complete proof' =
         'proof\.fpCameraWrapperBodyHashes'
+    'exact hidden left-arm influence source mask' =
+        'kReachLeftControllerOwnedAuxiliarySourceMask\s*=\s*0x00000000000011A0ull'
+    'resolved left controller ownership union' =
+        'layout\.leftControllerOwnedSourceBranch\s*=\s*leftSourceMask\s*\|\s*kReachLeftControllerOwnedAuxiliarySourceMask'
 }
 foreach ($entry in $requiredLogic.GetEnumerator()) {
     if ($logic -notmatch $entry.Value) {

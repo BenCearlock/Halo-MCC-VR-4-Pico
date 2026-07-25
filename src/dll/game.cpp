@@ -10810,7 +10810,9 @@ namespace
             a.leftWristSource==b.leftWristSource &&
             a.cameraControlSource==b.cameraControlSource &&
             a.rightHandSourceDescendants==b.rightHandSourceDescendants &&
-            a.leftHandSourceDescendants==b.leftHandSourceDescendants;
+            a.leftHandSourceDescendants==b.leftHandSourceDescendants &&
+            a.leftControllerOwnedSourceBranch==
+                b.leftControllerOwnedSourceBranch;
     }
 
     bool ReachResolvePaletteNodeCount(uint16_t tag, int& count)
@@ -11088,12 +11090,14 @@ namespace
     // Reach's official Spartan/Elite body maps resolve the left wrist to source
     // node 11 and publish the complete source-space left-hand descendant mask.
     // The shared rigid (arm_ik=0) reconstruction intentionally carries the
-    // whole weapon assembly from the right wrist; that is correct for the gun
-    // but leaves Reach's independently visible floating left hand on the right
-    // controller. Apply one final, private-palette-only wrist delta to exactly
-    // that proven left-hand mask. Live animation/marker graphs remain untouched.
+    // whole weapon assembly from the right wrist; that is correct for the gun.
+    // HREK proves the visible left-hand skin is also weighted across its hidden
+    // upper-arm/forearm/humerus/radius branch. Apply one final private-palette
+    // wrist delta to that exact influence closure, then let presentation keep
+    // only the hand visible. Live animation/marker graphs remain untouched.
     bool ReachBindFloatingLeftHandToController(
         const BoneMatrix& renderRoot, const FpInterpolationContext& fp,
+        uint64_t leftControllerOwnedSourceBranch,
         const FpExplicitPoseTargets& targets)
     {
         if (!targets.leftWristValid)
@@ -11104,7 +11108,12 @@ namespace
             fp.count>static_cast<int>(kReachFpMaxSourceNodeCount) ||
             fp.lWrist<0 || fp.lWrist>=fp.count ||
             fp.lWrist>=64 ||
-            !(fp.lWristDescendants&(uint64_t{1}<<fp.lWrist)))
+            !(fp.lWristDescendants&(uint64_t{1}<<fp.lWrist)) ||
+            (leftControllerOwnedSourceBranch&fp.lWristDescendants)!=
+                fp.lWristDescendants ||
+            (leftControllerOwnedSourceBranch&fp.wristDescendants)!=0 ||
+            (fp.count<64 &&
+             (leftControllerOwnedSourceBranch>>fp.count)!=0))
         {
             return false;
         }
@@ -11125,7 +11134,8 @@ namespace
 
         for (int node=0;node<fp.count && node<64;++node)
         {
-            if (!(fp.lWristDescendants&(uint64_t{1}<<node)))
+            if (!(leftControllerOwnedSourceBranch&
+                  (uint64_t{1}<<node)))
                 continue;
             BoneMatrix transformed{};
             if (!ComposeBoneMatrices(
@@ -11420,7 +11430,10 @@ namespace
                 selectedSource=replacement;
                 const bool leftHandBound=reconstructed &&
                     selectedSource==g_fpPaletteScratch &&
-                    ReachBindFloatingLeftHandToController(*root,fp,targets);
+                    ReachBindFloatingLeftHandToController(
+                        *root,fp,
+                        context.layout.leftControllerOwnedSourceBranch,
+                        targets);
                 bool outputFinite=reconstructed && leftHandBound;
                 for (int i=0;outputFinite && i<fp.count;++i)
                     outputFinite=ReachBoneMatrixFinite(g_fpPaletteScratch[i]);

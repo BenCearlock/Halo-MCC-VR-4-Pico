@@ -74,6 +74,38 @@ The corrected nested-workspace candidate is pending. `a1dcb7b` is a
 partial/failed headset result and does **not** advance the accepted pointer;
 that pointer remains `a5524d3fe58e4ed5507c27429ccca52a3d4fdf7d`.
 
+### Unaccepted Reach nested FP projection / residual ownership result - 2026-07-25
+
+Candidate `fe0c48e4282fc17d05ca2de0d8dcaa36c95483dd` corrected the
+first-person camera destination to the exact nested workspace. Its packaged and
+separately verified deployed identity was:
+
+| Identity | Value |
+| --- | --- |
+| Candidate package | `out/candidates/fe0c48e-reach-fp-parity-20260725-094807875Z` |
+| `halo3xr.dll` SHA-256 | `5D1767B492A5369EABAD312B10F5528588D76B2AD4B647BCB64284717F310E1A` |
+| `halo3xr_launcher.exe` SHA-256 | `0758315C8091A46E7F1798FE1B1D7F1E704A61B9BF43CF799467A1A702F5E5E4` |
+| Headset result | The major FP presentation improved, leaving a small left-hand fragment/ribbon following the right controller and a small hand/gun offset during physical head turns |
+
+The runtime first line matched the exact source. It reported both-eye nested
+world-camera uploads, `Reach FP forced floating-hands active: body=47 live=52`,
+and the native weapon-IK bypass. The remaining fragment is therefore downstream
+palette ownership, not a failed projection swap or native IK overwrite.
+
+Official HREK exports identify the exact leak. Spartan glove vertices blend
+`l_hand` with its parent `l_forearm`, while every `flair_forearm` permutation is
+rigid on `l_radius`. The left-hand descendant mask was correct for visibility,
+but hidden left-arm influences still received the right-controller rigid move.
+The next isolated candidate gives the complete HREK-proven hidden left branch
+the left-controller delta while keeping those auxiliary nodes collapsed.
+
+The head-turn offset is a separate Reach-only defect: prepared wrist targets
+are already absolute `gameplayBase + tracked room offset`, but the rejected
+diagnostic-era render-root rebase adds tracked head translation again at both
+marker and palette consumption. Its removal remains a separate headset
+candidate so the two behavioral corrections are not stacked. `fe0c48e` remains
+unaccepted and does not advance the pointer above.
+
 ### Failed Reach final-palette-only candidate - 2026-07-24
 
 Candidate `abea61f0daf2b70ba779a40a3a2ad72b3debf121` implemented the
