@@ -126,11 +126,6 @@ inline constexpr uintptr_t kReachFpMarkerQueryInterpolationCallRva =
     0x00121083;
 inline constexpr uintptr_t kReachFpMarkerQueryInterpolationReturnRva =
     0x00121088;
-inline constexpr uintptr_t kReachFpMarkerComposeRva = 0x0011BFB0;
-inline constexpr uintptr_t kReachFpMarkerComposeEndRvaExclusive = 0x0011C00E;
-inline constexpr uintptr_t kReachFpMarkerComposeQueryCallRva = 0x0011BFDC;
-inline constexpr uintptr_t kReachFpMarkerComposeMatrixCallRva = 0x0011BFED;
-inline constexpr uintptr_t kReachFpMarkerMatrixComposeRva = 0x000A90D8;
 inline constexpr uint16_t kReachBarrelProjectilesUseWeaponOriginMask = 0x0004;
 inline constexpr uint16_t kReachBarrelProjectileFiresInMarkerDirectionMask =
     0x8000;
