@@ -78,10 +78,12 @@ corners; close doorway/peripheral geometry remains an explicit headset test.
 During each admitted eye render, Reach first executes its complete stock
 first-person camera rebuild, including the native FOV-control side effects. The
 camera detour then substitutes that eye's already validated world compact camera
-and `0xC4` derived/projection block for the crushed viewmodel pair and reruns
-Reach's own two-pointer constant uploader. This mirrors the accepted Halo 3/ODST
-last-writer transaction; normal stock, fallback, nested, screenshot, and teardown
-paths do not enter the substitution scope.
+and `0xC4` derived/projection block in the rebuild's exact nested camera-stack
+workspace for the crushed viewmodel pair and reruns Reach's own two-pointer
+constant uploader. Only after that world-projection upload returns does the hot
+path publish its lock-free execution status for worker-thread logging. This
+mirrors the accepted Halo 3/ODST last-writer transaction; normal stock, fallback,
+nested, screenshot, and teardown paths do not enter the substitution scope.
 
 Reach also consumes the universal `motion_blur` comfort setting with the same
 player-visible outcome as the accepted Halo 3/ODST paths. After the pinned
@@ -214,7 +216,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\package-candidate.ps
 There are no title switches or alternate candidate presets. The command always
 performs a clean rebuild and tests the one cumulative Release configuration,
 then records the permanent Reach preflight, capture, engine-write, camera-core,
-and runtime-hook fields in the candidate manifest. After packaging succeeds it
+runtime-hook, nested first-person camera workspace, and world-projection
+execution-status fields in the candidate manifest. After packaging succeeds it
 automatically invokes `tools/install-candidate.ps1` for those exact bytes.
 
 The command refuses a dirty worktree and runs
@@ -233,9 +236,12 @@ out/candidates/1a2b3c4-reach-fp-parity-20260723-120000000Z/
 It contains only the DLL, launcher, license, generic manual, and a
 `CANDIDATE-MANIFEST.json` with the full commit, base release 0.2.2, ODST and
 Reach build states, explicit `reach_controller_input_enabled` and
-`reach_runtime_hooks_enabled` states, exact file sizes, and SHA-256 hashes. It
-never reuses a candidate directory and never labels rebuilt bytes as release
-0.2.2.
+`reach_runtime_hooks_enabled` states, required
+`reach_fp_nested_camera_workspace=true` and
+`reach_fp_world_projection_execution_status=true` gates, exact file sizes, and
+SHA-256 hashes. The installer rejects the package if either projection-isolation
+gate is absent or false. It never reuses a candidate directory and never labels
+rebuilt bytes as release 0.2.2.
 
 Deployment is automatic after the clean package completes. The installer accepts
 only the new manifest-backed directory under `out/candidates`, requires MCC and

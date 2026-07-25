@@ -156,6 +156,8 @@ try {
         reach_two_arm_ik_guarded = $true
         reach_fp_interpolation_palette_transaction = $true
         reach_fp_h3_odst_transaction_parity_gate = $true
+        reach_fp_nested_camera_workspace = $true
+        reach_fp_world_projection_execution_status = $true
         reach_forced_floating_hands = $true
         reach_copyresource_enabled = $true
         reach_engine_memory_writes_enabled = $true

@@ -259,7 +259,7 @@ recorded here. The special composer is a preserved negative result.
 | Candidate | RVA | Loaded-image unique | Executable range | ABI | Callers | Data flow | HREK semantics | Layout fields | Status |
 | --- | ---: | --- | --- | --- | --- | --- | --- | --- | --- |
 | Camera-derived frustum bounds (original viewport hypothesis) | `0x287F58` | Exact stock observer passed the unique loaded-image check twice; production must repeat it | Yes, `.text`, `0x287F58`-`0x2881CC` | Yes | Nine direct callers | Yes | Yes | Static consumers and producer proven; live lifetime still open | Static role proven; hook forbidden |
-| First-person camera rebuild/upload | `0x286C6C` -> `0x282D60` | Exact-one production AOBs required | Yes | `void(view,bool)` -> `void(compact,derived)` | Two FP-pass callers; exact tail edge | Yes | Exact HREK homologs at `0x87C4B0` -> `0x8561A0` | Compact `0x90`; secondary derived `+0x1E4`, `0xC4` | Production candidate; headset pending |
+| First-person camera rebuild/upload | `0x286C6C` -> `0x282D60` | Exact-one production AOBs required | Yes | `void(view,bool)` -> `void(compact,derived)` | Three visible nested-workspace wrappers; exact tail edge | Yes | Exact HREK homologs at `0x87C4A0`/`0x87C4B0` -> `0x8561A0` | Nested compact `+0`, `0x90`; derived `+0x1E4`, `0xC4`; callback `+0x2A8` | `a1dcb7b` partial/failed: outer-workspace gate prevented the swap; corrected candidate pending |
 | FP interpolation | `0x0CF1A4` | Exact-one production AOB required | Yes | `bool __fastcall(int outputUserIndex,int animationIdentity,int fpWeaponSlot,BoneMatrix** out,int* count)` | Direct edges recorded below | Yes | Exact HREK/live graph correlation | 120-node bound | Production candidate; headset pending |
 | Visible palette | `0x2B4EB0` | Exact-one production AOB required | Yes | `void __fastcall(uint16_t tag,const BoneMatrix* root,BoneMatrix* dst,uintptr_t,const BoneMatrix* source,const int32_t* boneMap)` | Wrapper/call edges recorded below | Yes | Exact HREK/live body maps | 47/41 output layouts | Production candidate; headset pending |
 | Special-bone composer | `0x213224` | N/A | Offline file and headset negative result | N/A | N/A | Did not drive visible FP pose | N/A | N/A | Disproven for this feature |
@@ -367,8 +367,8 @@ probe fallback. `arm_ik=1` solves both shoulder-elbow-wrist chains;
 `arm_ik=0` uses the same full-source palette transaction with rigid controller
 parenting. Missing left tracking leaves the authored left arm.
 
-The current headset candidate has one user-approved temporary Reach-only
-presentation policy: Reach always emits floating hands regardless of the shared
+The Reach candidate path has one user-approved temporary Reach-only presentation
+policy: Reach always emits floating hands regardless of the shared
 `arm_ik`/`floating_hands` values. After the complete private source
 reconstruction, the exact HREK/retail left-hand source mask receives a rigid
 delta from its reconstructed wrist to the prepared left-controller wrist. The
@@ -518,12 +518,14 @@ itself identify the player-eye render transaction.
 
 The first-person path is one of those callers. Inside retail function
 `0x286C6C`-`0x286EBC`, it copies the `0x90`-byte compact camera from `[RCX+8]`
-to the title-global compact block at `0xCFAC20`, calls the frustum helper at
-`0x286DD8`, calls the projection builder with the same camera/bounds and the
-current camera-stack workspace's `+0x1E4` derived block at `0x286DEF`, then
-tail-jumps to the two-pointer uploader `0x282D60` at `0x286E6A`. The uploader
-ABI is `void __fastcall(const void* compact,const void* derived)`. Its exact
-retail body is `0x282D60`-`0x282ED9`.
+to the dedicated nested first-person camera-stack workspace at `0xCFAC20+0`,
+calls the frustum helper at `0x286DD8`, calls the projection builder with the
+same camera/bounds and the current camera-stack workspace's `+0x1E4` derived
+block at `0x286DEF`, then reloads the live stack top and tail-jumps to the
+two-pointer uploader `0x282D60` at `0x286E6A`. The uploader receives compact
+`0xCFAC20` and derived `current_top+0x1E4`; its ABI is
+`void __fastcall(const void* compact,const void* derived)`. Its exact retail
+body is `0x282D60`-`0x282ED9`.
 
 The pinned retail identities are:
 
@@ -532,13 +534,73 @@ The pinned retail identities are:
 - uploader entry AOB: `48 8B C4 48 89 58 08 55 48 8D 68 A1 48 81 EC C0 00 00 00 0F 29 70 E8 4C 8D 45 F7 0F 29 78 D8 48 8B D9 48 8B C2`, one executable match at `0x282D60`;
 - uploader body SHA-256: `F9A6578992870A9F5BF8C733944A83A5A834CC95490D8D0CC7573021F452FD31`.
 
-Pinned HREK independently exposes the same transaction: rebuild
-`0x87C4B0`-`0x87C6FB` (SHA-256
+The visible retail wrappers establish the lifetime and exact destination rather
+than merely the rebuild's isolated data flow:
+
+| Wrapper | Body SHA-256 | Outer / nested workspace setup | Callback, push, view, rebuild, pop |
+| --- | --- | --- | --- |
+| `0x26DA08`-`0x26DBFA` (`0x1F2`) | `03BCCB8401EBC487394F49C96DDB5B20309F3E1BB9D16F96DD5860D2155EA175` | `0x26DAB0 -> 0xC9FAE0`; `0x26DACB -> 0xCFAC20` | callback `0x26DB78 -> 0xC380`; push `0x26DB82 -> 0x251C08`; view `0x26DB87 -> 0xBB8F68`; rebuilds `0x26DB93`, `0x26DBAE`, `0x26DBCC -> 0x286C6C`; pop `0x26DBDB -> 0x251C50` |
+| `0x26E2A0`-`0x26E4FD` (`0x25D`) | `C36932D4D9D1357AD3D50F750A62C51DAE4530F350A7FA4E96AA04DC284171C2` | `0x26E38C -> 0xC9FAE0`; `0x26E393 -> 0xCFAC20` | callback `0x26E3B2 -> 0xC380`; push `0x26E459`; view/rebuild `0x26E461/0x26E468` and `0x26E4B0/0x26E4B7`; pop `0x26E4DD` |
+| `0x26EA78`-`0x26ED8C` (`0x314`) | `2B3033F4D4FB62E0AD709F38688D7A4613B2AFDE5CC67432254B51FB4F35A649` | `0x26EB4C -> 0xC9FAE0`; `0x26EB59 -> 0xCFAC20` | callback `0x26EB78 -> 0xC380`; push `0x26EC22`; view/rebuild `0x26EC34/0x26EC3B` and `0x26EC77/0x26EC7E`; pop `0x26ED67` |
+
+All three wrappers install callback `0xC380` at nested `+0x2A8`, push through
+`0x251C08`, pass the one exact FP view `0xBB8F68` to `0x286C6C` while the
+nested workspace remains current, and pop through `0x251C50` only after the
+rebuild returns. The rebuild independently reloads the live stack top at
+`0x286DAA`-`0x286DC5` before selecting `top+0x1E4` at `0x286DCA`, then reloads
+it again at `0x286E20`-`0x286E48`; its uploader arguments are compact
+`0xCFAC20` at `0x286E4F` and that live `top+0x1E4` before the tail jump at
+`0x286E6A`.
+
+Pinned HREK independently exposes the same transaction. Getter `0x87C4A0`
+(`48 8D 05 79 DB 5B 04 C3`) returns the dedicated nested workspace
+`0x4E3A020`. Source-named `player_view_render` `0x834490`-`0x835598` calls that
+getter at `0x834A19`, selects callback `0x87C780` at `0x834A21`, pushes through
+`0x7E6E60` at `0x834A28`, loads view `0x4E3A2D0` at `0x834A2F`, calls rebuild
+`0x87C4B0` at `0x834A36`, and pops through `0x7E6F50` at `0x834A72`. Two more
+homologous wrappers repeat getter/push/rebuild/pop at
+`0x836260/0x83626F/0x83627D/0x8362B9` and
+`0x8364CE/0x8364DD/0x8364F5/0x8365B4`.
+
+HREK rebuild `0x87C4B0`-`0x87C6FB` (SHA-256
 `84A1A55BBDBF98E6496CC47E9F644602B81617AB7283F94C37A88122B628A4B0`)
-calls uploader `0x8561A0`-`0x8564FD` (SHA-256
+gets the current stack top through `0x7E7110` at `0x87C639`, uses its `+0x1E4`
+at `0x87C655`, gets the top again at `0x87C679`, uses `top+0x1E4` at
+`0x87C685`, and calls uploader `0x8561A0` at `0x87C68C`. The uploader body is
+`0x8561A0`-`0x8564FD` (SHA-256
 `78D0DA6E00ED0E6564AE9FAA78A818EE50243DA2968F7ED55977803B2ABE8AF2`).
-This closes the static identity, ABI, layout, and flow proof. Runtime/headset
-acceptance remains pending.
+This closes the static identity, ABI, nested-workspace layout, and lifetime
+proof.
+
+The earlier camera-only candidate
+`6e12536ce401772876d55de0821780546af04131`, package
+`out/candidates/6e12536-reach-fp-parity-20260725-083057894Z`, exact DLL SHA-256
+`D5B8479952C5016ED2A636E9D2EFB468DED41C9D1BB44FEDE2BA1779FE0062D2`,
+produced no visible first-person camera change in-headset. That exact negative
+result independently corroborates the impossible outer-workspace gate found by
+the subsequent static review and does not advance the accepted pointer.
+
+Candidate `a1dcb7beeb0bec56b3b7c04a6f15a897eaa63fa4`, package
+`out/candidates/a1dcb7b-reach-fp-parity-20260725-085113864Z`, installed DLL
+SHA-256 `68793B3052EE2AE60F197526A7A215913FA7EEEFC3BB4177A613EE4AAFFF70A0`,
+produced a partial/failed headset result: the hands were a little better, but
+the gun/both-hands FOV, projection, apparent location, and tracking-distance
+coverage remained incorrect. The log proved hook installation/camera-core
+arming and execution of the private palette path (`Reach FP forced
+floating-hands active`); it did not prove execution of the post-original camera
+substitution.
+
+Static review found the exact cause. `a1dcb7b` required the current camera-stack
+top to equal outer default workspace `0xC9FAE0` and selected
+`0xC9FAE0+0x1E4`. During every normal visible FP rebuild the top is instead the
+pushed nested workspace `0xCFAC20`, so that guard necessarily returned before
+the copy and uploader transaction. Even without the guard, the outer derived
+destination was wrong: the exact destination is `0xCFAC20+0x1E4 = 0xCFAE04`.
+The corrected nested-workspace candidate is pending headset validation, and the
+accepted pointer remains unchanged. This failed swap does not justify a new
+controller calibration: Reach's head, eye, and controller publications share
+the same `1/3.048` world-unit mapping; the viewmodel remained in its native
+compressed projection during this test.
 
 The same HREK binary publishes `render_first_person_fov_scale` as a type-6
 float debug control (`0x17E2250` name, `0x2015350` descriptor,

@@ -65,11 +65,13 @@ inline constexpr uintptr_t kReachDisplaySurfaceRtvOffset = 0x08;
 inline constexpr uintptr_t kReachDisplaySurfaceSrvOffset = 0x18;
 inline constexpr uint32_t kReachDisplaySurfaceCount = 4;
 inline constexpr uint32_t kReachDisplayFormatR8G8B8A8Unorm = 28;
-// Reach's exact first-person camera transaction. Retail 0x286C6C copies a
-// 0x90-byte compact camera into the title-global block, rebuilds the current
-// camera-stack workspace's secondary derived block at +0x1E4, then tail-jumps
-// to the two-pointer constant uploader at 0x282D60. Pinned HREK independently
-// exposes the same transaction at 0x87C4B0 -> 0x8561A0.
+// Reach's exact first-person camera transaction. Each visible FP wrapper copies
+// the outer camera into a dedicated nested camera-stack workspace at 0xCFAC20,
+// installs callback 0xC380 at +0x2A8, and passes the one global FP view at
+// 0xBB8F68 to 0x286C6C while that workspace remains pushed. The rebuild copies
+// the view's compact camera to nested+0, rebuilds nested+0x1E4, then tail-jumps
+// to the two-pointer uploader at 0x282D60. Pinned HREK independently exposes
+// the same nested transaction at 0x87C4A0/0x87C4B0 -> 0x8561A0.
 inline constexpr uintptr_t kReachFpCameraRebuildRva = 0x00286C6C;
 inline constexpr size_t kReachFpCameraRebuildBodySize = 0x0250;
 inline constexpr char kReachFpCameraRebuildBodySha256[] =
@@ -78,12 +80,30 @@ inline constexpr uintptr_t kReachFpCameraUploadRva = 0x00282D60;
 inline constexpr size_t kReachFpCameraUploadBodySize = 0x0179;
 inline constexpr char kReachFpCameraUploadBodySha256[] =
     "F9A6578992870A9F5BF8C733944A83A5A834CC95490D8D0CC7573021F452FD31";
-inline constexpr uintptr_t kReachFpCompactCameraRva = 0x00CFAC20;
+inline constexpr uintptr_t kReachFpCameraWorkspaceRva = 0x00CFAC20;
+inline constexpr uintptr_t kReachFpCameraViewRva = 0x00BB8F68;
+inline constexpr uintptr_t kReachFpCameraWorkspaceCallbackRva = 0x0000C380;
+inline constexpr uintptr_t kReachFpCameraWorkspaceCallbackOffset = 0x02A8;
 inline constexpr uintptr_t kReachFpCameraCompactLeaRva = 0x00286C7F;
 inline constexpr uintptr_t kReachFpCameraFrustumCallRva = 0x00286DD8;
 inline constexpr uintptr_t kReachFpCameraProjectionCallRva = 0x00286DEF;
 inline constexpr uintptr_t kReachFpCameraUploadCompactLeaRva = 0x00286E4F;
 inline constexpr uintptr_t kReachFpCameraUploadJumpRva = 0x00286E6A;
+struct ReachFpCameraWrapperBody
+{
+    uintptr_t rva;
+    size_t size;
+    const char* sha256;
+};
+inline constexpr std::array<ReachFpCameraWrapperBody, 3>
+    kReachFpCameraWrapperBodies{{
+        {0x0026DA08, 0x01F2,
+         "03BCCB8401EBC487394F49C96DDB5B20309F3E1BB9D16F96DD5860D2155EA175"},
+        {0x0026E2A0, 0x025D,
+         "C36932D4D9D1357AD3D50F750A62C51DAE4530F350A7FA4E96AA04DC284171C2"},
+        {0x0026EA78, 0x0314,
+         "2B3033F4D4FB62E0AD709F38688D7A4613B2AFDE5CC67432254B51FB4F35A649"},
+    }};
 // Reach-native type-6 float debug variables. The pinned retail table contains
 // one exact entry for each name; HREK independently corroborates the same two
 // controls and authored values (docs/REACH-SIGNATURE-EVIDENCE.md). Production
@@ -446,6 +466,37 @@ inline constexpr size_t kReachCameraPairDataSize = 0x02A8;
 static_assert(
     kReachSecondaryDerivedOffset + kReachDerivedBlockSize ==
     kReachCameraPairDataSize);
+static_assert(
+    kReachFpCameraWorkspaceCallbackOffset == kReachCameraPairDataSize);
+static_assert(
+    kReachFpCameraWorkspaceCallbackOffset + sizeof(uintptr_t) ==
+    kReachRenderScopeSnapshotSize);
+static_assert(kReachFpCameraWorkspaceCallbackRva <= kReachFpCameraWorkspaceRva);
+static_assert(kReachFpCameraViewRva <= kReachFpCameraWorkspaceRva);
+
+// Select only the exact nested workspace/view/callback combination proven by
+// all three retail FP wrappers. A stock, screenshot, stale-title, outer-camera,
+// or unexpected nested call fails open without touching either camera pair.
+inline uintptr_t SelectReachFpCameraNestedWorkspace(
+    uintptr_t moduleBase, size_t moduleSize, uintptr_t stackTop,
+    uintptr_t workspaceCallback, uintptr_t fpView) noexcept
+{
+    if (!moduleBase || moduleSize != kReachRetailImageSize ||
+        moduleBase >
+            std::numeric_limits<uintptr_t>::max() -
+                kReachFpCameraWorkspaceRva)
+    {
+        return 0;
+    }
+    const uintptr_t expectedWorkspace =
+        moduleBase + kReachFpCameraWorkspaceRva;
+    return stackTop == expectedWorkspace &&
+            workspaceCallback ==
+                moduleBase + kReachFpCameraWorkspaceCallbackRva &&
+            fpView == moduleBase + kReachFpCameraViewRva
+        ? expectedWorkspace
+        : 0;
+}
 // Exact retail evidence for the pre-inner visibility consumer. The first call
 // resolves the camera cluster from workspace+0x154; the second builds the
 // visibility collection from workspace+0x154 and workspace+0x1E4.
@@ -908,6 +959,7 @@ struct ReachRenderCandidateProof
     uint32_t fpCameraUploadMatchCount = 0;
     bool fpCameraUploadAtExpectedRva = false;
     bool fpCameraUploadBodyHash = false;
+    bool fpCameraWrapperBodyHashes = false;
     bool exactFpCameraFlowEdges = false;
     bool exactOuterCallerEdges = false;
     bool exactInnerCallerEdge = false;
@@ -933,6 +985,7 @@ inline bool ReachRenderCandidateProofComplete(
         proof.fpCameraUploadMatchCount == 1 &&
         proof.fpCameraUploadAtExpectedRva &&
         proof.fpCameraUploadBodyHash &&
+        proof.fpCameraWrapperBodyHashes &&
         proof.exactFpCameraFlowEdges &&
         proof.exactOuterCallerEdges &&
         proof.exactInnerCallerEdge &&

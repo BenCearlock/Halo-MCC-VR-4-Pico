@@ -24,6 +24,12 @@ $forbidden = [ordered]@{
     'body-only palette action' = 'ArticulateExactBody'
     'palette solve truncated to discovery count' =
         'fp\.count\s*=\s*static_cast<int>\(observed\.paletteBodyNodeCount\)'
+    'outer stereo workspace reused for FP camera upload' =
+        'scope\.workspace\s*\+\s*kReachSecondaryDerivedOffset'
+    'legacy unverified FP compact-camera workspace alias' =
+        'kReachFpCompactCameraRva'
+    'FP camera success published before the uploader returns' =
+        'ReachFpCameraRebuildBody[\s\S]*?PublishReachFpCameraUpload\(scope\)[\s\S]*?g_reachFpCameraUpload\(compact,\s*derived\)'
 }
 foreach ($entry in $forbidden.GetEnumerator()) {
     if (($game + "`n" + $logic) -match $entry.Value) {
@@ -58,6 +64,22 @@ $requiredGame = [ordered]@{
         'g_reachFpCameraUpload\(compact, derived\)'
     'first-person camera hook lifecycle target' =
         'g_reachCamera\.fpCameraTarget'
+    'exact nested first-person camera workspace selection' =
+        'SelectReachFpCameraNestedWorkspace\(\s*base,\s*g_reachCamera\.size,\s*topWorkspace,\s*workspaceCallback,\s*reinterpret_cast<uintptr_t>\(view\)\s*\)'
+    'nested first-person camera callback load' =
+        'base\s*\+\s*kReachFpCameraWorkspaceRva\s*\+\s*kReachFpCameraWorkspaceCallbackOffset'
+    'nested first-person compact destination' =
+        'compact\s*=\s*reinterpret_cast<void\*>\(\s*nestedWorkspace\s*\)'
+    'nested first-person derived destination' =
+        'derived\s*=\s*reinterpret_cast<void\*>\(\s*nestedWorkspace\s*\+\s*kReachSecondaryDerivedOffset\s*\)'
+    'post-upload first-person camera success publication' =
+        'g_reachFpCameraUpload\(compact,\s*derived\);\s*PublishReachFpCameraUpload\(scope\)'
+    'both-eye first-person camera success gate' =
+        '\(eyeMask\s*&\s*0x3u\)\s*!=\s*0x3u'
+    'worker-owned first-person camera success publication' =
+        'LogReachFpCameraUploadIfReady\(\);\s*LogReachFpStatusIfNew\(\)'
+    'exact both-eye first-person camera success log' =
+        'LOG\("Reach per-eye FP camera ACTIVE:'
     'Reach private-palette left controller binding' =
         'ReachBindFloatingLeftHandToController\(\*root,fp,targets\)'
     'Reach forced floating-hands presentation' =
@@ -67,6 +89,23 @@ $requiredGame = [ordered]@{
 }
 foreach ($entry in $requiredGame.GetEnumerator()) {
     if ($game -notmatch $entry.Value) {
+        throw "Reach FP parity gate missing: $($entry.Key)."
+    }
+}
+$requiredLogic = [ordered]@{
+    'pure nested first-person camera workspace selector' =
+        'SelectReachFpCameraNestedWorkspace'
+    'exact nested first-person camera workspace identity' =
+        'stackTop\s*==\s*expectedWorkspace'
+    'exact nested first-person camera callback identity' =
+        'workspaceCallback\s*==\s*moduleBase\s*\+\s*kReachFpCameraWorkspaceCallbackRva'
+    'exact nested first-person camera view identity' =
+        'fpView\s*==\s*moduleBase\s*\+\s*kReachFpCameraViewRva'
+    'first-person wrapper body hashes in complete proof' =
+        'proof\.fpCameraWrapperBodyHashes'
+}
+foreach ($entry in $requiredLogic.GetEnumerator()) {
+    if ($logic -notmatch $entry.Value) {
         throw "Reach FP parity gate missing: $($entry.Key)."
     }
 }

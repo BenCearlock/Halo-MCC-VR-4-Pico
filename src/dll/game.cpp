@@ -9844,6 +9844,13 @@ namespace
         std::atomic<int> liveCount{0};
     } g_reachFpStatus;
     std::atomic<uint64_t> g_reachFpLoggedStatusKey{0};
+    struct ReachFpCameraUploadStatus
+    {
+        std::atomic<uint64_t> preparedSerial{0};
+        std::atomic<uint32_t> generation{0};
+        std::atomic<uint32_t> eyeMask{0};
+    } g_reachFpCameraUploadStatus;
+    std::atomic<uint32_t> g_reachFpCameraLoggedGeneration{0};
 
     void ReachBeginFpPairScope(uint32_t generation, uint64_t preparedSerial,
                                const FpExplicitPoseTargets& targets);
@@ -9953,7 +9960,7 @@ namespace
         return callReturned && restoreSucceeded;
     }
 
-    bool ReachFpCameraEyeScopeMatchesLive() noexcept
+    uintptr_t ReachFpCameraWorkspaceIfLive(const void* view) noexcept
     {
         const ReachFpCameraEyeScope& scope = g_reachFpCameraEyeScope;
         const ReachOwnerScope& owner = g_reachOwnerScope;
@@ -9970,21 +9977,51 @@ namespace
             !owner.renderAccess || !owner.renderAccess->active ||
             owner.renderAccess->preparedSerial != scope.preparedSerial)
         {
-            return false;
+            return 0;
         }
 
         const int32_t depth = *reinterpret_cast<const int32_t*>(
             base + kReachCameraStackDepthRva);
         if (depth < 0 || depth > 3)
-            return false;
+            return 0;
         const uintptr_t topWorkspace = *reinterpret_cast<const uintptr_t*>(
             base + kReachCameraStackPointersRva +
             static_cast<uintptr_t>(depth) * sizeof(uintptr_t));
-        return topWorkspace == scope.workspace &&
+        const uintptr_t workspaceCallback =
             *reinterpret_cast<const uintptr_t*>(
-                base + kReachActiveViewRva) == scope.playerView &&
+                base + kReachFpCameraWorkspaceRva +
+                kReachFpCameraWorkspaceCallbackOffset);
+        const uintptr_t nestedWorkspace =
+            SelectReachFpCameraNestedWorkspace(
+                base, g_reachCamera.size, topWorkspace, workspaceCallback,
+                reinterpret_cast<uintptr_t>(view));
+        if (!nestedWorkspace ||
+            *reinterpret_cast<const uintptr_t*>(
+                base + kReachActiveViewRva) != scope.playerView ||
             *reinterpret_cast<const uint32_t*>(
-                base + kReachSelectedSpecializationRva) == 0;
+                base + kReachSelectedSpecializationRva) != 0)
+        {
+            return 0;
+        }
+        return nestedWorkspace;
+    }
+
+    void PublishReachFpCameraUpload(
+        const ReachFpCameraEyeScope& scope) noexcept
+    {
+        const uint64_t serial = scope.preparedSerial;
+        if (g_reachFpCameraUploadStatus.preparedSerial.load(
+                std::memory_order_relaxed) != serial)
+        {
+            g_reachFpCameraUploadStatus.eyeMask.store(
+                0, std::memory_order_relaxed);
+            g_reachFpCameraUploadStatus.generation.store(
+                scope.generation, std::memory_order_relaxed);
+            g_reachFpCameraUploadStatus.preparedSerial.store(
+                serial, std::memory_order_release);
+        }
+        g_reachFpCameraUploadStatus.eyeMask.fetch_or(
+            uint32_t{1} << scope.eye, std::memory_order_release);
     }
 
     void ReachFpCameraRebuildBody(void* view, bool firstPersonEnabled)
@@ -9999,17 +10036,22 @@ namespace
         // rebuilt world pair, then rerun Reach's own constant uploader. This is
         // the same last-writer transaction used by Halo 3 and ODST.
         original(view, firstPersonEnabled);
-        if (!ReachFpCameraEyeScopeMatchesLive() || !g_reachFpCameraUpload)
+        if (!g_reachFpCameraUpload)
             return;
 
         ReachFpCameraEyeScope& scope = g_reachFpCameraEyeScope;
+        const uintptr_t nestedWorkspace =
+            ReachFpCameraWorkspaceIfLive(view);
+        if (!nestedWorkspace)
+            return;
         void* const compact = reinterpret_cast<void*>(
-            g_reachCamera.base + kReachFpCompactCameraRva);
+            nestedWorkspace);
         void* const derived = reinterpret_cast<void*>(
-            scope.workspace + kReachSecondaryDerivedOffset);
+            nestedWorkspace + kReachSecondaryDerivedOffset);
         memcpy(compact, scope.compact, sizeof(scope.compact));
         memcpy(derived, scope.derived, sizeof(scope.derived));
         g_reachFpCameraUpload(compact, derived);
+        PublishReachFpCameraUpload(scope);
     }
 
     __declspec(noinline) void __fastcall ReachFpCameraRebuildDetour(
@@ -12187,6 +12229,14 @@ namespace
             g_reachRenderHalfFovX[eye].store(0.0f, std::memory_order_relaxed);
             g_reachRenderHalfFovY[eye].store(0.0f, std::memory_order_relaxed);
         }
+        g_reachFpCameraUploadStatus.preparedSerial.store(
+            0, std::memory_order_release);
+        g_reachFpCameraUploadStatus.generation.store(
+            0, std::memory_order_relaxed);
+        g_reachFpCameraUploadStatus.eyeMask.store(
+            0, std::memory_order_relaxed);
+        g_reachFpCameraLoggedGeneration.store(
+            0, std::memory_order_release);
         g_aimSeen.store(false, std::memory_order_release);
         g_camValid.store(false, std::memory_order_release);
         g_baseCamValid.store(false, std::memory_order_release);
@@ -12250,6 +12300,14 @@ namespace
         g_reachFpCameraUpload = nullptr;
         g_reachFpStatus.key.store(0,std::memory_order_release);
         g_reachFpLoggedStatusKey.store(0,std::memory_order_release);
+        g_reachFpCameraUploadStatus.preparedSerial.store(
+            0, std::memory_order_release);
+        g_reachFpCameraUploadStatus.generation.store(
+            0, std::memory_order_relaxed);
+        g_reachFpCameraUploadStatus.eyeMask.store(
+            0, std::memory_order_relaxed);
+        g_reachFpCameraLoggedGeneration.store(
+            0, std::memory_order_release);
         g_reachHelpers = {};
         if (moduleReference)
             FreeLibrary(moduleReference);
@@ -12595,6 +12653,14 @@ namespace
             g_reachRenderHalfFovX[eye].store(0.0f, std::memory_order_relaxed);
             g_reachRenderHalfFovY[eye].store(0.0f, std::memory_order_relaxed);
         }
+        g_reachFpCameraUploadStatus.preparedSerial.store(
+            0, std::memory_order_release);
+        g_reachFpCameraUploadStatus.generation.store(
+            0, std::memory_order_relaxed);
+        g_reachFpCameraUploadStatus.eyeMask.store(
+            0, std::memory_order_relaxed);
+        g_reachFpCameraLoggedGeneration.store(
+            0, std::memory_order_release);
         g_aimSeen.store(false, std::memory_order_release);
         g_camValid.store(false, std::memory_order_release);
         g_baseCamValid.store(false, std::memory_order_release);
@@ -12629,11 +12695,8 @@ namespace
             "interpolation/palette + per-eye world-projection camera "
             "transactions hooked; waiting one-second fresh-camera interval "
             "before arming");
-        LOG("Reach FP camera evidence: HREK-homologous rebuild %llX now "
-            "re-uploads each admitted eye's world compact/derived pair through "
-            "%llX (viewmodel depth uncrushed)",
-            static_cast<unsigned long long>(kReachFpCameraRebuildRva),
-            static_cast<unsigned long long>(kReachFpCameraUploadRva));
+        LOG("Reach FP camera hook installed for the exact HREK-homologous "
+            "nested workspace; per-eye execution pending");
         LOG("Reach comfort evidence: blurScale=%llX blurMax=%llX "
             "(authored %.4f/%.4f); VR default keeps scale finite and zeros max",
             static_cast<unsigned long long>(
@@ -12648,6 +12711,37 @@ namespace
             static_cast<unsigned>(kReachPatchyFogSkipMask));
 
         return true;
+    }
+
+    void LogReachFpCameraUploadIfReady()
+    {
+        const uint64_t serialBefore =
+            g_reachFpCameraUploadStatus.preparedSerial.load(
+                std::memory_order_acquire);
+        if (!serialBefore)
+            return;
+        const uint32_t generation =
+            g_reachFpCameraUploadStatus.generation.load(
+                std::memory_order_relaxed);
+        const uint32_t eyeMask =
+            g_reachFpCameraUploadStatus.eyeMask.load(
+                std::memory_order_acquire);
+        const uint64_t serialAfter =
+            g_reachFpCameraUploadStatus.preparedSerial.load(
+                std::memory_order_acquire);
+        if (serialBefore != serialAfter ||
+            generation != g_reachCamera.generation ||
+            (eyeMask & 0x3u) != 0x3u ||
+            generation == g_reachFpCameraLoggedGeneration.load(
+                std::memory_order_relaxed))
+        {
+            return;
+        }
+        g_reachFpCameraLoggedGeneration.store(
+            generation, std::memory_order_release);
+        LOG("Reach per-eye FP camera ACTIVE: both eyes uploaded world compact "
+            "+ derived projection through the dedicated nested workspace "
+            "(viewmodel depth uncrushed)");
     }
 
     void LogReachFpStatusIfNew()
@@ -12682,6 +12776,7 @@ namespace
     void ReachCameraCore_Poll(
         uintptr_t base, size_t size, uint32_t generation, bool soleReachTitle)
     {
+        LogReachFpCameraUploadIfReady();
         LogReachFpStatusIfNew();
         const bool installed =
             g_reachCamera.installed.load(std::memory_order_acquire);

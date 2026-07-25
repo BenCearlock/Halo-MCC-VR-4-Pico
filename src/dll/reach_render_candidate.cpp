@@ -93,9 +93,9 @@ void ReachRenderCandidate_ColdPoll(
         g_preflightPublication.Invalidate();
     if (complete)
     {
-        LOG("Reach render cold preflight PASS: exact retail image, three "
-            "unique executable signatures, two body hashes, seven caller "
-            "edges, and fixed ranges; runtime hooks remain disabled");
+        LOG("Reach render cold preflight PASS: exact retail image, unique "
+            "executable signatures, exact camera and FP wrapper bodies, "
+            "caller edges, and fixed ranges; runtime hooks remain disabled");
     }
     else
     {

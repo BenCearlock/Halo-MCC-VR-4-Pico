@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "status": "CAMERA_CULLING_PATCHY_FOG_HEADSET_PASS_REACH_TWO_ARM_IK_CANDIDATE_UNACCEPTED",
+  "status": "CAMERA_CULLING_PATCHY_FOG_HEADSET_PASS_REACH_FORCED_FLOATING_HANDS_PARTIAL_FP_CAMERA_NESTED_WORKSPACE_CORRECTION_PENDING",
   "hook_eligible": false,
   "hook_eligibility_scope": "PRELIMINARY_HELPER_CANDIDATES_ONLY; permanent main_render_view/player_view_render transaction is described separately below",
   "accepted_baseline": {
@@ -458,6 +458,7 @@
       "withheld_or_headset_pending": [
         "reach_native_hud",
         "reach_controller_projectile_reticle_and_two_arm_ik_exact_dll_headset_acceptance",
+        "reach_corrected_nested_first_person_camera_swap_exact_dll_headset_acceptance",
         "exact_finite_distance_cull_coverage_for_translated_eye_origins",
         "reach_exact_physical_world_scale_headset_result",
         "reach_performance_cadence_headroom_followup",
@@ -465,7 +466,7 @@
       ],
       "loaded_image_preflight_compiled": true,
       "display_copy_readiness_compiled": true,
-      "runtime_result": "86864bd passed stereo, projection, 6DOF, stick/head coherence, and head-owned culling; 03f0bff proved finite max-only native blur suppression while the opposite-head layer persisted; b0710dc then passed exact per-eye patchy-fog suppression with the layer gone and the image good. The remaining Reach follow-up is exact 1/3.048 physical scale and performance cadence; b0710dc's low cadence began before Reach loaded or stereo armed and is not a patchy-fog regression",
+      "runtime_result": "86864bd passed stereo, projection, 6DOF, stick/head coherence, and head-owned culling; 03f0bff proved finite max-only native blur suppression while the opposite-head layer persisted; b0710dc then passed exact per-eye patchy-fog suppression with the layer gone and the image good. Camera-only 6e12536 produced no visible FP change; a1dcb7 then made the forced-floating-hands palette path a little better while gun/both-hands projection and apparent travel remained wrong. Static retail/HREK review proved both used an impossible outer-workspace gate while visible FP rebuilds run in nested workspace 0xCFAC20; the corrected camera candidate is pending. Exact 1/3.048 physical scale and performance cadence also remain follow-ups; b0710dc's low cadence began before Reach loaded or stereo armed and is not a patchy-fog regression",
       "title_hook_plan": "REACH_CAMERA_CORE",
       "runtime_capabilities": [
         "STEREO",
@@ -765,13 +766,88 @@
         "abi": "void __fastcall(void* first_person_view,bool first_person_enabled)",
         "compact_source_offset": "0x0008",
         "compact_size": 144,
-        "global_compact_camera_rva": "0x00CFAC20",
-        "secondary_derived_offset": "0x01E4",
+        "outer_default_workspace_rva": "0x00C9FAE0",
+        "nested_workspace_rva": "0x00CFAC20",
+        "nested_compact_offset": "0x0000",
+        "nested_secondary_derived_offset": "0x01E4",
+        "nested_secondary_derived_rva": "0x00CFAE04",
         "derived_size": 196,
+        "nested_callback_offset": "0x02A8",
+        "nested_callback_rva": "0x0000C380",
+        "first_person_view_rva": "0x00BB8F68",
         "frustum_call_rva": "0x00286DD8",
         "projection_call_rva": "0x00286DEF",
+        "current_top_reload_rva_ranges": [
+          "0x00286DAA-0x00286DC5",
+          "0x00286E20-0x00286E48"
+        ],
+        "current_top_derived_select_rva": "0x00286DCA",
+        "uploader_compact_lea_rva": "0x00286E4F",
         "uploader_tail_jump_rva": "0x00286E6A"
       },
+      "visible_wrapper_transactions": [
+        {
+          "function_rva": "0x0026DA08",
+          "function_end_rva_exclusive": "0x0026DBFA",
+          "function_size": 498,
+          "body_sha256": "03BCCB8401EBC487394F49C96DDB5B20309F3E1BB9D16F96DD5860D2155EA175",
+          "outer_workspace_lea_rva": "0x0026DAB0",
+          "outer_workspace_rva": "0x00C9FAE0",
+          "nested_workspace_lea_rva": "0x0026DACB",
+          "nested_workspace_rva": "0x00CFAC20",
+          "callback_lea_rva": "0x0026DB78",
+          "callback_rva": "0x0000C380",
+          "push_call_rva": "0x0026DB82",
+          "push_target_rva": "0x00251C08",
+          "view_lea_rvas": ["0x0026DB87"],
+          "first_person_view_rva": "0x00BB8F68",
+          "rebuild_call_rvas": ["0x0026DB93", "0x0026DBAE", "0x0026DBCC"],
+          "rebuild_target_rva": "0x00286C6C",
+          "pop_call_rva": "0x0026DBDB",
+          "pop_target_rva": "0x00251C50"
+        },
+        {
+          "function_rva": "0x0026E2A0",
+          "function_end_rva_exclusive": "0x0026E4FD",
+          "function_size": 605,
+          "body_sha256": "C36932D4D9D1357AD3D50F750A62C51DAE4530F350A7FA4E96AA04DC284171C2",
+          "outer_workspace_lea_rva": "0x0026E38C",
+          "outer_workspace_rva": "0x00C9FAE0",
+          "nested_workspace_lea_rva": "0x0026E393",
+          "nested_workspace_rva": "0x00CFAC20",
+          "callback_lea_rva": "0x0026E3B2",
+          "callback_rva": "0x0000C380",
+          "push_call_rva": "0x0026E459",
+          "push_target_rva": "0x00251C08",
+          "view_lea_rvas": ["0x0026E461", "0x0026E4B0"],
+          "first_person_view_rva": "0x00BB8F68",
+          "rebuild_call_rvas": ["0x0026E468", "0x0026E4B7"],
+          "rebuild_target_rva": "0x00286C6C",
+          "pop_call_rva": "0x0026E4DD",
+          "pop_target_rva": "0x00251C50"
+        },
+        {
+          "function_rva": "0x0026EA78",
+          "function_end_rva_exclusive": "0x0026ED8C",
+          "function_size": 788,
+          "body_sha256": "2B3033F4D4FB62E0AD709F38688D7A4613B2AFDE5CC67432254B51FB4F35A649",
+          "outer_workspace_lea_rva": "0x0026EB4C",
+          "outer_workspace_rva": "0x00C9FAE0",
+          "nested_workspace_lea_rva": "0x0026EB59",
+          "nested_workspace_rva": "0x00CFAC20",
+          "callback_lea_rva": "0x0026EB78",
+          "callback_rva": "0x0000C380",
+          "push_call_rva": "0x0026EC22",
+          "push_target_rva": "0x00251C08",
+          "view_lea_rvas": ["0x0026EC34", "0x0026EC77"],
+          "first_person_view_rva": "0x00BB8F68",
+          "rebuild_call_rvas": ["0x0026EC3B", "0x0026EC7E"],
+          "rebuild_target_rva": "0x00286C6C",
+          "pop_call_rva": "0x0026ED67",
+          "pop_target_rva": "0x00251C50",
+          "role": "documented_final_visible_first_person_wrapper"
+        }
+      ],
       "uploader": {
         "function_rva": "0x00282D60",
         "function_end_rva_exclusive": "0x00282ED9",
@@ -783,13 +859,59 @@
       },
       "hrek_homolog": {
         "binary": "reach_tag_test.exe",
+        "nested_workspace_getter": {
+          "function_rva": "0x0087C4A0",
+          "body_bytes": "48 8D 05 79 DB 5B 04 C3",
+          "nested_workspace_rva": "0x04E3A020"
+        },
+        "visible_wrapper_transactions": [
+          {
+            "function_rva": "0x00834490",
+            "function_end_rva_exclusive": "0x00835598",
+            "source_name": "player_view_render",
+            "workspace_getter_call_rva": "0x00834A19",
+            "callback_select_rva": "0x00834A21",
+            "callback_rva": "0x0087C780",
+            "push_call_rva": "0x00834A28",
+            "push_target_rva": "0x007E6E60",
+            "view_lea_rva": "0x00834A2F",
+            "first_person_view_rva": "0x04E3A2D0",
+            "rebuild_call_rva": "0x00834A36",
+            "rebuild_target_rva": "0x0087C4B0",
+            "pop_call_rva": "0x00834A72",
+            "pop_target_rva": "0x007E6F50"
+          },
+          {
+            "function_rva": "0x00836080",
+            "function_end_rva_exclusive": "0x008362E2",
+            "body_sha256": "D3201E005EFD274D545C97EC1CC5D1B4B917197E1B330A50ADD5047A1212CEDF",
+            "workspace_getter_call_rva": "0x00836260",
+            "push_call_rva": "0x0083626F",
+            "rebuild_call_rva": "0x0083627D",
+            "pop_call_rva": "0x008362B9"
+          },
+          {
+            "function_rva": "0x008362F0",
+            "function_end_rva_exclusive": "0x008365E7",
+            "body_sha256": "07BC186ABA13DC1563BFF096342CE9DEB571F025D443058363EC5C15AEEF48DF",
+            "workspace_getter_call_rva": "0x008364CE",
+            "push_call_rva": "0x008364DD",
+            "rebuild_call_rva": "0x008364F5",
+            "pop_call_rva": "0x008365B4"
+          }
+        ],
         "rebuild": {
           "function_rva": "0x0087C4B0",
           "function_end_rva_exclusive": "0x0087C6FB",
           "function_size": 587,
           "entry_aob": "48 89 5C 24 08 57 48 83 EC 50 0F 29 74 24 40 48 8B 05 ?? ?? ?? ?? 48 33 C4 48 89 44 24 30 48 8B 41 08",
           "static_executable_match_count": 1,
-          "body_sha256": "84A1A55BBDBF98E6496CC47E9F644602B81617AB7283F94C37A88122B628A4B0"
+          "body_sha256": "84A1A55BBDBF98E6496CC47E9F644602B81617AB7283F94C37A88122B628A4B0",
+          "current_top_accessor_rva": "0x007E7110",
+          "current_top_accessor_call_rvas": ["0x0087C639", "0x0087C679"],
+          "current_top_derived_use_rvas": ["0x0087C655", "0x0087C685"],
+          "derived_offset": "0x01E4",
+          "uploader_call_rva": "0x0087C68C"
         },
         "uploader": {
           "function_rva": "0x008561A0",
@@ -811,6 +933,36 @@
         "hrek_value_rva": "0x0205A0C8",
         "tag_export_result": "no first-person FOV field exists in the exported weapon, globals, or rasterizer_globals tag definitions"
       },
+      "candidate_results": [
+        {
+          "status": "FAILED_NO_VISIBLE_CAMERA_CHANGE_DOES_NOT_ADVANCE_ACCEPTED_POINTER",
+          "source_commit": "6e12536ce401772876d55de0821780546af04131",
+          "package": "out/candidates/6e12536-reach-fp-parity-20260725-083057894Z",
+          "dll_sha256": "D5B8479952C5016ED2A636E9D2EFB468DED41C9D1BB44FEDE2BA1779FE0062D2",
+          "launcher_sha256": "A5992094647047E9B3F3E8F218DD606C7635C80151BFE854497EB8363535AA92",
+          "user_observation": "camera-only candidate produced no visible first-person change",
+          "static_disposition": "directly_corroborates_that_the_outer_default_workspace_top_gate_prevented_the_visible_nested_first_person_camera_swap"
+        },
+        {
+          "status": "PARTIAL_FAILED_DOES_NOT_ADVANCE_ACCEPTED_POINTER",
+          "source_commit": "a1dcb7beeb0bec56b3b7c04a6f15a897eaa63fa4",
+          "package": "out/candidates/a1dcb7b-reach-fp-parity-20260725-085113864Z",
+          "dll_sha256": "68793B3052EE2AE60F197526A7A215913FA7EEEFC3BB4177A613EE4AAFFF70A0",
+          "launcher_sha256": "F9C3778B5AD993E26039BA731698A3E2BCD10159F00F6C31C15C5E450DE516FB",
+          "installed_hash_separately_verified": true,
+          "user_observation": "hands were a little better, but gun and both-hands FOV, projection, apparent location, and tracking-distance coverage were incorrect",
+          "log_proved": [
+            "first_person_camera_hook_installed",
+            "reach_camera_core_armed",
+            "private_palette_path_executed_with_reach_fp_forced_floating_hands_active"
+          ],
+          "log_did_not_prove": "post_original_world_camera_substitution_executed",
+          "static_disposition": "outer_default_workspace_top_gate_was_impossible_during_visible_nested_first_person_rebuild_and_outer_plus_0x1E4_was_not_the_live_derived_destination",
+          "correct_destination": "nested_workspace_0x00CFAC20_compact_plus_0_and_derived_plus_0x1E4_0x00CFAE04"
+        }
+      ],
+      "accepted_pointer": "a5524d3fe58e4ed5507c27429ccca52a3d4fdf7d",
+      "corrected_candidate_status": "NESTED_WORKSPACE_FIX_PENDING_HEADSET_VALIDATION",
       "proof_complete": true,
       "headset_accepted": false
     },

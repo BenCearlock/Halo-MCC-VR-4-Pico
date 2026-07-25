@@ -588,12 +588,43 @@ if ($fpCameraEvidence.Count -ne 1 -or
             [string]$cameraEvidence.name) {
     throw 'Reach evidence manifest must contain one statically proven, headset-pending FP camera transaction.'
 }
+$fpRebuild = $fpCameraEvidence[0].rebuild
+if ([string]$fpRebuild.nested_workspace_rva -cne '0x00CFAC20' -or
+        [string]$fpRebuild.nested_compact_offset -cne '0x0000' -or
+        [string]$fpRebuild.secondary_derived_offset -cne '0x01E4' -or
+        [string]$fpRebuild.nested_callback_offset -cne '0x02A8' -or
+        [string]$fpRebuild.nested_callback_rva -cne '0x0000C380' -or
+        [string]$fpRebuild.first_person_view_rva -cne '0x00BB8F68') {
+    throw 'Reach FP camera nested-workspace identity is incomplete or inconsistent.'
+}
 Test-FunctionEvidence -Bytes $moduleBytes -Sections $sections `
     -Evidence $fpCameraEvidence[0].rebuild `
     -Label 'retail first-person camera rebuild'
 Test-FunctionEvidence -Bytes $moduleBytes -Sections $sections `
     -Evidence $fpCameraEvidence[0].uploader `
     -Label 'retail first-person camera uploader'
+$fpWrappers = @($fpCameraEvidence[0].visible_wrapper_transactions)
+if ($fpWrappers.Count -ne 3) {
+    throw 'Reach FP camera evidence must contain all three visible wrapper bodies.'
+}
+foreach ($wrapper in $fpWrappers) {
+    if ([string]$wrapper.nested_workspace_rva -cne '0x00CFAC20' -or
+            [string]$wrapper.callback_rva -cne '0x0000C380' -or
+            [string]$wrapper.first_person_view_rva -cne '0x00BB8F68' -or
+            [string]$wrapper.rebuild_target_rva -cne '0x00286C6C') {
+        throw 'Reach FP wrapper nested-workspace identity is inconsistent.'
+    }
+    $wrapperBody = [pscustomobject]@{
+        player_view_render_rva = $wrapper.function_rva
+        player_view_render_end_rva_exclusive =
+            $wrapper.function_end_rva_exclusive
+        player_view_render_size = $wrapper.function_size
+        player_view_render_body_sha256 = $wrapper.body_sha256
+    }
+    Test-FunctionBodyEvidence -Path $ModulePath -Sections $sections `
+        -Evidence $wrapperBody `
+        -Label ('retail first-person wrapper {0}' -f $wrapper.function_rva)
+}
 Test-FunctionEvidence -Bytes $hrekBytes -Sections $hrekSections `
     -Evidence $fpCameraEvidence[0].hrek_homolog.rebuild `
     -Label 'HREK first-person camera rebuild'

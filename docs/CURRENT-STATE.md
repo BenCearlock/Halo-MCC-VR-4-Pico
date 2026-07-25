@@ -40,6 +40,40 @@ milestone, not a public release or tag. The public known-good product remains
 - This result does not authorize or claim Reach camera, stereo, 6DOF, aim,
   movement, HUD, IK, haptics, or lifecycle hooks.
 
+### Partial/failed Reach floating-hands / FP-camera result - 2026-07-25
+
+Candidate `a1dcb7beeb0bec56b3b7c04a6f15a897eaa63fa4` combined the
+Reach-only forced-floating-hands palette policy with the first Reach
+first-person camera-rebuild detour. Its exact packaged and deployed identity
+was:
+
+| Identity | Value |
+| --- | --- |
+| Candidate package | `out/candidates/a1dcb7b-reach-fp-parity-20260725-085113864Z` |
+| `halo3xr.dll` SHA-256 | `68793B3052EE2AE60F197526A7A215913FA7EEEFC3BB4177A613EE4AAFFF70A0` |
+| `halo3xr_launcher.exe` SHA-256 | `F9C3778B5AD993E26039BA731698A3E2BCD10159F00F6C31C15C5E450DE516FB` |
+| Headset result | Hands were a little better, but the gun/both-hands FOV, projection, apparent location, and tracking-distance coverage were incorrect |
+
+The runtime log proved that the Reach FP-camera hook installed and the camera
+core armed. It also proved that the private-palette path executed by reporting
+`Reach FP forced floating-hands active`. It did **not** prove that the
+post-original world-camera substitution executed.
+
+Pinned retail and HREK static evidence now explains that missing proof. Every
+visible FP wrapper copies the outer camera into, then pushes, a dedicated nested
+camera-stack workspace at `haloreach+0x00CFAC20`. That workspace holds the
+compact camera at `+0`, the derived/projection block at `+0x1E4`, and callback
+`haloreach+0x0000C380` at `+0x2A8`; the wrappers pass the exact FP view at
+`haloreach+0x00BB8F68` to rebuild `0x00286C6C` before popping the nested
+workspace. The candidate instead required the live stack top to equal the outer
+default workspace `0x00C9FAE0` and selected that outer workspace's `+0x1E4`.
+That guard is impossible during a normal visible FP rebuild, so the intended
+camera swap returned before its copies and uploader call.
+
+The corrected nested-workspace candidate is pending. `a1dcb7b` is a
+partial/failed headset result and does **not** advance the accepted pointer;
+that pointer remains `a5524d3fe58e4ed5507c27429ccca52a3d4fdf7d`.
+
 ### Failed Reach final-palette-only candidate - 2026-07-24
 
 Candidate `abea61f0daf2b70ba779a40a3a2ad72b3debf121` implemented the

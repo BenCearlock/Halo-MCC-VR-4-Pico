@@ -90,6 +90,8 @@ if ([int]$manifest.schema_version -ne 6 -or
         $manifest.deployment_policy.launches_mcc -ne $false -or
         $manifest.deployment_policy.changes_config -ne $false -or
         $manifest.reach_fp_h3_odst_transaction_parity_gate -ne $true -or
+        $manifest.reach_fp_nested_camera_workspace -ne $true -or
+        $manifest.reach_fp_world_projection_execution_status -ne $true -or
         $manifest.reach_forced_floating_hands -ne $true -or
         $manifest.reach_runtime_hooks_enabled -ne $true) {
     throw 'Candidate manifest identity or cumulative-title contract is invalid.'

@@ -59,6 +59,7 @@ namespace
         proof.fpCameraUploadMatchCount = 1;
         proof.fpCameraUploadAtExpectedRva = true;
         proof.fpCameraUploadBodyHash = true;
+        proof.fpCameraWrapperBodyHashes = true;
         proof.exactFpCameraFlowEdges = true;
         proof.exactOuterCallerEdges = true;
         proof.exactInnerCallerEdge = true;
@@ -758,6 +759,97 @@ int main()
                   kReachFpCameraUploadAob.size()) == 0,
             "Reach FP camera uploader rejects a changed fixed byte");
 
+        struct ReachFpNestedSelectorInput
+        {
+            uintptr_t moduleBase;
+            size_t moduleSize;
+            uintptr_t stackTop;
+            uintptr_t workspaceCallback;
+            uintptr_t fpView;
+        };
+        const uintptr_t fpModuleBase = 0x10000000u;
+        const ReachFpNestedSelectorInput validFpNested{
+            fpModuleBase,
+            kReachRetailImageSize,
+            fpModuleBase + kReachFpCameraWorkspaceRva,
+            fpModuleBase + kReachFpCameraWorkspaceCallbackRva,
+            fpModuleBase + kReachFpCameraViewRva};
+        const auto selectFpNested =
+            [](const ReachFpNestedSelectorInput& input)
+        {
+            return SelectReachFpCameraNestedWorkspace(
+                input.moduleBase, input.moduleSize, input.stackTop,
+                input.workspaceCallback, input.fpView);
+        };
+        const auto fpNestedRejects =
+            [&validFpNested, &selectFpNested](auto mutate)
+        {
+            auto candidate = validFpNested;
+            mutate(candidate);
+            return selectFpNested(candidate) == 0;
+        };
+        Check(selectFpNested(validFpNested) == validFpNested.stackTop,
+            "Reach FP camera selector accepts the exact nested workspace, callback, and view");
+        const uintptr_t selectedFpNested = selectFpNested(validFpNested);
+        Check(selectedFpNested + kReachSecondaryDerivedOffset ==
+                  fpModuleBase + kReachFpCameraWorkspaceRva + 0x1E4 &&
+              kReachSecondaryDerivedOffset + kReachDerivedBlockSize <=
+                  kReachFpCameraWorkspaceCallbackOffset,
+            "Reach FP camera selector targets nested+0x1E4 without crossing the callback");
+        Check(kReachFpCameraWorkspaceCallbackOffset + sizeof(uintptr_t) ==
+                  kReachRenderScopeSnapshotSize &&
+              kReachFpCameraWorkspaceRva <=
+                  kReachRetailImageSize - kReachRenderScopeSnapshotSize,
+            "Reach FP camera callback and full snapshot stay inside the fixed nested workspace range");
+        Check(
+            fpNestedRejects([](auto& v) {
+                v.moduleBase = 0;
+                v.stackTop = kReachFpCameraWorkspaceRva;
+                v.workspaceCallback = kReachFpCameraWorkspaceCallbackRva;
+                v.fpView = kReachFpCameraViewRva;
+            }) &&
+            fpNestedRejects([](auto& v) { v.moduleSize = 0; }) &&
+            fpNestedRejects([](auto& v) {
+                v.moduleSize = kReachRetailImageSize - 1;
+            }) &&
+            fpNestedRejects([](auto& v) {
+                v.moduleSize = kReachRetailImageSize + 1;
+            }) &&
+            fpNestedRejects([](auto& v) { --v.stackTop; }) &&
+            fpNestedRejects([](auto& v) { ++v.stackTop; }) &&
+            fpNestedRejects([](auto& v) { v.workspaceCallback = 0; }) &&
+            fpNestedRejects([](auto& v) { --v.workspaceCallback; }) &&
+            fpNestedRejects([](auto& v) { ++v.workspaceCallback; }) &&
+            fpNestedRejects([](auto& v) { v.fpView = 0; }) &&
+            fpNestedRejects([](auto& v) { --v.fpView; }) &&
+            fpNestedRejects([](auto& v) { ++v.fpView; }) &&
+            fpNestedRejects([](auto& v) {
+                v.stackTop =
+                    v.moduleBase + kReachDefaultWorkspaceRva;
+            }) &&
+            fpNestedRejects([](auto& v) {
+                v.moduleBase =
+                    std::numeric_limits<uintptr_t>::max() -
+                    kReachFpCameraWorkspaceRva + 2;
+                v.stackTop = v.moduleBase + kReachFpCameraWorkspaceRva;
+                v.workspaceCallback =
+                    v.moduleBase + kReachFpCameraWorkspaceCallbackRva;
+                v.fpView = v.moduleBase + kReachFpCameraViewRva;
+            }),
+            "Reach FP camera selector fails closed for every invalid identity component");
+        const uintptr_t fpBoundaryBase =
+            std::numeric_limits<uintptr_t>::max() -
+            kReachFpCameraWorkspaceRva;
+        const ReachFpNestedSelectorInput boundaryFpNested{
+            fpBoundaryBase,
+            kReachRetailImageSize,
+            fpBoundaryBase + kReachFpCameraWorkspaceRva,
+            fpBoundaryBase + kReachFpCameraWorkspaceCallbackRva,
+            fpBoundaryBase + kReachFpCameraViewRva};
+        Check(selectFpNested(boundaryFpNested) ==
+                  std::numeric_limits<uintptr_t>::max(),
+            "Reach FP camera selector accepts the last non-overflowing nested workspace");
+
         ReachRenderCandidateProof proof =
             CompleteReachRenderCandidateProof();
         Check(ReachRenderCandidateProofComplete(proof),
@@ -789,6 +881,7 @@ int main()
                proofRejects([](auto& p) { p.fpCameraUploadMatchCount = 2; }) &&
                proofRejects([](auto& p) { p.fpCameraUploadAtExpectedRva = false; }) &&
                proofRejects([](auto& p) { p.fpCameraUploadBodyHash = false; }) &&
+               proofRejects([](auto& p) { p.fpCameraWrapperBodyHashes = false; }) &&
                proofRejects([](auto& p) { p.exactFpCameraFlowEdges = false; }) &&
                proofRejects([](auto& p) { p.exactOuterCallerEdges = false; }) &&
               proofRejects([](auto& p) { p.exactInnerCallerEdge = false; }) &&

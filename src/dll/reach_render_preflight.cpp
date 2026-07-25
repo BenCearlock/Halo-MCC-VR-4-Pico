@@ -63,7 +63,7 @@ namespace
          kReachDisplaySurfaceArrayOffset + sizeof(uintptr_t)},
         {kReachDisplaySelectedRtvRva, sizeof(uintptr_t)},
         {kReachPatchyFogFlagsRva, sizeof(uint8_t)},
-        {kReachFpCompactCameraRva, kReachCompactCameraSize},
+        {kReachFpCameraWorkspaceRva, kReachRenderScopeSnapshotSize},
     };
 
     bool IsReadableProtection(DWORD protection) noexcept
@@ -568,6 +568,14 @@ bool ReachRender_RunLoadedImagePreflight(
     }
     result.proof.retailIdentity = true;
 
+    bool fpCameraWrappersExecutable = true;
+    for (const ReachFpCameraWrapperBody& wrapper :
+         kReachFpCameraWrapperBodies)
+    {
+        fpCameraWrappersExecutable = ExecutableContains(
+            image, wrapper.rva, wrapper.size) &&
+            fpCameraWrappersExecutable;
+    }
     if (!ExecutableContains(
             image, kReachMainRenderViewRva,
             kReachMainRenderViewBodySize) ||
@@ -582,7 +590,8 @@ bool ReachRender_RunLoadedImagePreflight(
             kReachFpCameraRebuildBodySize) ||
         !ExecutableContains(
             image, kReachFpCameraUploadRva,
-            kReachFpCameraUploadBodySize))
+            kReachFpCameraUploadBodySize) ||
+        !fpCameraWrappersExecutable)
     {
         result.failure = ReachLoadedImageFailure::ExecutableSections;
         return false;
@@ -659,10 +668,20 @@ bool ReachRender_RunLoadedImagePreflight(
             moduleBase + kReachFpCameraUploadRva),
         kReachFpCameraUploadBodySize,
         kReachFpCameraUploadBodySha256);
+    result.proof.fpCameraWrapperBodyHashes = true;
+    for (const ReachFpCameraWrapperBody& wrapper :
+         kReachFpCameraWrapperBodies)
+    {
+        result.proof.fpCameraWrapperBodyHashes = HashBytes(
+            reinterpret_cast<const void*>(moduleBase + wrapper.rva),
+            wrapper.size, wrapper.sha256) &&
+            result.proof.fpCameraWrapperBodyHashes;
+    }
     if (!result.proof.mainRenderViewBodyHash ||
         !result.proof.playerViewRenderBodyHash ||
         !result.proof.fpCameraRebuildBodyHash ||
-        !result.proof.fpCameraUploadBodyHash)
+        !result.proof.fpCameraUploadBodyHash ||
+        !result.proof.fpCameraWrapperBodyHashes)
     {
         result.failure = ReachLoadedImageFailure::BodyIdentity;
         return false;
@@ -692,10 +711,10 @@ bool ReachRender_RunLoadedImagePreflight(
             kReachFpCameraUploadRva, 0xE9) &&
         CheckRipRelativeLea(
             moduleBase, moduleSize, kReachFpCameraCompactLeaRva,
-            0x05, kReachFpCompactCameraRva) &&
+            0x05, kReachFpCameraWorkspaceRva) &&
         CheckRipRelativeLea(
             moduleBase, moduleSize, kReachFpCameraUploadCompactLeaRva,
-            0x0D, kReachFpCompactCameraRva);
+            0x0D, kReachFpCameraWorkspaceRva);
     if (!result.proof.exactFpCameraFlowEdges)
     {
         result.failure = ReachLoadedImageFailure::CallerEdges;
