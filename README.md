@@ -1,5 +1,7 @@
 REACH IS BEING WORKED ON, DO NOT ACCEPT FIXES OF THIS MOD FROM OUTSIDE SOURCES WE DON'T KNOW WHATS IN IT
 
+Try updating to Steam VR Beta, A user has reported that it fixes the double vision!
+
 If experiencing stutter install this with steam vr as default runtime 
 https://github.com/mbucchia/Quad-Views-Foveated
 EVEN IF YOU DONT HAVE EYE TRACKING JUST MAKE SURE YOUR HEADSET IS COMPATIBLE 
