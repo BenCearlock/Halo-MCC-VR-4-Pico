@@ -261,10 +261,12 @@ int main()
                   kReachEliteFpBodyBoneMap == expectedElite,
             "Reach production fingerprints match independent full evidence literals");
         Check(expectedSpartan[6] == 6 && expectedSpartan[7] == 9 &&
-                  expectedSpartan[11] == 13 &&
+                  expectedSpartan[8] == 10 && expectedSpartan[11] == 13 &&
+                  expectedSpartan[13] == 14 &&
                   expectedSpartan[4] == 5 && expectedSpartan[10] == 7 &&
                   expectedSpartan[14] == 11 && expectedSpartan[5] == 4 &&
                   expectedElite[6] == 6 && expectedElite[9] == 9 &&
+                  expectedElite[10] == 10 && expectedElite[11] == 14 &&
                   expectedElite[14] == 13 &&
                   expectedElite[4] == 5 && expectedElite[7] == 7 &&
                   expectedElite[13] == 11 && expectedElite[5] == 4,
@@ -294,26 +296,47 @@ int main()
             "Reach Spartan maps exact hand descendants into source order");
         Check(kReachLeftControllerOwnedAuxiliarySourceMask ==
                       0x00000000000011A0ull &&
+                  kReachRightControllerOwnedAuxiliarySourceMask ==
+                      0x0000000000004640ull &&
                   spartan.leftControllerOwnedSourceBranch ==
                       0x000003E0F81F99A0ull &&
+                  spartan.rightControllerOwnedSourceBranch ==
+                      0x00007C1F07E06640ull &&
                   (spartan.leftControllerOwnedSourceBranch ^
                    spartan.leftHandSourceDescendants) ==
                       kReachLeftControllerOwnedAuxiliarySourceMask &&
+                  (spartan.rightControllerOwnedSourceBranch ^
+                   spartan.rightHandSourceDescendants) ==
+                      kReachRightControllerOwnedAuxiliarySourceMask &&
                   (spartan.leftControllerOwnedSourceBranch &
                    ~spartan.leftHandSourceDescendants) ==
                       kReachLeftControllerOwnedAuxiliarySourceMask &&
+                  (spartan.rightControllerOwnedSourceBranch &
+                   ~spartan.rightHandSourceDescendants) ==
+                      kReachRightControllerOwnedAuxiliarySourceMask &&
                   (spartan.leftHandSourceDescendants &
                    kReachLeftControllerOwnedAuxiliarySourceMask) == 0 &&
+                  (spartan.rightHandSourceDescendants &
+                   kReachRightControllerOwnedAuxiliarySourceMask) == 0 &&
                   (spartan.leftControllerOwnedSourceBranch &
                    spartan.rightHandSourceDescendants) == 0 &&
+                  (spartan.leftControllerOwnedSourceBranch &
+                   spartan.rightControllerOwnedSourceBranch) == 0 &&
                   (spartan.leftControllerOwnedSourceBranch >>
+                   spartan.paletteBodyNodeCount) == 0 &&
+                  (spartan.rightControllerOwnedSourceBranch >>
                    spartan.paletteBodyNodeCount) == 0,
-            "Reach Spartan left controller owns the exact hidden skin-influence closure");
+            "Reach Spartan controllers own the exact hidden skin-influence closures");
         auto brokenSpartanOwnership = spartan;
         brokenSpartanOwnership.leftControllerOwnedSourceBranch ^=
             uint64_t{1} << 12;
         Check(!brokenSpartanOwnership.Valid(),
             "Reach Spartan rejects an incomplete left controller influence branch");
+        auto brokenSpartanRightOwnership = spartan;
+        brokenSpartanRightOwnership.rightControllerOwnedSourceBranch ^=
+            uint64_t{1} << 14;
+        Check(!brokenSpartanRightOwnership.Valid(),
+            "Reach Spartan rejects an incomplete right controller influence branch");
         Check((spartan.leftHandSourceDescendants &
                    (uint64_t{1} << spartan.leftWristSource)) != 0 &&
                   (spartan.rightHandSourceDescendants &
@@ -377,19 +400,33 @@ int main()
             "Reach Elite maps exact hand sets and appended held-object range");
         Check(elite.leftControllerOwnedSourceBranch ==
                       0x0000001E1E0F99A0ull &&
+                  elite.rightControllerOwnedSourceBranch ==
+                      0x000001E1E1F06640ull &&
                   (elite.leftControllerOwnedSourceBranch ^
                    elite.leftHandSourceDescendants) ==
                       kReachLeftControllerOwnedAuxiliarySourceMask &&
+                  (elite.rightControllerOwnedSourceBranch ^
+                   elite.rightHandSourceDescendants) ==
+                      kReachRightControllerOwnedAuxiliarySourceMask &&
                   (elite.leftControllerOwnedSourceBranch &
                    ~elite.leftHandSourceDescendants) ==
                       kReachLeftControllerOwnedAuxiliarySourceMask &&
+                  (elite.rightControllerOwnedSourceBranch &
+                   ~elite.rightHandSourceDescendants) ==
+                      kReachRightControllerOwnedAuxiliarySourceMask &&
                   (elite.leftHandSourceDescendants &
                    kReachLeftControllerOwnedAuxiliarySourceMask) == 0 &&
+                  (elite.rightHandSourceDescendants &
+                   kReachRightControllerOwnedAuxiliarySourceMask) == 0 &&
                   (elite.leftControllerOwnedSourceBranch &
                    elite.rightHandSourceDescendants) == 0 &&
+                  (elite.leftControllerOwnedSourceBranch &
+                   elite.rightControllerOwnedSourceBranch) == 0 &&
                   (elite.leftControllerOwnedSourceBranch >>
+                   elite.paletteBodyNodeCount) == 0 &&
+                  (elite.rightControllerOwnedSourceBranch >>
                    elite.paletteBodyNodeCount) == 0,
-            "Reach Elite left controller owns the exact shared hidden arm branch");
+            "Reach Elite controllers own the exact shared hidden arm branches");
         Check((elite.leftHandSourceDescendants &
                    (uint64_t{1} << elite.leftWristSource)) != 0 &&
                   (elite.rightHandSourceDescendants &

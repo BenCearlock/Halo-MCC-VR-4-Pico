@@ -143,6 +143,44 @@ The head-turn drift remains the separate prepared-target rebase defect described
 above and is not stacked into this wrist candidate. `754b34b` is failed and does
 not advance the accepted pointer.
 
+### Partial Reach left-wrist anchor pass / residual right-wrist result - 2026-07-25
+
+Candidate `765604cc631a1c0042a468738c7545ffbbd9208a` replaced the failed
+left-branch behavior by co-locating all four hidden left-arm skin influences at
+the solved left wrist before their tiny collapse. Its exact packaged and
+deployed identity was:
+
+| Identity | Value |
+| --- | --- |
+| Candidate package | `out/candidates/765604c-reach-fp-parity-20260725-121927950Z` |
+| `halo3xr.dll` SHA-256 | `196BE16C85D2837DA9E8822FC896122F6CFC47653196FD020F9D0109D2F804AE` |
+| `halo3xr_launcher.exe` SHA-256 | `C09CC08C8B6463A356BE05567374EBDB0426F2F1379B2ADAB59CB93AB2671C2B` |
+| Headset result | The left-hand ribbon was fixed, while the equivalent severe stretched strip remained at the right/weapon wrist |
+
+The installed hashes and first log line matched this exact source. Reach again
+reported the Spartan 47-over-52 private palette, exact native weapon-IK bypass,
+and both-eye nested world FP projection, with zero frame-order failures and
+clean teardown. The preserved log is
+`out/test-runs/765604c-reach-left-pass-right-wrist-fail-20260725-122522Z/halo3xr.log`,
+SHA-256 `7E18D3D53127A1B5235B99C4395E01DA9C8296CDE5CFCE55B5B228F02D730F57`.
+
+The same official HREK exports independently resolve the right artifact.
+Spartan has 59 `r_forearm`/`r_hand` cross-weight vertices over 96 triangles and
+71 right `spartan_rubber_suit` vertices over 103 multi-auxiliary triangles.
+Elite has 51 cross-weight vertices over 83 triangles and 75 right body vertices
+over 99 multi-auxiliary triangles. Those right auxiliary output nodes map in
+both official graphs to sources `{6,9,10,14}`
+(`r_upperarm/r_forearm/r_humerus/r_radius`), exact mask `0x4640`; the solved
+right wrist is source 13. Appended held objects begin only after body prefix 47
+for Spartan or 41 for Elite, so this mask cannot touch the weapon. The forward
+candidate retains the headset-confirmed left anchor and applies the identical
+wrist-local collapse only to this independently proven hidden right set.
+
+The physical-head-turn drift remains a separate prepared-target rebase defect
+and is still not stacked into the wrist work. `765604c` is a narrow left-wrist
+headset pass but not a cumulative accepted candidate; the accepted pointer
+remains `a5524d3fe58e4ed5507c27429ccca52a3d4fdf7d`.
+
 ### Failed Reach final-palette-only candidate - 2026-07-24
 
 Candidate `abea61f0daf2b70ba779a40a3a2ad72b3debf121` implemented the

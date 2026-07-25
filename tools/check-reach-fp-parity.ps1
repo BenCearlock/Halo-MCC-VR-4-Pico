@@ -32,6 +32,8 @@ $forbidden = [ordered]@{
         'ReachFpCameraRebuildBody[\s\S]*?PublishReachFpCameraUpload\(scope\)[\s\S]*?g_reachFpCameraUpload\(compact,\s*derived\)'
     'hidden left-arm ownership admitted into the visible keep mask' =
         'const\s+uint64_t\s+keep\s*=[^;]*leftControllerOwnedSourceBranch'
+    'hidden right-arm ownership admitted into the visible keep mask' =
+        'const\s+uint64_t\s+keep\s*=[^;]*rightControllerOwnedSourceBranch'
     'hidden left-arm branch receives the visible-hand rigid delta' =
         'if\s*\(!\(\s*leftControllerOwnedSourceBranch\s*&'
 }
@@ -94,10 +96,20 @@ $requiredGame = [ordered]@{
         'const\s+uint64_t\s+keep=fp\.wristDescendants\|\s*fp\.lWristDescendants'
     'Reach hidden influence branch derived from exact ownership' =
         'const\s+uint64_t\s+hiddenLeft=\s*context\.layout\.leftControllerOwnedSourceBranch&\s*~fp\.lWristDescendants'
+    'Reach hidden right influence branch derived from exact ownership' =
+        'const\s+uint64_t\s+hiddenRight=\s*context\.layout\.rightControllerOwnedSourceBranch&\s*~fp\.wristDescendants'
     'Reach hidden influences collapse at solved left wrist' =
         'BoneMatrix\s+collapsedAtLeftWrist=\s*g_fpPaletteScratch\[fp\.lWrist\];\s*collapsedAtLeftWrist\.scale=0\.0001f;'
+    'Reach hidden influences collapse at solved right wrist' =
+        'BoneMatrix\s+collapsedAtRightWrist=\s*g_fpPaletteScratch\[fp\.wrist\];\s*collapsedAtRightWrist\.scale=0\.0001f;'
     'Reach hidden influence records use wrist collapse anchor' =
         'if\s*\(i<64\s*&&\s*\(hiddenLeft&\(uint64_t\{1\}<<i\)\)\)\s*\{\s*g_fpPaletteScratch\[i\]=\s*collapsedAtLeftWrist;'
+    'Reach hidden right influence records use wrist collapse anchor' =
+        'else\s+if\s*\(i<64\s*&&\s*\(hiddenRight&\(uint64_t\{1\}<<i\)\)\)\s*\{\s*g_fpPaletteScratch\[i\]=\s*collapsedAtRightWrist;'
+    'Reach hidden wrist anchoring excludes hands and held objects' =
+        'if\s*\(!hand\s*&&\s*!held\)\s*\{[\s\S]*?hiddenLeft[\s\S]*?hiddenRight'
+    'Reach layout identity includes right controller ownership' =
+        'a\.rightControllerOwnedSourceBranch==\s*b\.rightControllerOwnedSourceBranch'
     'Reach layout identity includes left controller ownership' =
         'a\.leftControllerOwnedSourceBranch==\s*b\.leftControllerOwnedSourceBranch'
 }
@@ -119,6 +131,10 @@ $requiredLogic = [ordered]@{
         'proof\.fpCameraWrapperBodyHashes'
     'exact hidden left-arm influence source mask' =
         'kReachLeftControllerOwnedAuxiliarySourceMask\s*=\s*0x00000000000011A0ull'
+    'exact hidden right-arm influence source mask' =
+        'kReachRightControllerOwnedAuxiliarySourceMask\s*=\s*0x0000000000004640ull'
+    'resolved right controller ownership union' =
+        'layout\.rightControllerOwnedSourceBranch\s*=\s*rightSourceMask\s*\|\s*kReachRightControllerOwnedAuxiliarySourceMask'
     'resolved left controller ownership union' =
         'layout\.leftControllerOwnedSourceBranch\s*=\s*leftSourceMask\s*\|\s*kReachLeftControllerOwnedAuxiliarySourceMask'
 }

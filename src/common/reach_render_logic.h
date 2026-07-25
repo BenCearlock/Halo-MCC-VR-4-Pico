@@ -211,14 +211,15 @@ inline constexpr uint64_t kReachEliteLeftHandPaletteMask =
     0x000000568F9A2000ull;
 inline constexpr uint64_t kReachEliteRightHandPaletteMask =
     0x000001A97065C000ull;
-// The official Spartan and Elite FP graphs share this exact hidden left-arm
-// source prefix: l_upperarm=5, l_forearm=7, l_humerus=8, l_radius=12. HREK
-// vertex weights prove these four nodes close every skinning edge from the
-// visible left-hand subtree. They remain outside the visible hand mask, but
-// Reach must co-locate their collapsed records at the solved left wrist so
-// blended glove/undersuit vertices cannot bridge several hidden joint pivots.
+// The official Spartan and Elite FP graphs share these exact hidden arm-source
+// prefixes. HREK vertex weights prove each four-node set closes the skinning
+// edges from its visible hand subtree. They remain outside the visible masks,
+// but Reach must co-locate their collapsed records at the corresponding solved
+// wrist so blended glove/undersuit vertices cannot bridge separate pivots.
 inline constexpr uint64_t kReachLeftControllerOwnedAuxiliarySourceMask =
     0x00000000000011A0ull;
+inline constexpr uint64_t kReachRightControllerOwnedAuxiliarySourceMask =
+    0x0000000000004640ull;
 
 enum class ReachFpBodyKind : uint8_t
 {
@@ -243,6 +244,7 @@ struct ReachFpBodyLayout
     uint64_t leftHandPaletteDescendants = 0;
     uint64_t rightHandSourceDescendants = 0;
     uint64_t leftHandSourceDescendants = 0;
+    uint64_t rightControllerOwnedSourceBranch = 0;
     uint64_t leftControllerOwnedSourceBranch = 0;
 
     constexpr bool Valid() const noexcept
@@ -259,13 +261,21 @@ struct ReachFpBodyLayout
         return
             liveSourceNodeCount >= paletteBodyNodeCount &&
             liveSourceNodeCount <= kReachFpMaxSourceNodeCount &&
+            rightControllerOwnedSourceBranch ==
+                (rightHandSourceDescendants |
+                 kReachRightControllerOwnedAuxiliarySourceMask) &&
             leftControllerOwnedSourceBranch ==
                 (leftHandSourceDescendants |
                  kReachLeftControllerOwnedAuxiliarySourceMask) &&
+            (rightHandSourceDescendants &
+             kReachRightControllerOwnedAuxiliarySourceMask) == 0 &&
             (leftHandSourceDescendants &
              kReachLeftControllerOwnedAuxiliarySourceMask) == 0 &&
             (leftControllerOwnedSourceBranch &
              rightHandSourceDescendants) == 0 &&
+            (rightControllerOwnedSourceBranch &
+             leftControllerOwnedSourceBranch) == 0 &&
+            (rightControllerOwnedSourceBranch & ~bodySourceMask) == 0 &&
             (leftControllerOwnedSourceBranch & ~bodySourceMask) == 0;
     }
 };
@@ -352,6 +362,8 @@ inline bool ResolveReachFpBodyLayout(
     layout.leftHandPaletteDescendants = leftPaletteMask;
     layout.rightHandSourceDescendants = rightSourceMask;
     layout.leftHandSourceDescendants = leftSourceMask;
+    layout.rightControllerOwnedSourceBranch =
+        rightSourceMask | kReachRightControllerOwnedAuxiliarySourceMask;
     layout.leftControllerOwnedSourceBranch =
         leftSourceMask | kReachLeftControllerOwnedAuxiliarySourceMask;
     out = layout;

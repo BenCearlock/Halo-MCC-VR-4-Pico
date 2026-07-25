@@ -10811,6 +10811,8 @@ namespace
             a.cameraControlSource==b.cameraControlSource &&
             a.rightHandSourceDescendants==b.rightHandSourceDescendants &&
             a.leftHandSourceDescendants==b.leftHandSourceDescendants &&
+            a.rightControllerOwnedSourceBranch==
+                b.rightControllerOwnedSourceBranch &&
             a.leftControllerOwnedSourceBranch==
                 b.leftControllerOwnedSourceBranch;
     }
@@ -11456,9 +11458,15 @@ namespace
                         const uint64_t hiddenLeft=
                             context.layout.leftControllerOwnedSourceBranch&
                             ~fp.lWristDescendants;
+                        const uint64_t hiddenRight=
+                            context.layout.rightControllerOwnedSourceBranch&
+                            ~fp.wristDescendants;
                         BoneMatrix collapsedAtLeftWrist=
                             g_fpPaletteScratch[fp.lWrist];
                         collapsedAtLeftWrist.scale=0.0001f;
+                        BoneMatrix collapsedAtRightWrist=
+                            g_fpPaletteScratch[fp.wrist];
+                        collapsedAtRightWrist.scale=0.0001f;
                         for (int i=0;i<fp.count;++i)
                         {
                             const bool hand=i<64 &&
@@ -11472,6 +11480,12 @@ namespace
                                 {
                                     g_fpPaletteScratch[i]=
                                         collapsedAtLeftWrist;
+                                }
+                                else if (i<64 &&
+                                         (hiddenRight&(uint64_t{1}<<i)))
+                                {
+                                    g_fpPaletteScratch[i]=
+                                        collapsedAtRightWrist;
                                 }
                                 else
                                 {
