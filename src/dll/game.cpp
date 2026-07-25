@@ -11242,6 +11242,12 @@ namespace
         MultiplyBases(swing,baseTarget.rotation,rotated);
         alignedTarget=baseTarget;
         memcpy(alignedTarget.rotation,rotated,sizeof(rotated));
+        const float scale=kReachWorldUnitsPerMeter;
+        const float forward=kReachMuzzleForwardMeters*scale;
+        const float left=kReachMuzzleLeftMeters*scale;
+        for (int axis=0;axis<3;++axis)
+            alignedTarget.translation[axis]+=alignedTarget.rotation[axis]*forward+
+                alignedTarget.rotation[3+axis]*left;
         return ReachBoneMatrixFinite(alignedTarget);
     }
 
