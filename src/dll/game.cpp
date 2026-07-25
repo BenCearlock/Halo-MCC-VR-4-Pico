@@ -3061,6 +3061,89 @@ namespace
         });
     }
 
+    // Reach's live source contains a fixed body prefix followed by held-object
+    // nodes. Give each hand one owner: right hand plus weapon on the right
+    // controller, left hand alone on the left controller. The exact body-palette
+    // path below remains responsible for shoulder and forearm articulation.
+    bool ReachApplySeparatedHandGraph(
+        const BoneMatrix& root,
+        const BoneMatrix& rightTarget, float rightScale,
+        const BoneMatrix& leftTarget, bool leftValid, float leftScale,
+        const ReachFpBodyLayout& layout, BoneMatrix* bones, int count)
+    {
+        if (!bones || count<=0 || count>120 || !layout.Valid() ||
+            layout.liveSourceNodeCount!=static_cast<size_t>(count) ||
+            !layout.rightHandSourceDescendants ||
+            (layout.rightHandSourceDescendants&
+             layout.leftHandSourceDescendants) ||
+            !isfinite(rightScale) || rightScale<=0.0f ||
+            (leftValid &&
+             (!layout.leftHandSourceDescendants ||
+              !isfinite(leftScale) || leftScale<=0.0f)))
+            return false;
+
+        BoneMatrix candidate[120]{};
+        memcpy(candidate,bones,static_cast<size_t>(count)*sizeof(BoneMatrix));
+        BoneMatrix inverseRoot{};
+        if (!InvertBoneMatrix(root,inverseRoot)) return false;
+
+        auto seat=[&](int anchor, const BoneMatrix& target, float scale,
+                      ReachFpSourceOwner owner)->bool
+        {
+            BoneMatrix wristWorld{},inverseWristWorld{},worldDelta{};
+            BoneMatrix deltaTimesRoot{},localDelta{};
+            if (!ComposeBoneMatrices(root,bones[anchor],wristWorld) ||
+                !InvertBoneMatrix(wristWorld,inverseWristWorld) ||
+                !ComposeBoneMatrices(target,inverseWristWorld,worldDelta) ||
+                !ComposeBoneMatrices(worldDelta,root,deltaTimesRoot) ||
+                !ComposeBoneMatrices(inverseRoot,deltaTimesRoot,localDelta))
+                return false;
+
+            for (int i=0;i<count;++i)
+            {
+                if (ReachFpSourceOwnerForNode(layout,i)!=owner) continue;
+                BoneMatrix transformed{};
+                if (!ComposeBoneMatrices(localDelta,bones[i],transformed))
+                    return false;
+                candidate[i]=transformed;
+            }
+
+            if (scale!=1.0f)
+            {
+                const float anchorPoint[3]={
+                    candidate[anchor].translation[0],
+                    candidate[anchor].translation[1],
+                    candidate[anchor].translation[2]};
+                for (int i=0;i<count;++i)
+                {
+                    if (ReachFpSourceOwnerForNode(layout,i)!=owner) continue;
+                    for (int axis=0;axis<3;++axis)
+                        candidate[i].translation[axis]=anchorPoint[axis]+
+                            (candidate[i].translation[axis]-anchorPoint[axis])*scale;
+                    candidate[i].scale*=scale;
+                }
+            }
+            return true;
+        };
+
+        if (!seat(layout.rightWristSource,rightTarget,rightScale,
+                  ReachFpSourceOwner::RightHandAndWeapon))
+            return false;
+        if (leftValid &&
+            !seat(layout.leftWristSource,leftTarget,leftScale,
+                  ReachFpSourceOwner::LeftHand))
+            return false;
+
+        const std::span<const float> packed{
+            reinterpret_cast<const float*>(candidate),
+            static_cast<size_t>(count)*kReachFpBoneMatrixFloatCount};
+        return ReachFpCommitGraphIfFinite(
+            packed,static_cast<size_t>(count),[&]() {
+                memcpy(bones,candidate,static_cast<size_t>(count)*sizeof(BoneMatrix));
+                return true;
+            });
+    }
+
     bool ApplyControllerToMarkerBonesFromRoot(
         BoneMatrix root, BoneMatrix* bones, int count, int wrist,
         int leftWrist, bool dual)
@@ -10950,10 +11033,12 @@ namespace
                 markerTargets.rightWrist,
                 context.untouchedLive[context.layout.rightWristSource],
                 alignedRight)) return;
-        if (!ApplyControllerToMarkerBonesWithTarget(
-                markerTargets.centerRoot,alignedRight,
-                markerTargets.rightScale,context.source,count,
-                context.layout.rightWristSource))
+        if (!ReachApplySeparatedHandGraph(
+                markerTargets.centerRoot,
+                alignedRight,markerTargets.rightScale,
+                markerTargets.leftWrist,markerTargets.leftWristValid,
+                markerTargets.leftScale,context.layout,
+                context.source,count))
         {
             SafeWriteBytes(context.source,context.untouchedLive,liveBytes);
             return;

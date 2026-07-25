@@ -336,8 +336,17 @@ A newly observed exact layout is recorded stock-only with its prepared serial.
 It may activate only on a later stereo pair; the frozen pair selection and
 explicit head-centre/right/left targets are shared by both eyes. Unknown,
 altered, stale-generation, non-finite, out-of-range, or unsupported palettes
-remain stock. Only the exact body palette receives articulated scratch data;
-held-weapon and attachment palettes consume the coherently rigid live graph.
+remain stock. Only the exact body palette receives articulated scratch data. The live source
+uses the same proven body prefix and appended held-object boundary, but it no
+longer has one whole-graph wrist owner: exact right-hand descendants plus every
+appended held-object/attachment node receive the right-wrist delta, exact
+left-hand descendants receive the left-wrist delta, and the remaining body nodes
+stay stock for the body-palette arm solve. The two source-space hand masks are
+required to be nonempty and disjoint; any invalid layout or non-finite candidate
+falls open without a partial write. This matches Halo 3's player-visible
+ownership: right hand and gun on the right controller, left support hand on the
+left controller, with each forearm solved to its own wrist.
+
 The cache key includes the interpolation view/id/slot, source pointer, live
 count, title generation, and learned body tag. A known body-tag mismatch restores
 the complete untouched live graph immediately and invalidates activation only at
@@ -345,6 +354,16 @@ the next pair boundary; unrelated palettes, including equal-count attachments,
 do not consume or invalidate the body context.
 `arm_ik=1` solves both shoulder-elbow-wrist chains, while `arm_ik=0` retains rigid
 controller parenting. Missing left tracking leaves the authored left arm.
+
+The exact dirty runtime `e08b538f...-dirty` (installed DLL SHA-256
+`236D06940F47E38876A54DF4AFE07E4C484AED2E025865AF55121E022E1772AC`)
+rejected the previous whole-graph ownership model in-headset. Its log proved
+both raw OpenXR poses valid/tracked, a correctly sided and moving left target,
+zero target error for both body-palette wrist solves, and an active live-graph
+path, while the user still saw the left forearm move with the hand stuck to the
+gun/right-hand assembly. That result is preserved under
+`out/test-runs/e08b538-dirty-reach-hands-parented-20260725-040508Z`. It rules
+out another tracking/target/IK probe and directly motivates the partition above.
 
 The `f19f39e` root-only assumption is rejected. It called a locking pose getter
 from the palette path, reapplied mount trim already present in the shared aim

@@ -43,9 +43,12 @@ milestone, not a public release or tag. The public known-good product remains
 ### Current unaccepted Reach two-arm IK candidate
 
 This source contains a production, no-probe Reach FP interpolation/palette
-candidate. It preserves the headset-passing camera/culling transaction, learns
-only exact Spartan/Elite body maps stock-only, rigidly carries the bounded live
-graph for markers and attachments, and articulates the exact body palette from
+candidate. It preserves the headset-passing camera/culling transaction and
+learns only exact Spartan/Elite body maps stock-only. To match Halo 3, the live
+graph has separate hand owners: exact right-hand descendants plus the appended
+held-object/attachment range follow the right controller, exact left-hand
+descendants follow the left controller, and shoulder/forearm nodes stay out of
+either rigid seat for the exact two-arm body-palette solve. Both paths consume
 one prepared-frame centre/right/left snapshot. Its pair scope is frozen at the
 admitted outer `main_render_view` boundary because Reach performs FP
 interpolation/palette preparation before entering `player_view_render`; the
@@ -59,6 +62,28 @@ and the clean package manifest supplies the exact commit and SHA-256. This entry
 does **not** advance the accepted pointer above. Reach campaign Spartan is the
 acceptance target; Elite is implemented fail-open but remains separately
 unclaimed. No install or launch is authorized by this entry.
+
+### Failed Reach whole-graph hand-parenting result - 2026-07-24
+
+This result is evidence only and does not advance the accepted pointer above.
+
+| Identity | Value |
+| --- | --- |
+| Tested runtime source | `e08b538f715a01d868a9460f05afae6a0cc0410e-dirty` |
+| `halo3xr.dll` SHA-256 | `236D06940F47E38876A54DF4AFE07E4C484AED2E025865AF55121E022E1772AC` |
+| Preserved failure evidence | `out/test-runs/e08b538-dirty-reach-hands-parented-20260725-040508Z` |
+| Headset result | The left forearm moved, but the left hand remained stuck to the gun/right-hand assembly instead of tracking independently |
+
+The runtime proved both OpenXR aim poses valid and tracked, put the left target
+on the correct side, and reported both exact body-palette wrists at their targets
+with zero error. The live graph also ran. Controller tracking, snapshot
+publication, and the analytic wrist solve are therefore ruled out. The failed
+source still assigned the right wrist whole-graph ownership and then attempted
+to peel the left subtree back off. That ownership model is rejected. The forward
+candidate partitions the already proven source ranges directly: right-hand plus
+appended held-object nodes go right, left-hand descendants go left, and all other
+body nodes remain for the exact body-palette arm solve. No further runtime probe
+is required.
 
 ### Failed Reach two-arm scope-timing result - 2026-07-24
 

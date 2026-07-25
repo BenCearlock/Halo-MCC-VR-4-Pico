@@ -197,6 +197,37 @@ struct ReachFpBodyLayout
     }
 };
 
+enum class ReachFpSourceOwner : uint8_t
+{
+    Stock = 0,
+    RightHandAndWeapon,
+    LeftHand,
+};
+
+// The body prefix and appended held-object range have different owners. Arm
+// joints outside either exact hand subtree remain stock for the body IK pass.
+inline constexpr ReachFpSourceOwner ReachFpSourceOwnerForNode(
+    const ReachFpBodyLayout& layout, int32_t sourceIndex) noexcept
+{
+    if (!layout.Valid() || sourceIndex < 0 ||
+        static_cast<size_t>(sourceIndex) >= layout.liveSourceNodeCount)
+        return ReachFpSourceOwner::Stock;
+
+    const uint64_t bit = sourceIndex < 64
+        ? uint64_t{1} << static_cast<uint32_t>(sourceIndex)
+        : 0;
+    const bool left = (layout.leftHandSourceDescendants & bit) != 0;
+    const bool right = (layout.rightHandSourceDescendants & bit) != 0;
+    if (left && right)
+        return ReachFpSourceOwner::Stock;
+    if (left)
+        return ReachFpSourceOwner::LeftHand;
+    if (right || static_cast<size_t>(sourceIndex) >=
+                     layout.paletteBodyNodeCount)
+        return ReachFpSourceOwner::RightHandAndWeapon;
+    return ReachFpSourceOwner::Stock;
+}
+
 inline bool ResolveReachFpBodyLayout(
     std::span<const int32_t> paletteBoneMap,
     size_t liveSourceNodeCount,

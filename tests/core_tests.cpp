@@ -284,6 +284,25 @@ int main()
                   spartan.rightHandSourceDescendants ==
                       0x00007C1F07E02000ull,
             "Reach Spartan maps exact hand descendants into source order");
+        Check(ReachFpSourceOwnerForNode(spartan,spartan.rightShoulderSource) ==
+                      ReachFpSourceOwner::Stock &&
+                  ReachFpSourceOwnerForNode(spartan,spartan.rightElbowSource) ==
+                      ReachFpSourceOwner::Stock &&
+                  ReachFpSourceOwnerForNode(spartan,spartan.leftShoulderSource) ==
+                      ReachFpSourceOwner::Stock &&
+                  ReachFpSourceOwnerForNode(spartan,spartan.leftElbowSource) ==
+                      ReachFpSourceOwner::Stock &&
+                  ReachFpSourceOwnerForNode(spartan,spartan.rightWristSource) ==
+                      ReachFpSourceOwner::RightHandAndWeapon &&
+                  ReachFpSourceOwnerForNode(spartan,spartan.leftWristSource) ==
+                      ReachFpSourceOwner::LeftHand &&
+                  ReachFpSourceOwnerForNode(spartan,47) ==
+                      ReachFpSourceOwner::RightHandAndWeapon &&
+                  ReachFpSourceOwnerForNode(spartan,64) ==
+                      ReachFpSourceOwner::RightHandAndWeapon &&
+                  ReachFpSourceOwnerForNode(spartan,65) ==
+                      ReachFpSourceOwner::Stock,
+            "Reach live graph gives each hand one controller owner and keeps arm joints stock");
     }
 
     {
