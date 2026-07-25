@@ -446,11 +446,17 @@ namespace
         BoneMatrix centerRoot{};
         BoneMatrix rightWrist{};
         BoneMatrix leftWrist{};
+        // Controller targets are published as a pre-head gameplay-base plus a
+        // tracked room offset. Reach's visible palette supplies a distinct,
+        // exact render root; rebase only the offset onto that root immediately
+        // before palette/marker composition.
+        float placementBase[3]{};
         float rightScale = 1.0f;
         float leftScale = 1.0f;
         bool centerRootValid = false;
         bool rightWristValid = false;
         bool leftWristValid = false;
+        bool placementBaseValid = false;
     };
     // One context per held-weapon slot: slot 0 is the primary (right-hand)
     // weapon, slot 1 is the dual-wield secondary (left-hand) weapon. The
@@ -10841,6 +10847,25 @@ namespace
         return ReachBoneMatrixFinite(out) && isfinite(meshScale);
     }
 
+    bool ReachRebasePreparedControllerTargets(
+        const BoneMatrix& renderRoot, FpExplicitPoseTargets& targets)
+    {
+        if (!targets.placementBaseValid || !ReachBoneMatrixFinite(renderRoot))
+            return false;
+        for (float component : targets.placementBase)
+            if (!isfinite(component)) return false;
+        auto rebase = [&](BoneMatrix& target, bool valid) {
+            if (!valid) return true;
+            if (!ReachBoneMatrixFinite(target)) return false;
+            for (int axis=0;axis<3;++axis)
+                target.translation[axis]=renderRoot.translation[axis]+(
+                    target.translation[axis]-targets.placementBase[axis]);
+            return ReachBoneMatrixFinite(target);
+        };
+        return rebase(targets.rightWrist,targets.rightWristValid) &&
+            rebase(targets.leftWrist,targets.leftWristValid);
+    }
+
     bool ReachAlignRightTargetToAuthoredBarrel(
         const BoneMatrix& baseTarget, const BoneMatrix& authoredWrist,
         BoneMatrix& alignedTarget)
@@ -10916,15 +10941,18 @@ namespace
             if (!ReachBoneMatrixFinite(context.untouchedLive[node]))
                 return;
         context.targets=g_reachFpPairScope.targets;
+        FpExplicitPoseTargets markerTargets=context.targets;
+        if (!ReachRebasePreparedControllerTargets(
+                markerTargets.centerRoot,markerTargets))
+            return;
         BoneMatrix alignedRight{};
         if (!ReachAlignRightTargetToAuthoredBarrel(
-                context.targets.rightWrist,
+                markerTargets.rightWrist,
                 context.untouchedLive[context.layout.rightWristSource],
                 alignedRight)) return;
-        context.targets.rightWrist=alignedRight;
         if (!ApplyControllerToMarkerBonesWithTarget(
-                context.targets.centerRoot,context.targets.rightWrist,
-                context.targets.rightScale,context.source,count,
+                markerTargets.centerRoot,alignedRight,
+                markerTargets.rightScale,context.source,count,
                 context.layout.rightWristSource))
         {
             SafeWriteBytes(context.source,context.untouchedLive,liveBytes);
@@ -11062,6 +11090,14 @@ namespace
                 const BoneMatrix* replacement=selectedSource;
                 FpExplicitPoseTargets targets=context.targets;
                 targets.centerRoot.scale=root->scale;
+                if (!ReachRebasePreparedControllerTargets(*root,targets))
+                {
+                    restoreStockAndInvalidate(false);
+                    ReachFpPaletteFn original=g_reachOrigFpPalette;
+                    if (original)
+                        original(tag,root,destination,unused,selectedSource,boneMap);
+                    return;
+                }
                 const bool reconstructed=ReconstructVisiblePaletteSource(
                     tag,fp,*root,source,replacement,&targets,
                     context.untouchedLive);
@@ -11279,6 +11315,9 @@ namespace
         }
 
         candidate.fpTargets={};
+        memcpy(candidate.fpTargets.placementBase,candidate.gameplayBasePosition,
+               sizeof(candidate.fpTargets.placementBase));
+        candidate.fpTargets.placementBaseValid=true;
         candidate.fpTargets.centerRootValid=ReachBuildCenterFpRoot(
             candidate.headCenter,candidate.fpTargets.centerRoot);
         candidate.fpTargets.rightWristValid=
