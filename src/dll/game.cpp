@@ -10023,6 +10023,10 @@ namespace
         AtomicBoneMatrix recordDelta{};
         std::atomic<uint32_t> generation{0};
     } g_reachFpMarkerQueryTransform;
+    std::atomic<uint64_t> g_reachFpMarkerQueryCalls{0};
+    std::atomic<uint64_t> g_reachFpMarkerQuerySlotAccepted{0};
+    std::atomic<uint64_t> g_reachFpMarkerQueryApplied{0};
+    std::atomic<uint64_t> g_reachFpMarkerQueryLogged{0};
 
     struct ReachFpStatus
     {
@@ -11542,9 +11546,11 @@ namespace
             __try
             {
                 ReachFpMarkerQueryFn original=g_reachOrigFpMarkerQuery;
-                if (original)
-                {
-                    original(firstPersonWeapon,markerIndex,output,firstPerson);
+            if (original)
+            {
+                original(firstPersonWeapon,markerIndex,output,firstPerson);
+                g_reachFpMarkerQueryCalls.fetch_add(
+                    1,std::memory_order_relaxed);
                     if (firstPerson && firstPersonWeapon && output &&
                         TitleAdapter_GetActiveTitle()==GameTitle::HaloReach &&
                         g_reachCamera.armed.load(std::memory_order_acquire) &&
@@ -11559,10 +11565,16 @@ namespace
                                 static_cast<unsigned char*>(firstPersonWeapon)+0x3C,
                                 &weaponDatum,sizeof(weaponDatum)))
                         {
-                            ReachFpWeaponSlotForDatumFn const slotForDatum=
-                                g_reachFpWeaponSlotForDatum;
-                            if (slotForDatum && slotForDatum(0,weaponDatum)==0)
-                                ReachApplyPublishedMarkerQueryTransform(output);
+                        ReachFpWeaponSlotForDatumFn const slotForDatum=
+                            g_reachFpWeaponSlotForDatum;
+                        if (slotForDatum && slotForDatum(0,weaponDatum)==0)
+                        {
+                            g_reachFpMarkerQuerySlotAccepted.fetch_add(
+                                1,std::memory_order_relaxed);
+                            if (ReachApplyPublishedMarkerQueryTransform(output))
+                                g_reachFpMarkerQueryApplied.fetch_add(
+                                    1,std::memory_order_relaxed);
+                        }
                         }
                     }
                 }
@@ -12725,6 +12737,10 @@ namespace
         g_reachOrigFpProjectileOriginDecision = nullptr;
         g_reachFpMarkerQueryTransform.generation.store(
             0, std::memory_order_release);
+        g_reachFpMarkerQueryCalls.store(0,std::memory_order_relaxed);
+        g_reachFpMarkerQuerySlotAccepted.store(0,std::memory_order_relaxed);
+        g_reachFpMarkerQueryApplied.store(0,std::memory_order_relaxed);
+        g_reachFpMarkerQueryLogged.store(0,std::memory_order_relaxed);
         g_reachFpStatus.key.store(0,std::memory_order_release);
         g_reachFpLoggedStatusKey.store(0,std::memory_order_release);
         g_reachFpCameraUploadStatus.preparedSerial.store(
@@ -13371,6 +13387,22 @@ namespace
 
     void LogReachFpStatusIfNew()
     {
+        const uint64_t markerCalls=g_reachFpMarkerQueryCalls.load(
+            std::memory_order_relaxed);
+        if (markerCalls && markerCalls!=g_reachFpMarkerQueryLogged.load(
+                std::memory_order_relaxed))
+        {
+            g_reachFpMarkerQueryLogged.store(markerCalls,
+                std::memory_order_relaxed);
+            LOG("Reach FP marker query diagnostics: calls=%llu slot0=%llu transforms=%llu",
+                static_cast<unsigned long long>(markerCalls),
+                static_cast<unsigned long long>(
+                    g_reachFpMarkerQuerySlotAccepted.load(
+                        std::memory_order_relaxed)),
+                static_cast<unsigned long long>(
+                    g_reachFpMarkerQueryApplied.load(
+                        std::memory_order_relaxed)));
+        }
         const uint64_t key=g_reachFpStatus.key.load(std::memory_order_acquire);
         if (!key || key==g_reachFpLoggedStatusKey.load(
                 std::memory_order_relaxed)) return;
