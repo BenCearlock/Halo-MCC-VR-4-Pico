@@ -218,6 +218,8 @@ void ConfigLoad(const wchar_t* path)
             g_config.game_brightness = (float)atof(val);
         else if (!strcmp(key, "resolution_scale"))
             g_config.resolution_scale = (float)atof(val);
+        else if (!strcmp(key, "fit_desktop_window"))
+            g_config.fit_desktop_window = atoi(val) != 0;
         else if (!strcmp(key, "draw_distance"))
             g_config.draw_distance = (float)atof(val);
         else if (!strcmp(key, "hud_size"))
@@ -493,6 +495,17 @@ void ConfigSave()
     fprintf(f, "# (default %.2f, range %.2f to %.2f)\n",
             d.resolution_scale, kResolutionScaleMin, kResolutionScaleMax);
     fprintf(f, "resolution_scale = %.2f\n\n", g_config.resolution_scale);
+    fprintf(f, "# Fit the desktop window to your monitor while the headset keeps the\n");
+    fprintf(f, "# full resolution_scale render above. Turn this on when your render is\n");
+    fprintf(f, "# larger than your monitor and MCC's menu (the \"Halo 3\" tile, Quit)\n");
+    fprintf(f, "# falls off the screen edge where you can't click it. MCC still draws\n");
+    fprintf(f, "# the full frame -- the headset picture and gun alignment do NOT change --\n");
+    fprintf(f, "# the window is just shrunk to fit and the GPU downscales into it (no\n");
+    fprintf(f, "# extra render pass, no measurable cost). 0 = off (default; the window\n");
+    fprintf(f, "# behaves exactly as before). CLOSE MCC COMPLETELY and relaunch after\n");
+    fprintf(f, "# changing this, the same as resolution_scale.\n");
+    fprintf(f, "# (default %d)\n", d.fit_desktop_window ? 1 : 0);
+    fprintf(f, "fit_desktop_window = %d\n\n", g_config.fit_desktop_window ? 1 : 0);
     fprintf(f, "# Draw distance: how far the game renders the whole scene, as a\n");
     fprintf(f, "# fraction of stock. Applies live to all three games (Halo 3, ODST,\n");
     fprintf(f, "# Reach). 1.00 = full stock draw distance. Lower brings the far plane\n");

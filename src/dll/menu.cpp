@@ -11,6 +11,7 @@
 #include "game.h"
 #include "title_adapter.h"
 #include "d3d_state.h"
+#include "d3d11_hook.h"
 #include "../common/log.h"
 #include "../common/config.h"
 
@@ -39,8 +40,84 @@ namespace
     // thread; this lock keeps the two from touching ImGui at the same time.
     CRITICAL_SECTION g_cs;
 
+    // Private message we post to the game window so the fit runs on the window's
+    // own (UI) thread, where touching window size/position is safe.
+    constexpr UINT kFitGameWindowMsg = WM_APP + 0x37;
+
+    // Fit the game window inside the primary monitor's work area, preserving the
+    // render aspect (kNativeRenderWidth:kNativeRenderHeight, constant because
+    // resolution_scale is uniform) so the downscaled desktop picture isn't
+    // distorted. This shrinks only the VISIBLE window; MCC keeps drawing the
+    // full-size frame into the forced full-size backbuffer (d3d11_hook.cpp), so
+    // the headset picture and the gun alignment are unchanged. Runs on the UI
+    // thread.
+    void FitGameWindow(HWND hwnd)
+    {
+        HMONITOR mon = MonitorFromWindow(hwnd, MONITOR_DEFAULTTOPRIMARY);
+        MONITORINFO mi{sizeof(mi)};
+        if (!GetMonitorInfo(mon, &mi))
+            return;
+        const int workW = mi.rcWork.right - mi.rcWork.left;
+        const int workH = mi.rcWork.bottom - mi.rcWork.top;
+        if (workW <= 0 || workH <= 0)
+            return;
+        const float aspect = (float)kNativeRenderWidth / (float)kNativeRenderHeight;
+        int w = workW;
+        int h = (int)((float)w / aspect + 0.5f);
+        if (h > workH)
+        {
+            h = workH;
+            w = (int)((float)h * aspect + 0.5f);
+        }
+        const int x = mi.rcWork.left + (workW - w) / 2;
+        const int y = mi.rcWork.top + (workH - h) / 2;
+        SetWindowPos(hwnd, nullptr, x, y, w, h, SWP_NOZORDER | SWP_NOACTIVATE);
+    }
+
+    // Mouse messages whose lParam is a client-area point. With the fit on the
+    // visible window is smaller than the render MCC thinks it is drawing into, so
+    // we scale these back up to render space before MCC sees them -- otherwise a
+    // click on the shrunken window would land on the wrong menu button.
+    bool ClientMouseMessage(UINT msg)
+    {
+        switch (msg)
+        {
+        case WM_MOUSEMOVE:
+        case WM_LBUTTONDOWN: case WM_LBUTTONUP: case WM_LBUTTONDBLCLK:
+        case WM_RBUTTONDOWN: case WM_RBUTTONUP: case WM_RBUTTONDBLCLK:
+        case WM_MBUTTONDOWN: case WM_MBUTTONUP: case WM_MBUTTONDBLCLK:
+            return true;
+        default:
+            return false;
+        }
+    }
+
+    LPARAM ScaleDesktopMouseToRender(HWND hwnd, LPARAM lp)
+    {
+        unsigned fw = 0, fh = 0;
+        D3D_GetForcedRenderSize(fw, fh);
+        if (!fw || !fh)
+            return lp;
+        RECT rc{};
+        if (!GetClientRect(hwnd, &rc)) // real (small) client -- not on the lie stack
+            return lp;
+        const int cw = rc.right - rc.left;
+        const int ch = rc.bottom - rc.top;
+        if (cw <= 0 || ch <= 0)
+            return lp;
+        const int x = (int)((long long)GET_X_LPARAM(lp) * (int)fw / cw);
+        const int y = (int)((long long)GET_Y_LPARAM(lp) * (int)fh / ch);
+        return MAKELPARAM((WORD)x, (WORD)y);
+    }
+
     LRESULT CALLBACK WndProcHook(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     {
+        // Fit request (posted from Menu_Init) -- run it here on the UI thread.
+        if (msg == kFitGameWindowMsg)
+        {
+            FitGameWindow(hwnd);
+            return 0;
+        }
         // Keep the game rendering and processing input while the user is in the
         // headset. Looking through the headset hands desktop focus to SteamVR,
         // and MCC (like most games) stops drawing and ignores input when it
@@ -63,6 +140,61 @@ namespace
             return 0;
         case WM_MOUSEACTIVATE:
             return MA_ACTIVATE;
+        case WM_WINDOWPOSCHANGING:
+            if (D3D_FitActive())
+            {
+                // MCC believes its client is full-size (we tell it so), so it may
+                // try to size the WINDOW to match and grow it back off-screen.
+                // Clamp any oversize request to a monitor fit. Genuine size
+                // changes only (user drags with SWP_NOSIZE are left alone).
+                WINDOWPOS* pos = (WINDOWPOS*)lp;
+                if (pos && !(pos->flags & SWP_NOSIZE))
+                {
+                    HMONITOR mon = MonitorFromWindow(hwnd, MONITOR_DEFAULTTOPRIMARY);
+                    MONITORINFO mi{sizeof(mi)};
+                    if (GetMonitorInfo(mon, &mi))
+                    {
+                        const int workW = mi.rcWork.right - mi.rcWork.left;
+                        const int workH = mi.rcWork.bottom - mi.rcWork.top;
+                        if (workW > 0 && workH > 0 && (pos->cx > workW || pos->cy > workH))
+                        {
+                            const float aspect =
+                                (float)kNativeRenderWidth / (float)kNativeRenderHeight;
+                            int w = workW;
+                            int h = (int)((float)w / aspect + 0.5f);
+                            if (h > workH) { h = workH; w = (int)((float)h * aspect + 0.5f); }
+                            pos->cx = w;
+                            pos->cy = h;
+                            pos->x = mi.rcWork.left + (workW - w) / 2;
+                            pos->y = mi.rcWork.top + (workH - h) / 2;
+                            pos->flags &= ~SWP_NOMOVE;
+                        }
+                    }
+                }
+            }
+            break;
+        case WM_SIZE:
+            if (D3D_FitActive())
+            {
+                // The window is smaller than the render. Tell MCC its client is
+                // still the full render size so it keeps drawing the full frame
+                // into the (forced full-size) backbuffer instead of shrinking to
+                // the corner -- the black-border crop. The GPU downscales the
+                // full frame into the small window on present. Bracket the call
+                // so our GetClientRect hook returns full ONLY to MCC's resize
+                // code on this stack (never to DXGI's present-time query).
+                unsigned fw = 0, fh = 0;
+                D3D_GetForcedRenderSize(fw, fh);
+                if (fw && fh)
+                {
+                    const LPARAM full = MAKELPARAM((WORD)fw, (WORD)fh);
+                    D3D_SetForcedClientLie(true);
+                    const LRESULT r = CallWindowProcW(g_origWndProc, hwnd, msg, wp, full);
+                    D3D_SetForcedClientLie(false);
+                    return r;
+                }
+            }
+            break;
         }
 
         // Hotkeys act on plain WM_KEYDOWN only. F10 is the one exception:
@@ -125,6 +257,11 @@ namespace
                 !(msg == WM_SYSKEYDOWN && wp == VK_F4))
                 return 0;
         }
+        // Only reached by mouse messages when the F1 menu is closed (the block
+        // above swallows them when it is open). Scale desktop clicks from the
+        // shrunken window up to render space so MCC's menu hit-testing matches.
+        if (D3D_FitActive() && ClientMouseMessage(msg))
+            lp = ScaleDesktopMouseToRender(hwnd, lp);
         return CallWindowProcW(g_origWndProc, hwnd, msg, wp, lp);
     }
 
@@ -457,6 +594,15 @@ namespace
                             "as does resolution_scale in halomccvr.cfg. Below 1.00x trades\n"
                             "sharpness for frame rate; above it supersamples.\n"
                             "Changing this requires a full game restart. Close MCC and relaunch.");
+        changed |= ImGui::Checkbox("Fit desktop window to my monitor",
+                                   &g_config.fit_desktop_window);
+        ImGui::TextDisabled(
+            "For monitors SMALLER than your render (e.g. a big headset resolution on\n"
+            "a 1080p screen), where MCC's window overflows and you can't click the\n"
+            "\"Halo 3\" tile or Quit. The headset keeps the full resolution above; only\n"
+            "the desktop window shrinks to fit and the GPU downscales into it (no\n"
+            "extra render pass, no measurable cost). OFF by default. Takes effect on\n"
+            "the next launch -- close MCC and relaunch.");
         changed |= ImGui::SliderFloat("Game brightness", &g_config.game_brightness, 0.5f, 2.0f, "%.2f");
         ImGui::TextDisabled("Brightens/darkens the whole game. 1.0 = the game's own brightness.");
         changed |= ImGui::Checkbox("Motion blur", &g_config.motion_blur);
@@ -596,6 +742,14 @@ bool Menu_Init(HWND gameWindow, ID3D11Device* device, ID3D11DeviceContext* conte
         LOG("menu: could not hook the game window procedure (%lu)", GetLastError());
         return false;
     }
+
+    // With the fit on, shrink the desktop window to the monitor now that we can
+    // catch its resizes. MCC created it at the full render size (which overflows
+    // small monitors and put the menu off-screen); the shrink keeps MCC drawing
+    // the full-size backbuffer while only the visible window fits. Posted so it
+    // runs on the UI thread.
+    if (D3D_FitActive())
+        PostMessageW(gameWindow, kFitGameWindowMsg, 0, 0);
 
     g_ready = true;
     LOG("menu ready (F1 to toggle)");

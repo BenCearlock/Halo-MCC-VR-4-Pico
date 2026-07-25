@@ -134,6 +134,18 @@ struct Config
     // The OpenXR projection remains at the headset's full size.
     float resolution_scale = 1.0f;
 
+    // Fit the desktop game window to your monitor while the HEADSET keeps
+    // rendering at the full resolution_scale size. On a monitor smaller than the
+    // render (e.g. an 8K render on a 1080p panel), MCC's window overflows the
+    // screen and its menu buttons ("Halo 3", Quit) land off the edge where the
+    // mouse can't reach them. With this on, MCC still draws the full-size frame
+    // (so the headset picture and the gun alignment never change) but the visible
+    // window is shrunk to fit and the GPU downscales the picture into it for free
+    // -- no extra render pass, no measurable cost. OFF by default; when off the
+    // desktop window behaves exactly as it always has. Like resolution_scale,
+    // this takes effect on the next game start (close MCC and relaunch).
+    bool fit_desktop_window = false;
+
     // Render draw-distance trim, applied live to every title's shared
     // render_far_clip_distance debug var (stock 10240 world units), resolved by
     // name — no hardcoded addresses. 1.00 = full stock draw distance (no
