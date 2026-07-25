@@ -12090,23 +12090,14 @@ namespace
             return false;
         }
 
-        uint8_t* const resolved = reinterpret_cast<uint8_t*>(
-            FindDebugVarFloat(
-                base, size, "debug_animation_fp_weapon_ik_disable"));
         const auto* entry = reinterpret_cast<const uint8_t*>(
             base + kReachFpWeaponIkDisableEntryRva);
         uintptr_t entryName = 0;
         uint64_t entryType = 0;
-        uintptr_t entryValue = 0;
         memcpy(&entryName, entry, sizeof(entryName));
         memcpy(&entryType, entry + 8, sizeof(entryType));
-        memcpy(&entryValue, entry + 16, sizeof(entryValue));
-        if (!resolved ||
-            reinterpret_cast<uintptr_t>(resolved) !=
-                base + kReachFpWeaponIkDisableValueRva ||
-            entryName != base + kReachFpWeaponIkDisableNameRva ||
-            entryType != kReachDebugBooleanType ||
-            entryValue != reinterpret_cast<uintptr_t>(resolved))
+        if (entryName != base + kReachFpWeaponIkDisableNameRva ||
+            entryType != kReachDebugBooleanType)
         {
             return false;
         }
@@ -12130,7 +12121,12 @@ namespace
         const uintptr_t disabledTarget = static_cast<uintptr_t>(
             static_cast<intptr_t>(base + kReachFpWeaponIkDisableBranchRva + 6) +
             branchDisplacement);
-        if (flagTarget != reinterpret_cast<uintptr_t>(resolved) ||
+        // HREK publishes a value pointer in its development debug descriptor;
+        // retail leaves that descriptor field unpublished. The shipping
+        // consumer instruction is the authoritative binding: decode its exact
+        // RIP-relative byte and require the pinned Reach-specific target.
+        uint8_t* const resolved = reinterpret_cast<uint8_t*>(flagTarget);
+        if (flagTarget != base + kReachFpWeaponIkDisableValueRva ||
             disabledTarget != base + kReachFpWeaponIkDisabledEpilogueRva ||
             !ReachColdExecutableAddress(disabledTarget) ||
             !SafeReadByte(resolved, &original) || original > 1)

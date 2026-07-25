@@ -498,6 +498,8 @@ if ($null -eq $nativeWeaponIk -or
             'debug_animation_fp_weapon_ik_disable' -or
         [int]$nativeWeaponIk.retail.control_type -ne 5 -or
         [int]$nativeWeaponIk.hrek.control_type -ne 5 -or
+        $nativeWeaponIk.retail.descriptor_value_pointer_published -ne $false -or
+        $nativeWeaponIk.hrek.descriptor_value_pointer_published -ne $true -or
         [string]$nativeWeaponIk.hrek.binary -cne
             [string]$cameraEvidence.name) {
     throw 'Reach native weapon-IK evidence identity is incomplete or inconsistent.'

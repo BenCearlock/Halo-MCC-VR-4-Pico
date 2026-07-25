@@ -382,9 +382,11 @@ compares that byte at RVA `0x008D3162`; its `JNE` at `0x008D3169` targets
 `0x008D338B`, the existing epilogue before the support-hand solve.
 
 Pinned retail repeats the exact semantic edge. The debug descriptor is at
-`0x00B3AEB8`, its name at `0x009F2AD8`, its type is `5`, and its runtime value
-slot is `0x04E38B61`. The following 39-byte executable AOB occurs exactly once
-at `0x002B506E`:
+`0x00B3AEB8`, its name at `0x009F2AD8`, and its type is `5`. Unlike HREK's
+development descriptor, retail leaves the descriptor value-pointer field
+unpublished. The shipping consumer nevertheless directly references runtime
+value slot `0x04E38B61`. The following 39-byte executable AOB occurs exactly
+once at `0x002B506E`:
 
 ```text
 41 0F B7 86 2C 53 00 00 66 85 C0 0F 8E 52 02 00 00 38 1D DC 3A B8 04 0F 85 46 02 00 00 48 8B 15 C6 88 99 00 0F BF C8
@@ -392,11 +394,13 @@ at `0x002B506E`:
 
 Its compare at `0x002B507F` resolves RIP-relative to `0x04E38B61`; its `JNE`
 at `0x002B5085` targets the existing no-weapon-IK epilogue at `0x002B52D1`.
-Production resolves the boolean by exact name, then requires all table, type,
-value, AOB, compare-target, and branch-target facts above before setting it to
-one. The original value is restored only after every Reach detour is disabled
-and quiescent. Any mismatch leaves Reach wholly stock. This is the Reach title
-adapter for the same accepted Halo 3/ODST behavior, not a probe or fallback.
+Production requires the descriptor name/type identity, unique AOB, decoded exact
+compare target, decoded exact branch target, executable epilogue, and bounded
+boolean value before setting it to one. It must not require HREK's published
+development value pointer from retail. The original value is restored only
+after every Reach detour is disabled and quiescent. Any mismatch leaves Reach
+wholly stock. This is the Reach title adapter for the same accepted Halo 3/ODST
+behavior, not a probe or fallback.
 
 The exact clean runtime `6e31751c...` (installed DLL SHA-256
 `49DC585C1E57FB54D197198E2A46AE95AA1CBF0FEE565EDCD62BBE740B9E8715`)
@@ -408,8 +412,16 @@ SHA-256 `61C70876A8BC883D5277A7070EF38E2CB350476B6BFAFD1943B96C6EF67ADF91`,
 reconstructed both palette transactions and produced the same headset result.
 That later failure disproves the claim that the second palette transaction alone
 was the remaining cause and isolates the omitted native weapon-IK bypass above.
-The `abea61f` DLL remains installed unchanged under the user's explicit
-no-rollback instruction; neither failed method advances the accepted pointer.
+Candidate `cd0a7c136caa2972d9d57f5e44929adb88b96069`, DLL SHA-256
+`ECA7202AE4132AC18A6E8C403C0FE4322616E380FC098D05E4B16135FB25D174`,
+incorrectly required that HREK-only published value pointer from the retail
+descriptor. Its exact headset run passed cold preflight and display proof, then
+failed the weapon-IK proof before installing Reach's camera core, producing
+stock flat-screen output with no 3D. The run is preserved under
+`out/test-runs/cd0a7c1-reach-no-3d-weapon-ik-proof-fail-20260725-053853Z`.
+The `cd0a7c1` DLL remains installed unchanged under the user's explicit
+no-rollback instruction; none of these failed methods advances the accepted
+pointer.
 
 The exact dirty runtime `e08b538f...-dirty` (installed DLL SHA-256
 `236D06940F47E38876A54DF4AFE07E4C484AED2E025865AF55121E022E1772AC`)

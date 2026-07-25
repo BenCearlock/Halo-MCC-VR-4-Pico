@@ -81,30 +81,43 @@ gun/right hand. Evidence is preserved under
 `out/test-runs/abea61f-reach-fp-parity-no-visible-change-20260725-052246Z`.
 This candidate is failed and does **not** advance the accepted pointer.
 
-### Current unaccepted Reach native weapon-IK parity correction
+### Failed Reach native weapon-IK parity gate / no-3D result - 2026-07-25
 
 The missing accepted Halo 3/ODST behavior is now identified exactly: after the
 palette transaction, both accepted titles bypass native flat-screen weapon IK
 so its support-hand solve cannot reattach the controller-owned hand to the gun.
 The final-palette candidate omitted that stage.
 
+Candidate `cd0a7c136caa2972d9d57f5e44929adb88b96069` added that
+title-native bypass, but its runtime proof incorrectly required retail's debug
+descriptor to publish the HREK development value pointer. Retail leaves that
+descriptor field unpublished. The exact installed DLL SHA-256 was
+`ECA7202AE4132AC18A6E8C403C0FE4322616E380FC098D05E4B16135FB25D174`.
+Cold preflight and display-worker proof passed, then the native weapon-IK proof
+failed open before Reach installed any camera hooks. The headset therefore
+showed stock flat-screen output with no 3D. Evidence is preserved under
+`out/test-runs/cd0a7c1-reach-no-3d-weapon-ik-proof-fail-20260725-053853Z`.
+This candidate is failed and does **not** advance the accepted pointer.
+
 Pinned HREK exposes the type-5 boolean
-`debug_animation_fp_weapon_ik_disable`. Its table entry at `0x201AD98` points to
-value `0x4F40A60`; the post-palette homolog compares that byte at `0x8D3162`
-and jumps to its existing no-weapon-IK epilogue at `0x8D338B`. Pinned retail
-Reach repeats the same edge: the unique decision AOB at `0x2B506E` compares
-exact value `0x4E38B61` at `0x2B507F`, and `0x2B5085` jumps to epilogue
-`0x2B52D1` when it is nonzero.
+`debug_animation_fp_weapon_ik_disable`. Its development table entry at
+`0x201AD98` publishes value pointer `0x4F40A60`; the post-palette homolog
+compares that byte at `0x8D3162` and jumps to its existing no-weapon-IK
+epilogue at `0x8D338B`. Pinned retail Reach repeats the same execution edge but
+does not publish the value pointer in its descriptor: the unique decision AOB
+at `0x2B506E` directly compares exact byte `0x4E38B61` at `0x2B507F`, and
+`0x2B5085` jumps to epilogue `0x2B52D1` when it is nonzero.
 
-Forward source resolves the control by its exact name, requires the exact table
-entry/type/value, unique retail AOB, RIP-relative value target, and stock branch
-target, then sets the title-native boolean for the lifetime of the complete Reach
-VR transaction and restores its original value during verified teardown. There
-is no runtime probe, skeleton guess, alternate owner, or fallback implementation.
-Build, tests, and static preflight pass; headset acceptance is still pending.
+Forward source requires the exact retail descriptor name/type identity, unique
+retail AOB, decoded RIP-relative value target, decoded stock branch target, and
+bounded boolean value. It binds the control from that pinned shipping consumer
+instruction, sets it for the complete Reach VR transaction, and restores its
+original value during verified teardown. There is no runtime probe, skeleton
+guess, alternate owner, or fallback implementation. Headset acceptance is
+pending.
 
-The failed `abea61f` DLL remains installed unchanged under the user's explicit
-no-rollback instruction. No later DLL has been installed or launched.
+The failed `cd0a7c1` DLL remains installed unchanged under the user's explicit
+no-rollback instruction. No forward-corrected DLL has been installed or launched.
 
 ### Failed Reach separated-hand graph result - 2026-07-24
 
