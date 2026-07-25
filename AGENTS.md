@@ -20,8 +20,13 @@ reverse-engineering facts live in the evidence documents under `docs/`.
 - Never bulk-remove or consolidate accepted dormant diagnostic/fallback paths.
   Cleanup commit `42a1276` built and launched, then fatally failed at the first
   level transition. Isolate one understood path per candidate and headset test.
-- Never install or launch a build unless the user explicitly asks to test that
-  exact candidate. Repository scripts must not write to an MCC installation.
+- A direct request to install or install the fix authorizes deployment of the
+  next exact validated candidate produced for that active request; do not ask
+  the user to approve the same install twice. Before copying, identify the exact
+  commit and artifact hashes, require MCC to be closed, preserve the prior
+  installed files, and verify the installed hashes separately. This deployment
+  authorization does not authorize launching MCC. Repository scripts must not
+  write to an MCC installation.
 
 ## Halo 3 parity foundation
 
