@@ -39,47 +39,8 @@ namespace
     // thread; this lock keeps the two from touching ImGui at the same time.
     CRITICAL_SECTION g_cs;
 
-    // Private message we post to the game window so the fit runs on the window's
-    // own (UI) thread, where touching window size/position is safe.
-    constexpr UINT kFitGameWindowMsg = WM_APP + 0x37;
-
-    // Fit the game window inside the primary monitor's work area, preserving the
-    // render aspect (kNativeRenderWidth:kNativeRenderHeight, constant because
-    // resolution_scale is uniform) so the desktop mirror isn't distorted. This
-    // shrinks only the VISIBLE window; the headset render surface is a separate,
-    // full-size backbuffer forced in d3d11_hook.cpp, so the picture the headset
-    // captures - and the gun alignment - are unchanged. Must run on the UI thread.
-    void FitGameWindow(HWND hwnd)
-    {
-        HMONITOR mon = MonitorFromWindow(hwnd, MONITOR_DEFAULTTOPRIMARY);
-        MONITORINFO mi{sizeof(mi)};
-        if (!GetMonitorInfo(mon, &mi))
-            return;
-        const int workW = mi.rcWork.right - mi.rcWork.left;
-        const int workH = mi.rcWork.bottom - mi.rcWork.top;
-        if (workW <= 0 || workH <= 0)
-            return;
-        const float aspect = (float)kNativeRenderWidth / (float)kNativeRenderHeight;
-        int w = workW;
-        int h = (int)((float)w / aspect + 0.5f);
-        if (h > workH)
-        {
-            h = workH;
-            w = (int)((float)h * aspect + 0.5f);
-        }
-        const int x = mi.rcWork.left + (workW - w) / 2;
-        const int y = mi.rcWork.top + (workH - h) / 2;
-        SetWindowPos(hwnd, nullptr, x, y, w, h, SWP_NOZORDER | SWP_NOACTIVATE);
-    }
-
     LRESULT CALLBACK WndProcHook(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     {
-        // Fit request (posted from Menu_Init) - run it here on the UI thread.
-        if (msg == kFitGameWindowMsg)
-        {
-            FitGameWindow(hwnd);
-            return 0;
-        }
         // Keep the game rendering and processing input while the user is in the
         // headset. Looking through the headset hands desktop focus to SteamVR,
         // and MCC (like most games) stops drawing and ignores input when it
@@ -102,40 +63,6 @@ namespace
             return 0;
         case WM_MOUSEACTIVATE:
             return MA_ACTIVATE;
-        case WM_WINDOWPOSCHANGING:
-        {
-            // Keep the window from ever exceeding the monitor work area, so the
-            // MCC menu stays on-screen on monitors smaller than the render size.
-            // Only clamp genuine size changes (user drags with SWP_NOSIZE are
-            // left alone). The headset backbuffer is separate, so this never
-            // changes the in-headset picture. Modify the request in place and
-            // let the original handler apply it.
-            WINDOWPOS* pos = (WINDOWPOS*)lp;
-            if (pos && !(pos->flags & SWP_NOSIZE))
-            {
-                HMONITOR mon = MonitorFromWindow(hwnd, MONITOR_DEFAULTTOPRIMARY);
-                MONITORINFO mi{sizeof(mi)};
-                if (GetMonitorInfo(mon, &mi))
-                {
-                    const int workW = mi.rcWork.right - mi.rcWork.left;
-                    const int workH = mi.rcWork.bottom - mi.rcWork.top;
-                    if (workW > 0 && workH > 0 && (pos->cx > workW || pos->cy > workH))
-                    {
-                        const float aspect =
-                            (float)kNativeRenderWidth / (float)kNativeRenderHeight;
-                        int w = workW;
-                        int h = (int)((float)w / aspect + 0.5f);
-                        if (h > workH) { h = workH; w = (int)((float)h * aspect + 0.5f); }
-                        pos->cx = w;
-                        pos->cy = h;
-                        pos->x = mi.rcWork.left + (workW - w) / 2;
-                        pos->y = mi.rcWork.top + (workH - h) / 2;
-                        pos->flags &= ~SWP_NOMOVE;
-                    }
-                }
-            }
-            break;
-        }
         }
 
         // Hotkeys act on plain WM_KEYDOWN only. F10 is the one exception:
@@ -669,12 +596,6 @@ bool Menu_Init(HWND gameWindow, ID3D11Device* device, ID3D11DeviceContext* conte
         LOG("menu: could not hook the game window procedure (%lu)", GetLastError());
         return false;
     }
-
-    // Fit the desktop window to the monitor now that we can catch resizes. MCC
-    // created it at the full render size (which overflows small monitors and put
-    // the menu off-screen); this shrinks the visible window to fit while the
-    // headset keeps the full-size backbuffer. Posted so it runs on the UI thread.
-    PostMessageW(gameWindow, kFitGameWindowMsg, 0, 0);
 
     g_ready = true;
     LOG("menu ready (F1 to toggle)");
