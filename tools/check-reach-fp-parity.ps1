@@ -194,10 +194,16 @@ $requiredChudGame = [ordered]@{
         'g_reachChudParityFailedGeneration\.load\([\s\S]{0,160}?\)\s*==\s*generation\s*\)[\s\S]{0,100}?return false'
     'HREK resolver failure latches the rejected generation' =
         '!ResolveReachHrekChudDrawWidget\([\s\S]{0,180}?g_reachChudParityFailedGeneration\.store\(\s*generation,\s*std::memory_order_release\s*\)'
-    'unique loaded-image HREK CHUD signature' =
-        'sig::Find\(\s*base,\s*size,\s*kReachHrekChudDrawWidgetAob\s*\)[\s\S]{0,640}?sig::Find\(\s*hit\s*\+\s*1,[\s\S]{0,180}?kReachHrekChudDrawWidgetAob\s*\)'
-    'exact HREK function-boundary and layout proof' =
-        'RtlLookupFunctionEntry\([\s\S]{0,760}?functionBegin\s*!=\s*hit[\s\S]{0,260}?ReachHrekChudDrawWidgetLayoutMatches'
+    'loaded-image HREK CHUD class anchor has an unwind owner' =
+        'void\s+InspectReachHrekChudAbiVariant\([\s\S]{0,1200}?sig::Find\([\s\S]{0,520}?RtlLookupFunctionEntry\('
+    'loaded-image HREK CHUD unwind body is bounded' =
+        'functionBegin\s*<\s*base[\s\S]{0,420}?functionBegin\s*>\s*hit[\s\S]{0,420}?functionEnd\s*>\s*end[\s\S]{0,420}?functionEnd\s*-\s*functionBegin\s*<\s*0x200[\s\S]{0,180}?functionEnd\s*-\s*functionBegin\s*>\s*0x800'
+    'HREK CHUD descriptor fifth argument class and nonrecursion proof' =
+        'CountReachHrekChudBytes\(body,\s*descriptorMove,\s*0x100\)\s*!=\s*1[\s\S]{0,180}?CountReachHrekChudBytes\(body,\s*fifthArgumentLoad,\s*0x100\)\s*!=\s*1[\s\S]{0,180}?CountReachHrekChudBytes\(body,\s*classRead,\s*body\.size\(\)\)\s*!=[\s\S]{0,80}?expectedClassReadCount[\s\S]{0,180}?ReachHrekChudHasDirectSelfEntry\(body,\s*functionBegin\)'
+    'all three official HREK CHUD ABI variants are admitted together' =
+        'InspectReachHrekChudAbiVariant\(\s*base,\s*size,\s*kTagTestClassReadAob,[\s\S]{0,360}?kTagTestClassRead,\s*4,\s*kTagTestFifthArgumentLoad[\s\S]{0,360}?InspectReachHrekChudAbiVariant\(\s*base,\s*size,\s*kTagPlayClassReadAob,[\s\S]{0,360}?kTagClassRead,\s*1,\s*kFifthArgumentLoad[\s\S]{0,360}?InspectReachHrekChudAbiVariant\(\s*base,\s*size,\s*kSapienPlayClassReadAob[\s\S]{0,360}?kSapienClassRead,\s*1,\s*kFifthArgumentLoad'
+    'exactly one HREK CHUD ABI owner is mandatory' =
+        'matches\.malformed\s*\|\|\s*matches\.candidateCount\s*!=\s*1\s*\|\|[\s\S]{0,80}?!matches\.candidate'
     'Reach CHUD exact stereo-eye transaction ownership' =
         'bool\s+ReachOwnsHudStereoTransaction\(\)[\s\S]{0,900}?TitleAdapter_GetActiveTitle\(\)\s*!=\s*GameTitle::HaloReach[\s\S]{0,260}?cameraGeneration\s*=\s*g_reachCamera\.generation\.load[\s\S]{0,260}?TitleAdapter_GetGeneration\(GameTitle::HaloReach\)\s*==\s*cameraGeneration[\s\S]{0,220}?installed\.load[\s\S]{0,220}?armed\.load[\s\S]{0,220}?teardownRequested\.load[\s\S]{0,300}?VR_IsStereoEnabled\(\)[\s\S]{0,220}?g_reachFpCameraEyeScope\.active[\s\S]{0,220}?g_reachFpCameraEyeScope\.generation\s*==\s*cameraGeneration'
     'in-flight Reach eye ownership loss invalidates and suppresses CHUD' =

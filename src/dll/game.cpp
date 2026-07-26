@@ -12700,53 +12700,182 @@ namespace
         return true;
     }
 
+    struct ReachHrekChudMatchSet
+    {
+        uintptr_t candidate = 0;
+        size_t candidateCount = 0;
+        bool malformed = false;
+    };
+
+    size_t CountReachHrekChudBytes(
+        std::span<const uint8_t> body, std::span<const uint8_t> bytes,
+        size_t limit) noexcept
+    {
+        size_t count = 0;
+        const size_t endOffset = body.size() < limit ? body.size() : limit;
+        for (size_t offset = 0; offset < endOffset; ++offset)
+        {
+            if (bytes.size() <= body.size() - offset &&
+                std::memcmp(
+                    body.data() + offset, bytes.data(), bytes.size()) == 0)
+            {
+                ++count;
+            }
+        }
+        return count;
+    }
+
+    bool ReachHrekChudHasDirectSelfEntry(
+        std::span<const uint8_t> body, uintptr_t functionBegin) noexcept
+    {
+        for (size_t offset = 0; offset + 5 <= body.size(); ++offset)
+        {
+            if (body[offset] != 0xE8 && body[offset] != 0xE9)
+                continue;
+            int32_t displacement = 0;
+            std::memcpy(
+                &displacement, body.data() + offset + 1,
+                sizeof(displacement));
+            const uintptr_t callTarget = static_cast<uintptr_t>(
+                static_cast<intptr_t>(functionBegin + offset + 5) +
+                static_cast<intptr_t>(displacement));
+            if (callTarget == functionBegin)
+                return true;
+        }
+        return false;
+    }
+
+    void InspectReachHrekChudAbiVariant(
+        uintptr_t base, size_t size, const char* classReadAob,
+        std::span<const uint8_t> descriptorMove,
+        std::span<const uint8_t> classRead,
+        size_t expectedClassReadCount,
+        std::span<const uint8_t> fifthArgumentLoad,
+        ReachHrekChudMatchSet& matches)
+    {
+        const uintptr_t end = base + size;
+        uintptr_t search = base;
+        while (!matches.malformed && search < end)
+        {
+            const uintptr_t hit = sig::Find(
+                search, static_cast<size_t>(end - search), classReadAob);
+            if (!hit)
+                break;
+            search = hit + 1;
+            if (!ReachColdExecutableAddress(hit))
+            {
+                matches.malformed = true;
+                break;
+            }
+
+            DWORD64 imageBase = 0;
+            const PRUNTIME_FUNCTION runtimeFunction = RtlLookupFunctionEntry(
+                static_cast<DWORD64>(hit), &imageBase, nullptr);
+            if (!runtimeFunction || imageBase != base ||
+                runtimeFunction->EndAddress <= runtimeFunction->BeginAddress)
+            {
+                matches.malformed = true;
+                break;
+            }
+            const uintptr_t functionBegin =
+                static_cast<uintptr_t>(imageBase) +
+                runtimeFunction->BeginAddress;
+            const uintptr_t functionEnd =
+                static_cast<uintptr_t>(imageBase) +
+                runtimeFunction->EndAddress;
+            if (functionBegin < base || functionBegin > hit ||
+                functionEnd > end || functionEnd <= hit ||
+                functionEnd - functionBegin < 0x200 ||
+                functionEnd - functionBegin > 0x800)
+            {
+                matches.malformed = true;
+                break;
+            }
+
+            const std::span<const uint8_t> body(
+                reinterpret_cast<const uint8_t*>(functionBegin),
+                static_cast<size_t>(functionEnd - functionBegin));
+            const size_t classReadOffset =
+                static_cast<size_t>(hit - functionBegin);
+            const bool exactClassFlow =
+                classReadOffset + classRead.size() <= body.size() &&
+                std::memcmp(
+                    body.data() + classReadOffset,
+                    classRead.data(), classRead.size()) == 0;
+            if (!exactClassFlow ||
+                CountReachHrekChudBytes(body, descriptorMove, 0x100) != 1 ||
+                CountReachHrekChudBytes(body, fifthArgumentLoad, 0x100) != 1 ||
+                CountReachHrekChudBytes(body, classRead, body.size()) !=
+                    expectedClassReadCount ||
+                ReachHrekChudHasDirectSelfEntry(body, functionBegin))
+            {
+                continue;
+            }
+
+            if (!matches.candidate)
+            {
+                matches.candidate = functionBegin;
+                matches.candidateCount = 1;
+            }
+            else if (matches.candidate != functionBegin)
+            {
+                ++matches.candidateCount;
+            }
+        }
+    }
+
     bool ResolveReachHrekChudDrawWidget(
         uintptr_t base, size_t size, void*& target)
     {
+        // Reach uses the same authored-widget capture transaction as Halo 3 and
+        // ODST. HREK establishes the native five-argument widget ABI; this
+        // adapter locates exactly one MCC implementation by that ABI rather
+        // than requiring the separately linked MCC binary to duplicate an HREK
+        // tool executable's complete prologue and frame size.
+        static constexpr char kTagTestClassReadAob[] =
+            "41 0F BE 55 04 48 8B C8 E8 ?? ?? ?? ?? 48 8B D0";
+        static constexpr char kTagPlayClassReadAob[] =
+            "41 0F BE 56 04 E8 ?? ?? ?? ?? 48 8B D0";
+        static constexpr char kSapienPlayClassReadAob[] =
+            "41 0F BE 57 04 E8 ?? ?? ?? ?? 48 8B D0";
+        static constexpr std::array<uint8_t, 3> kTagTestDescriptorMove{
+            0x4C, 0x8B, 0xEA};
+        static constexpr std::array<uint8_t, 3> kTagDescriptorMove{
+            0x4C, 0x8B, 0xF2};
+        static constexpr std::array<uint8_t, 3> kSapienDescriptorMove{
+            0x4C, 0x8B, 0xFA};
+        static constexpr std::array<uint8_t, 4> kTagTestFifthArgumentLoad{
+            0x48, 0x8B, 0x7D, 0x7F};
+        static constexpr std::array<uint8_t, 4> kFifthArgumentLoad{
+            0x4C, 0x8B, 0x4D, 0x7F};
+        static constexpr std::array<uint8_t, 5> kTagTestClassRead{
+            0x41, 0x0F, 0xBE, 0x55, 0x04};
+        static constexpr std::array<uint8_t, 6> kTagClassRead{
+            0x41, 0x0F, 0xBE, 0x56, 0x04, 0xE8};
+        static constexpr std::array<uint8_t, 6> kSapienClassRead{
+            0x41, 0x0F, 0xBE, 0x57, 0x04, 0xE8};
+
         target = nullptr;
-        const uintptr_t hit = sig::Find(
-            base, size, kReachHrekChudDrawWidgetAob);
-        if (!hit || !ReachColdExecutableAddress(hit))
+        ReachHrekChudMatchSet matches{};
+        InspectReachHrekChudAbiVariant(
+            base, size, kTagTestClassReadAob, kTagTestDescriptorMove,
+            kTagTestClassRead, 4, kTagTestFifthArgumentLoad, matches);
+        InspectReachHrekChudAbiVariant(
+            base, size, kTagPlayClassReadAob, kTagDescriptorMove,
+            kTagClassRead, 1, kFifthArgumentLoad, matches);
+        InspectReachHrekChudAbiVariant(
+            base, size, kSapienPlayClassReadAob, kSapienDescriptorMove,
+            kSapienClassRead, 1, kFifthArgumentLoad, matches);
+        if (matches.malformed || matches.candidateCount != 1 ||
+            !matches.candidate)
         {
-            LOG("Reach crosshair: optimized HREK draw-widget signature missing; "
-                "mandatory parity transaction rejected");
-            return false;
-        }
-        const uintptr_t end = base + size;
-        if (hit + 1 >= end || sig::Find(
-                hit + 1, static_cast<size_t>(end - hit - 1),
-                kReachHrekChudDrawWidgetAob))
-        {
-            LOG("Reach crosshair: optimized HREK draw-widget signature is "
-                "ambiguous; mandatory parity transaction rejected");
-            return false;
-        }
-
-        DWORD64 imageBase = 0;
-        const PRUNTIME_FUNCTION runtimeFunction = RtlLookupFunctionEntry(
-            static_cast<DWORD64>(hit), &imageBase, nullptr);
-        if (!runtimeFunction || imageBase != base ||
-            runtimeFunction->EndAddress <= runtimeFunction->BeginAddress)
-        {
-            LOG("Reach crosshair: HREK draw-widget function boundary missing; "
-                "mandatory parity transaction rejected");
-            return false;
-        }
-        const uintptr_t functionBegin =
-            static_cast<uintptr_t>(imageBase) + runtimeFunction->BeginAddress;
-        const uintptr_t functionEnd =
-            static_cast<uintptr_t>(imageBase) + runtimeFunction->EndAddress;
-        if (functionBegin != hit || functionEnd > end ||
-            !ReachHrekChudDrawWidgetLayoutMatches(std::span<const uint8_t>(
-                reinterpret_cast<const uint8_t*>(functionBegin),
-                static_cast<size_t>(functionEnd - functionBegin))))
-        {
-            LOG("Reach crosshair: HREK draw-widget ABI/class layout mismatch; "
-                "mandatory parity transaction rejected");
+            LOG("Reach crosshair: HREK class-2 widget ABI match count=%zu "
+                "malformed=%d; mandatory parity transaction rejected",
+                matches.candidateCount, static_cast<int>(matches.malformed));
             return false;
         }
 
-        target = reinterpret_cast<void*>(hit);
+        target = reinterpret_cast<void*>(matches.candidate);
         return true;
     }
 
