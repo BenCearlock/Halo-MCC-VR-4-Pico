@@ -11015,7 +11015,25 @@ namespace
             // alive across both eye renders, but do not leak an eye selection
             // into the remainder of the stock outer transaction.
             g_stereoEye.store(-1,std::memory_order_release);
-            ReachRestoreScope(workspace, playerView, savedWorkspace, savedPv);
+            // Reach draws its CHUD TWICE (verified in HREK):
+            //   chud_draw_screen_LDR 0x8B67C0 - inside player_view_render
+            //   chud_draw_screen     0x8B6320 - in the later UI compositing
+            //                                  pass (caller 0x50B780)
+            // Restoring the stock camera here put the aim-driven camera back
+            // before that second pass ran, so world-anchored CHUD elements were
+            // projected through a camera the controller steers - which is why
+            // squad markers rode the weapon instead of staying on the
+            // characters. Headset evidence: the markers follow the gun and are
+            // identical in both eyes, i.e. drawn once, outside the per-eye loop.
+            //
+            // On a completed pair keep the VR camera installed so the remainder
+            // of the outer render - including that compositing CHUD - projects
+            // from where the player is actually looking. A failed transaction
+            // still restores exactly as before, and every admitted transaction
+            // re-snapshots this state on entry, so nothing accumulates.
+            if (!completed)
+                ReachRestoreScope(
+                    workspace, playerView, savedWorkspace, savedPv);
         }
         return completed;
     }
