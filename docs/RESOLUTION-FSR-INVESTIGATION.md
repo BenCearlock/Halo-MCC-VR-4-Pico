@@ -10,9 +10,9 @@ advance the accepted pointer in `docs/CURRENT-STATE.md`. Updated 2026-07-25.
 - Branch `reach/campaign-parity`; the authoritative accepted pointer remains the
   commit named by `docs/CURRENT-STATE.md`. Current Reach and resolution work is
   cumulative but unaccepted.
-- Installed failed input candidate before this correction: source `a440654`, DLL
-  SHA-256 `E4CEF28463717763F012DA0E8C407E7DC60151EE1FB3657A8BD820369AED9684`;
-  package `out/candidates/a440654-reach-fp-parity-20260725-232800404Z`.
+- Failed predecessor `a440654`: package
+  `out/candidates/a440654-reach-fp-parity-20260725-232800404Z`, DLL SHA-256
+  `E4CEF28463717763F012DA0E8C407E7DC60151EE1FB3657A8BD820369AED9684`.
 - This track covers desktop/render decoupling first, then the 8K-class cap and
   tiers, then FSR as a separate diagnostic-first behavior.
 
@@ -31,51 +31,92 @@ advance the accepted pointer in `docs/CURRENT-STATE.md`. Updated 2026-07-25.
 ## Stage 1 desktop-fit evidence (verified, still unaccepted)
 
 - `546d301` preserved the full `3204x2310` backbuffer while fitting the visible
-  window inside a `1280x720` monitor. The user confirmed that the full picture was
-  visible on the monitor and the headset render remained complete. It did not
-  make MCC's shell operable, so it is not accepted.
+  window inside a `1280x720` monitor. The user confirmed that the full picture
+  was visible on the monitor and the headset render remained complete. It did
+  not make every MCC shell input path operable, so it is not accepted.
 - `a440654` tried to repair the shell by rewriting every non-mod
   `user32!GetCursorPos` call. Its first three logs all ran before the window
-  shrink while client and render were both `3204x2310`; they provide no post-fit
-  transform evidence. The user then confirmed mouse, keyboard, and controller
-  could all fail in the fitted shell. Reach gameplay could run only in a session
-  that happened to get past the shell.
-- Controller transport was not lost. In the stalled run, XInput reached
-  `reads=159619`, `merged=152798`, with D-pad input observed, but no title loaded.
-- The successful a440 session began with physical cursor `(1126,555)`, inside the
-  fitted window. The stalled session began at `(1244,624)`, outside the fitted
-  outer rectangle (approximately `x=141..1138`). The old fit never relocated the
-  cursor and its transform explicitly skipped outside points.
+  shrink while client and render were both `3204x2310`; they provide no
+  post-fit transform evidence. The user then confirmed mouse, keyboard, and
+  controller could all fail in the fitted shell. Reach gameplay could run only
+  in a session that happened to get past the shell.
+- Controller transport was not lost. In the stalled `a440654` run, XInput
+  reached `reads=159619`, `merged=152798`, with D-pad input observed, but no
+  title loaded.
+- A historical live observation from a successful `a440654` session began with
+  physical cursor `(1126,555)`, inside the fitted window; its complete log is no
+  longer retained. The durably archived stalled session began at `(1244,624)`,
+  outside the fitted outer rectangle (approximately `x=141..1138`). The old fit
+  never relocated the cursor and its transform explicitly skipped outside
+  points.
 - Static analysis of the pinned MCC executable (SHA-256
-  `BE70D6DCD1A884F10CEB342A7A2DCB35EE0FA43181B66A1D19C3D830E9834691`) found
-  exactly three direct `GetCursorPos` consumers. `MCC+0x87D785` immediately feeds
-  `ScreenToClient` and stores two float coordinates; `MCC+0xEEBD40` immediately feeds
-  `WindowFromPoint`; `MCC+0xEE911E` performs a separate active-window/DPI
-  conversion. Feeding a synthetic render-space point to `WindowFromPoint` can
-  make MCC reject its own window, a concrete mechanism consistent with the
-  all-input failure.
-- The current correction therefore removes the broad rewrite, resolves only the
-  observed GetCursorPos-to-ScreenToClient coordinate caller through a unique
-  relocation-tolerant AOB plus imported-call identity checks, and keeps all
-  physical window/focus consumers stock. Bounded post-fit logs distinguish a
-  scaled in-client point from an outside point. If the exact input signature or
-  hook is unavailable, the swapchain and window geometry both remain stock. This
-  remains headset-pending until its exact packaged hash passes the three-title
-  matrix.
+  `BE70D6DCD1A884F10CEB342A7A2DCB35EE0FA43181B66A1D19C3D830E9834691`)
+  found three direct `GetCursorPos` consumers:
+
+  - `MCC+0x87D785` is a conditional selected-input-record path. It immediately
+    feeds `ScreenToClient` and stores two floats, but is not proven to be the
+    top-level shell cursor poll.
+  - `MCC+0xEE911E` is vtable slot 0 of MCC's Windows cursor object. It performs
+    `GetCursorPos -> GetActiveWindow -> ScreenToClient -> DPI scale ->
+    ClientToScreen` and returns two floats, making it the stronger static Slate
+    cursor candidate.
+  - `MCC+0xEEBD40` immediately feeds `WindowFromPoint` to decide whether the
+    physical point belongs to an MCC window. This call must remain physical.
+
+- `8fa36d6` removed the broad rewrite and transformed only the first path above.
+  Exact packaged/deployed identity:
+
+  | Identity | Value |
+  | --- | --- |
+  | Source | `8fa36d6c3b667043b3ea1171a68ac75aed3286ef` |
+  | Package | `out/candidates/8fa36d6-reach-fp-parity-20260726-002302958Z` |
+  | `halo3xr.dll` SHA-256 | `52342D585F1190F53E6004ED2DA581DA9FC266CE290197070203818A7534EAB2` |
+  | Headset result | User: "still can't navigate menus and pause screens properly" |
+
+  Its log resolved the signature but recorded zero post-fit calls to
+  `MCC+0x87D785`. The run nevertheless delivered 22,231 XInput reads and
+  16,024 merged VR-controller states; A selected Reach from the shell,
+  Menu/Start reached Reach, and Alt+F4 reached MCC's WndProc before clean title
+  teardown. Therefore the candidate did not lose controller/keyboard transport,
+  but it also did not correct the reported navigation path. The exact failed
+  evidence is under
+  `out/test-runs/8fa36d6-desktop-fit-input-fail-20260725-192527Z`.
+- The same exact run exposed a separate Reach defect. Reach remains
+  `RuntimeMode::Loading` while its camera is armed, and
+  `Game_MoveStickIsLocomotion` explicitly treats that armed state as gameplay
+  even after the native pause menu opens. Ordinary pause-menu stick input is
+  consequently head-rotated/deadzone-floored locomotion rather than the shared
+  plain menu-stick path. No authoritative Reach pause-state proof exists yet;
+  this must be corrected as a separate title-runtime candidate, not inferred
+  from Start edges or stacked into desktop fit.
+- The replacement desktop candidate fully removes both failed `GetCursorPos`
+  mutations and restores the D3D fit path to `546d301`. It deliberately retains
+  that baseline's existing `WM_MOUSE*` lParam mapping, so this is not a
+  stock-input claim; that mapping remains an unproven variable for a later
+  isolated test.
+- On the one UI-thread shrink, the replacement preserves a cursor only when
+  `WindowFromPoint` proves the old physical point belonged to the MCC root, the
+  point was inside the old client on the same selected monitor, the cursor did
+  not move during the resize, and the point would otherwise land outside the
+  new client. It retains the normalized client location, preflights and verifies
+  the destination owner, and never moves a pointer over non-client controls,
+  another app/monitor, or a covered destination. This is the smallest isolated
+  test of the inside-success/outside-failure correlation; it remains
+  headset-pending.
 
 Evidence logs:
 
-- `out/deploy-backups/1ba1103-before-a440654-20260725-232801242Z/halo3xr.log`
-- installed `Halo_MCC_VR/halo3xr.log.prev` (successful shell session)
-- installed `Halo_MCC_VR/halo3xr.log` (stalled shell session)
+- `out/deploy-backups/e4cef28-before-8fa36d6-20260726-002303744Z/halo3xr.log`
+  (stalled `a440654` shell session)
+- `out/test-runs/8fa36d6-desktop-fit-input-fail-20260725-192527Z/halo3xr.log`
 
 ## How resolution works today (verified)
 
 - `src/launcher/launcher.cpp` reads `resolution_scale` (0.35–2.00) and passes
   `-WINDOWED -ResX -ResY` = `kNativeRenderWidth/Height` (2912×2100, `config.h`)
-  × scale **at launch only** (launcher.cpp:217-232). Nothing changes it later.
+  × scale **at launch only**. Nothing changes it later.
 - The DLL captures Halo's scene render target and upscales the eye into the fixed
-  full-size OpenXR projection. `EnsureEyeCaches` (`src/dll/vr.cpp:1176`) rebuilds
+  full-size OpenXR projection. `EnsureEyeCaches` in `src/dll/vr.cpp` rebuilds
   the capture at whatever size Halo is rendering, logging
   `M2: persistent eye frame caches created: WxH`. This is the "it rescales every
   time it rehooks" the user observed — the mod already adapts to a size change; it
@@ -101,8 +142,9 @@ Evidence logs:
 - **A mod-initiated swapchain resize is not possible.** DXGI forbids
   `ResizeBuffers` while another module (MCC) holds references to the swapchain's
   back buffers; the call fails. MCC owns its swapchain. The mod already **hooks**
-  `ResizeBuffers` (`src/dll/d3d11_hook.cpp:108`) and can rewrite the width/height
-  MCC passes — but only when **MCC itself** initiates a resize.
+  `ResizeBuffers` through `ResizeBuffersHook` in `src/dll/d3d11_hook.cpp` and
+  can rewrite the width/height MCC passes — but only when **MCC itself**
+  initiates a resize.
 - **The revert-on-Start is setup-specific and did NOT reproduce for the user.**
   User's log (4K panel 3840×2160): launched scale 1.50 → swapchain **4368×3150**,
   which is larger than the panel in both dimensions, and it was **honored and
@@ -110,13 +152,16 @@ Evidence logs:
   all. So "over 1.0 goes back" does not happen on this machine; other users' MCC
   clamps the windowed backbuffer to their panel. A revert-fix candidate is
   therefore **not user-testable** on the current machine.
-- **The Start transition is already detected** by the mod
-  (`Runtime mode: gameplay → paused` / `paused → gameplay`), so there is a clean
-  runtime trigger available.
-- **Per-eye OpenXR target is fixed at ~3400×3468.** Source scale past ~1.17
-  (3400/2912) is **supersampling** — real anti-aliasing gains but steep GPU cost
-  and diminishing returns. 8k is mostly a "burn GPU for smoother edges" option,
-  not raw detail. This should shape the safety warning framing.
+- **Halo 3 and ODST Start transitions are already detected** by the mod
+  (`Runtime mode: gameplay → paused` / `paused → gameplay`), so those adapters
+  have a clean runtime trigger. Reach is the exception: it does not yet publish
+  authoritative pause state.
+- **OpenXR eye targets are runtime-recommended and fixed per session, not
+  globally ~3400×3468.** The exact `8fa36d6` run recommended `4164×4244` per
+  eye. The source-to-eye supersampling threshold therefore depends on the
+  runtime/headset; 8k-class source resolution can still bring real
+  anti-aliasing gains with steep GPU cost and diminishing returns. This should
+  shape the safety warning framing.
 - **FSR is invisible to the mod.** Enabling MCC's FSR produced **zero** recognized
   log events. The mod captures and reprojects the full frame assuming FSR isn't
   touching the render target/viewport, which is the likely cause of the
@@ -124,15 +169,16 @@ Evidence logs:
 - **There is no FSR implementation in this repository.** No config key, F1
   control, launcher argument, FidelityFX dependency/shader, or MCC-setting owner
   exists. The current final eye expansion uses an ordinary linear sampler.
-- **MCC FSR, OpenXR Toolkit FSR, and a future mod-owned eye upscaler are different
-  transactions.** The old Toolkit tiled/overlap report must not be treated as
-  proof of what MCC's built-in setting does.
+- **MCC FSR, OpenXR Toolkit FSR, and a future mod-owned eye upscaler are
+  different transactions.** The old Toolkit tiled/overlap report must not be
+  treated as proof of what MCC's built-in setting does.
 - **The current capture has specific FSR blind spots.** Once it learns one exact
-  full-backbuffer scene RTV, it ignores different RTVs until resize/title detach.
-  It observes render-target binds but not viewport, scissor, or compute/UAV
-  output changes. A stale pre/post-upscale target or a changed active sub-rect can
-  therefore produce the reported duplicate/wrong-scale image without a
-  swapchain-resize log. This mechanism is code-backed but runtime-unproven.
+  full-backbuffer scene RTV, it ignores different RTVs until resize/title
+  detach. It observes render-target binds but not viewport, scissor, or
+  compute/UAV output changes. A stale pre/post-upscale target or a changed
+  active sub-rect can therefore produce the reported duplicate/wrong-scale
+  image without a swapchain-resize log. This mechanism is code-backed but
+  runtime-unproven.
 
 ## Hypotheses (explicitly unproven)
 
@@ -154,11 +200,11 @@ Evidence logs:
   the depth-stencil and RTV in `OMSetRenderTargets` → `VR_RedirectRenderTargets`
   and logs swapchain resizes, so most of the instrumentation hooks already exist.
   The probe must use fixed storage in the D3D hot hooks and emit the completed
-  bounded snapshot later at Present. Compare the exact same DLL hash with MCC FSR
-  Off and On, desktop fit disabled, Halo 3 first and then ODST. Capture slot-0
-  RTV/UAV identity, dimensions/format/bind flags, viewport/scissor, eye-cache,
-  backbuffer, XR destination, and final blit path. Do not add an F1 toggle or alter
-  capture behavior until that transaction is proven.
+  bounded snapshot later at Present. Compare the exact same DLL hash with MCC
+  FSR Off and On, desktop fit disabled, Halo 3 first and then ODST. Capture
+  slot-0 RTV/UAV identity, dimensions/format/bind flags, viewport/scissor,
+  eye-cache, backbuffer, XR destination, and final blit path. Do not add an F1
+  toggle or alter capture behavior until that transaction is proven.
 - **Cap + tiers + safety (safe, user-testable):** raising `kResolutionScaleMax`
   and rescaling the tiers is constants-only across `config.h`, `config.cpp`,
   `launcher.cpp`, `menu.cpp`, plus an F1 warning past ~5k. The user can test how
@@ -171,14 +217,14 @@ Evidence logs:
 
 ## File / reference map
 
-- `src/launcher/launcher.cpp:94-232` — reads `resolution_scale`, emits
-  `-ResX/-ResY`.
-- `src/common/config.h:9-16,131-135` — `kNativeRenderWidth/Height`,
+- `src/launcher/launcher.cpp` — reads `resolution_scale`, emits `-ResX/-ResY`.
+- `src/common/config.h` — `kNativeRenderWidth/Height`,
   `kResolutionScaleMin/Max`, `resolution_scale`.
-- `src/common/config.cpp:59,219-220,494-495` — clamp, parse, save.
-- `src/dll/menu.cpp:431-457` — F1 "Resolution scale" slider + named tier presets.
-- `src/dll/d3d11_hook.cpp:81-117` — Present / Present1 / **ResizeBuffers** hooks.
-- `src/dll/vr.cpp:1176-1211` — `EnsureEyeCaches` (adaptive capture size).
-- `src/dll/vr.cpp:4692-4735` — `VR_OnResizeBuffers` / `VR_AfterResizeBuffers`.
-- `src/dll/vr.cpp:5110+` — `VR_RedirectRenderTargets` (scene-color RTV learn).
+- `src/common/config.cpp` — clamp, parse, save.
+- `src/dll/menu.cpp` — F1 "Resolution scale" slider + named tier presets.
+- `src/dll/d3d11_hook.cpp` — `PresentHook`, `Present1Hook`, and
+  `ResizeBuffersHook`.
+- `src/dll/vr.cpp` — `EnsureEyeCaches` (adaptive capture size),
+  `VR_OnResizeBuffers` / `VR_AfterResizeBuffers`, and
+  `VR_RedirectRenderTargets` (scene-color RTV learn).
 - `docs/RE-notes.md` "Resolution and upscaling" — the non-negotiable rules.

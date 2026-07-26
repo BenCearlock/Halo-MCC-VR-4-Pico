@@ -2,15 +2,11 @@
 #include <d3d11.h>
 #include <dxgi1_2.h>
 #include <cstdlib>
-#include <cstdint>
-#include <intrin.h>
 #include <MinHook.h>
-#include "sigscan.h"
 #include "d3d11_hook.h"
 #include "game.h"
 #include "vr.h"
 #include "../common/config.h"
-#include "../common/desktop_fit_logic.h"
 #include "../common/log.h"
 
 // We can't hook "the game's swapchain" directly because it doesn't exist yet
@@ -57,22 +53,14 @@ typedef HRESULT(STDMETHODCALLTYPE* CreateSwapChainForHwndFn)(IDXGIFactory2*, IUn
 typedef HRESULT(STDMETHODCALLTYPE* CreateSwapChainFn)(IDXGIFactory*, IUnknown*,
     DXGI_SWAP_CHAIN_DESC*, IDXGISwapChain**);
 typedef BOOL(WINAPI* GetClientRectFn)(HWND, LPRECT);
-typedef BOOL(WINAPI* GetCursorPosFn)(LPPOINT);
 static CreateSwapChainForHwndFn g_origCreateSwapChainForHwnd = nullptr;
 static CreateSwapChainFn g_origCreateSwapChain = nullptr;
 static GetClientRectFn g_origGetClientRect = nullptr;
-static GetCursorPosFn g_origGetCursorPos = nullptr;
 static UINT g_forcedRenderW = 0;
 static UINT g_forcedRenderH = 0;
 static bool g_forcedMainSwapchain = false; // only force the game's own (first) swapchain
 static HWND g_gameHwnd = nullptr;          // captured at swapchain creation
 static bool g_fitActive = false;           // set once at startup: fit on AND its hooks installed
-// Return address immediately after MCC's uniquely signature-resolved
-// GetCursorPos -> ScreenToClient coordinate call. Every other GetCursorPos
-// consumer must retain real screen coordinates (notably WindowFromPoint).
-static uintptr_t g_mccMenuCursorReturn = 0;
-static volatile LONG g_cursorRemapLogs = 0;
-static volatile LONG g_cursorOutsideLogs = 0;
 // Set on the game's UI thread ONLY while it synchronously processes a WM_SIZE we
 // rewrote to the full render size, so GetClientRectHook feeds MCC's own resize
 // code the full size on exactly that call stack -- never on the render thread's
@@ -138,159 +126,15 @@ static BOOL WINAPI GetClientRectHook(HWND hwnd, LPRECT rc)
     return ok;
 }
 
-// Resolve the one MCC cursor read that immediately feeds ScreenToClient and two
-// stored float coordinates. The retail executable has other GetCursorPos
-// consumers:
-// one feeds WindowFromPoint (window ownership) and another performs a separate
-// active-window/DPI conversion. Rewriting those process-wide was the a440654
-// failure: synthetic render-space points can be off-screen, so WindowFromPoint
-// can stop recognizing MCC and corrupt native window/input routing.
-//
-// The AOB contains both imported calls and is unique in the pinned retail
-// executable. Its RIP-relative IAT displacements and branch displacement are
-// wildcarded. Zero/multiple matches or unexpected import targets fail open: the
-// fitted window is not activated.
-static bool ResolveMccMenuCursorCaller(
-    void* getCursorPosApi, void* screenToClientApi)
-{
-    static constexpr char kCursorToClientPattern[] =
-        "4C 89 7C 24 38 48 8D 4C 24 38 "
-        "FF 15 ?? ?? ?? ?? 85 C0 0F 84 ?? ?? ?? ?? "
-        "48 8D 54 24 38 49 8B 8C 24 C0 00 00 00 "
-        "FF 15 ?? ?? ?? ?? 85 C0";
-    static constexpr size_t kGetCursorCallOffset = 10;
-    static constexpr size_t kGetCursorReturnOffset = 16;
-    static constexpr size_t kScreenToClientCallOffset = 37;
-
-    HMODULE executable = GetModuleHandleW(nullptr);
-    if (!executable)
-        return false;
-    const uintptr_t base = reinterpret_cast<uintptr_t>(executable);
-    const IMAGE_DOS_HEADER* dos =
-        reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
-    if (dos->e_magic != IMAGE_DOS_SIGNATURE || dos->e_lfanew <= 0)
-        return false;
-    const IMAGE_NT_HEADERS* nt = reinterpret_cast<const IMAGE_NT_HEADERS*>(
-        base + static_cast<uintptr_t>(dos->e_lfanew));
-    if (nt->Signature != IMAGE_NT_SIGNATURE ||
-        nt->OptionalHeader.SizeOfImage == 0)
-    {
-        return false;
-    }
-    const size_t imageSize = nt->OptionalHeader.SizeOfImage;
-    const uintptr_t imageEnd = base + imageSize;
-
-    const uintptr_t match = sig::Find(base, imageSize, kCursorToClientPattern);
-    if (!match)
-    {
-        LOG("fit: MCC menu cursor signature missing; desktop fit remains inactive");
-        return false;
-    }
-    const uintptr_t next = match + 1;
-    if (next < imageEnd &&
-        sig::Find(next, static_cast<size_t>(imageEnd - next),
-                  kCursorToClientPattern))
-    {
-        LOG("fit: MCC menu cursor signature is ambiguous; desktop fit remains inactive");
-        return false;
-    }
-
-    auto importedCallTarget = [base, imageEnd](uintptr_t call) -> void* {
-        const BYTE* code = reinterpret_cast<const BYTE*>(call);
-        if (code[0] != 0xFF || code[1] != 0x15)
-            return nullptr;
-        const uintptr_t slot = sig::RipTarget(call + 2, call + 6);
-        if (slot < base || slot > imageEnd - sizeof(void*))
-            return nullptr;
-        return *reinterpret_cast<void* const*>(slot);
-    };
-
-    if (importedCallTarget(match + kGetCursorCallOffset) != getCursorPosApi ||
-        importedCallTarget(match + kScreenToClientCallOffset) !=
-            screenToClientApi)
-    {
-        LOG("fit: MCC menu cursor signature import identity failed; desktop fit "
-            "remains inactive");
-        return false;
-    }
-
-    g_mccMenuCursorReturn = match + kGetCursorReturnOffset;
-    LOG("fit: MCC menu cursor input resolved by unique signature at executable+0x%llX",
-        static_cast<unsigned long long>(match - base));
-    return true;
-}
-
-// The selected MCC input-record read starts with an absolute screen point, then
-// converts it to client coordinates and stores the result as two floats. Scale
-// only that caller for the fitted/full-render geometry. All other callers,
-// including MCC's WindowFromPoint ownership check and the mod's ImGui backend,
-// continue to receive the real physical cursor.
-static BOOL WINAPI GetCursorPosHook(LPPOINT p)
-{
-    const BOOL ok = g_origGetCursorPos(p);
-    if (!ok || !p || !g_fitActive || !g_gameHwnd || !g_forcedRenderW || !g_forcedRenderH)
-        return ok;
-    if (reinterpret_cast<uintptr_t>(_ReturnAddress()) != g_mccMenuCursorReturn)
-        return ok;
-    RECT rc{};
-    if (!g_origGetClientRect(g_gameHwnd, &rc))
-        return ok;
-    const int cw = rc.right - rc.left;
-    const int ch = rc.bottom - rc.top;
-    if (cw <= 0 || ch <= 0)
-        return ok;
-    POINT origin{0, 0};
-    if (!ClientToScreen(g_gameHwnd, &origin))
-        return ok;
-    if (p->x < origin.x || p->x >= origin.x + cw ||
-        p->y < origin.y || p->y >= origin.y + ch)
-    {
-        const LONG logIndex = InterlockedIncrement(&g_cursorOutsideLogs);
-        if (logIndex <= 3)
-        {
-            LOG("fit: MCC menu cursor is outside fitted client: screen=(%ld,%ld) "
-                "clientOrigin=(%ld,%ld) client=%dx%d",
-                p->x, p->y, origin.x, origin.y, cw, ch);
-        }
-        return ok;
-    }
-
-    int mappedX = 0;
-    int mappedY = 0;
-    if (!MapDesktopFitPoint(
-            p->x - origin.x, p->y - origin.y, cw, ch,
-            static_cast<int>(g_forcedRenderW),
-            static_cast<int>(g_forcedRenderH), mappedX, mappedY))
-    {
-        return ok;
-    }
-    const LONG rx = origin.x + mappedX;
-    const LONG ry = origin.y + mappedY;
-    if (cw != static_cast<int>(g_forcedRenderW) ||
-        ch != static_cast<int>(g_forcedRenderH))
-    {
-        const LONG logIndex = InterlockedIncrement(&g_cursorRemapLogs);
-        if (logIndex <= 3)
-        {
-            LOG("fit: menu cursor remap real (%ld,%ld) -> (%ld,%ld) "
-                "[client %dx%d render %ux%u]",
-                p->x, p->y, rx, ry, cw, ch,
-                g_forcedRenderW, g_forcedRenderH);
-        }
-    }
-    p->x = rx;
-    p->y = ry;
-    return ok;
-}
-
 static HRESULT STDMETHODCALLTYPE CreateSwapChainForHwndHook(IDXGIFactory2* self, IUnknown* device,
     HWND hwnd, const DXGI_SWAP_CHAIN_DESC1* pDesc,
     const DXGI_SWAP_CHAIN_FULLSCREEN_DESC* pFullscreen, IDXGIOutput* restrictOut,
     IDXGISwapChain1** ppSwapChain)
 {
-    if (g_fitActive && pDesc && g_forcedRenderW && g_forcedRenderH &&
-        !g_forcedMainSwapchain)
+    if (pDesc && g_forcedRenderW && g_forcedRenderH && !g_forcedMainSwapchain)
     {
+        g_forcedMainSwapchain = true;
+        g_gameHwnd = hwnd;
         DXGI_SWAP_CHAIN_DESC1 desc = *pDesc;
         LOG("fit: CreateSwapChainForHwnd MCC requested %ux%u scaling=%d hwnd=%p "
             "-> forcing backbuffer %ux%u STRETCH",
@@ -304,11 +148,6 @@ static HRESULT STDMETHODCALLTYPE CreateSwapChainForHwndHook(IDXGIFactory2* self,
         if (FAILED(hr))
             LOG("fit: forced CreateSwapChainForHwnd FAILED (hr=0x%08X); the fit did "
                 "NOT apply on this machine", (unsigned)hr);
-        else
-        {
-            g_forcedMainSwapchain = true;
-            g_gameHwnd = hwnd;
-        }
         return hr;
     }
     return g_origCreateSwapChainForHwnd(self, device, hwnd, pDesc, pFullscreen,
@@ -318,9 +157,10 @@ static HRESULT STDMETHODCALLTYPE CreateSwapChainForHwndHook(IDXGIFactory2* self,
 static HRESULT STDMETHODCALLTYPE CreateSwapChainHook(IDXGIFactory* self, IUnknown* device,
     DXGI_SWAP_CHAIN_DESC* pDesc, IDXGISwapChain** ppSwapChain)
 {
-    if (g_fitActive && pDesc && g_forcedRenderW && g_forcedRenderH &&
-        !g_forcedMainSwapchain)
+    if (pDesc && g_forcedRenderW && g_forcedRenderH && !g_forcedMainSwapchain)
     {
+        g_forcedMainSwapchain = true;
+        g_gameHwnd = pDesc->OutputWindow;
         DXGI_SWAP_CHAIN_DESC desc = *pDesc;
         LOG("fit: CreateSwapChain(legacy) MCC requested %ux%u -> forcing %ux%u",
             pDesc->BufferDesc.Width, pDesc->BufferDesc.Height,
@@ -331,11 +171,6 @@ static HRESULT STDMETHODCALLTYPE CreateSwapChainHook(IDXGIFactory* self, IUnknow
         if (FAILED(hr))
             LOG("fit: forced CreateSwapChain FAILED (hr=0x%08X); the fit did NOT "
                 "apply on this machine", (unsigned)hr);
-        else
-        {
-            g_forcedMainSwapchain = true;
-            g_gameHwnd = pDesc->OutputWindow;
-        }
         return hr;
     }
     return g_origCreateSwapChain(self, device, pDesc, ppSwapChain);
@@ -503,10 +338,10 @@ static HRESULT STDMETHODCALLTYPE ResizeBuffersHook(IDXGISwapChain* sc, UINT buff
     // With the fit on, keep the backbuffer pinned to the full launched render
     // size so a later resize (e.g. triggered when we shrink the visible window to
     // fit the monitor) can't clamp the surface the headset captures back down.
-    // With the fit inactive this passes the size through unchanged, even when
-    // config supplied a forced size but a required display/input proof failed.
+    // With the fit off, g_forcedRenderW/H are 0 and this passes the size through
+    // unchanged -- exactly the previous behavior.
     UINT fw = width, fh = height;
-    if (g_fitActive && g_forcedRenderW && g_forcedRenderH)
+    if (g_forcedRenderW && g_forcedRenderH)
     {
         fw = g_forcedRenderW;
         fh = g_forcedRenderH;
@@ -592,7 +427,6 @@ bool InstallD3D11Hooks()
     {
         bool forceHookOk = false;
         bool clientRectHookOk = false;
-        bool cursorHookOk = false;
 
         // Hook the DXGI factory's swapchain-creation entry points so we can force
         // MCC's backbuffer to the full launched render size. All factories in the
@@ -608,20 +442,14 @@ bool InstallD3D11Hooks()
             SUCCEEDED(adapter->GetParent(__uuidof(IDXGIFactory2), (void**)&factory2)))
         {
             void** facVtbl = *(void***)factory2;
-            const bool hwndHookOk =
-                MH_CreateHook(facVtbl[15], (void*)&CreateSwapChainForHwndHook,
-                              (void**)&g_origCreateSwapChainForHwnd) == MH_OK;
-            const bool legacyHookOk =
-                MH_CreateHook(facVtbl[10], (void*)&CreateSwapChainHook,
-                              (void**)&g_origCreateSwapChain) == MH_OK;
-            if (!hwndHookOk)
+            if (MH_CreateHook(facVtbl[15], (void*)&CreateSwapChainForHwndHook,
+                              (void**)&g_origCreateSwapChainForHwnd) == MH_OK)
+                forceHookOk = true;
+            else
                 LOG("warning: CreateSwapChainForHwnd hook failed; desktop fit inactive");
-            if (!legacyHookOk)
+            if (MH_CreateHook(facVtbl[10], (void*)&CreateSwapChainHook,
+                              (void**)&g_origCreateSwapChain) != MH_OK)
                 LOG("warning: CreateSwapChain hook failed; legacy desktop fit inactive");
-            // MCC currently uses the legacy path, but both entry points are
-            // required so a runtime/window recreation cannot cross into an
-            // unforced swapchain after the visible window has been shrunk.
-            forceHookOk = hwndHookOk && legacyHookOk;
         }
         else
         {
@@ -647,38 +475,15 @@ bool InstallD3D11Hooks()
                     LOG("warning: GetClientRect hook failed; the fit may crop on "
                         "resize-polling titles");
             }
-
-            // Remap only the signature-resolved cursor-to-client coordinate
-            // read. This input transform is required: shrinking without it
-            // produces a visible fit whose native menu cannot be operated.
-            void* pGetCursorPos = reinterpret_cast<void*>(
-                GetProcAddress(user32, "GetCursorPos"));
-            void* pScreenToClient = reinterpret_cast<void*>(
-                GetProcAddress(user32, "ScreenToClient"));
-            if (pGetCursorPos && pScreenToClient &&
-                ResolveMccMenuCursorCaller(pGetCursorPos, pScreenToClient))
-            {
-                if (MH_CreateHook(pGetCursorPos, (void*)&GetCursorPosHook,
-                                  (void**)&g_origGetCursorPos) == MH_OK)
-                {
-                    cursorHookOk = true;
-                }
-                else
-                {
-                    LOG("warning: scoped GetCursorPos hook failed; desktop fit "
-                        "remains inactive");
-                }
-            }
         }
 
-        // The desktop fit engages only when the two display levers and the
-        // signature-scoped cursor-coordinate transform are all in place. A
-        // missing input lever leaves stock window geometry instead of reproducing a
-        // fitted but inoperable menu.
-        g_fitActive = forceHookOk && clientRectHookOk && cursorHookOk;
+        // The desktop fit only engages if BOTH levers that keep MCC drawing full
+        // are in place. If either failed, we leave the window at full size (the
+        // previous overflow behavior) rather than risk shrinking it into a crop.
+        g_fitActive = forceHookOk && clientRectHookOk;
         if (!g_fitActive)
-            LOG("fit_desktop_window ON but a required display/input hook is missing; "
-                "leaving the desktop window full-size");
+            LOG("fit_desktop_window ON but a required hook is missing; leaving the "
+                "desktop window full-size (no shrink) to avoid a cropped render");
     }
 
     sc->Release();
@@ -692,10 +497,5 @@ bool InstallD3D11Hooks()
         LOG("MinHook could not hook the required D3D render path");
         return false;
     }
-    if (MH_EnableHook(MH_ALL_HOOKS) != MH_OK)
-    {
-        g_fitActive = false;
-        return false;
-    }
-    return true;
+    return MH_EnableHook(MH_ALL_HOOKS) == MH_OK;
 }

@@ -3626,21 +3626,20 @@ int main()
 
     int fittedX = -1;
     int fittedY = -1;
-    Check(MapDesktopFitPoint(
-              491, 340, 982, 681, 3204, 2310, fittedX, fittedY) &&
-              fittedX == 1602 && fittedY == 1153,
-        "Desktop-fit cursor mapping scales the fitted client into render space");
-    Check(MapDesktopFitPoint(
-              981, 680, 982, 681, 3204, 2310, fittedX, fittedY) &&
-              fittedX >= 0 && fittedX < 3204 &&
-              fittedY >= 0 && fittedY < 2310,
-        "Desktop-fit cursor mapping keeps the final source pixel in bounds");
-    Check(!MapDesktopFitPoint(
-              982, 680, 982, 681, 3204, 2310, fittedX, fittedY),
-        "Desktop-fit cursor mapping rejects points outside the source client");
-    Check(!MapDesktopFitPoint(
-              0, 0, 0, 681, 3204, 2310, fittedX, fittedY),
-        "Desktop-fit cursor mapping rejects invalid client dimensions");
+    Check(MapDesktopFitCursorPoint(
+              1244, 624, 3204, 2310, 982, 681, fittedX, fittedY) &&
+              fittedX == 381 && fittedY == 183,
+        "Desktop fit preserves a stranded cursor's normalized client position");
+    Check(MapDesktopFitCursorPoint(
+              3203, 2309, 3204, 2310, 982, 681, fittedX, fittedY) &&
+              fittedX == 981 && fittedY == 680,
+        "Desktop-fit cursor preservation keeps the final source pixel in bounds");
+    Check(!MapDesktopFitCursorPoint(
+              3204, 2309, 3204, 2310, 982, 681, fittedX, fittedY),
+        "Desktop-fit cursor preservation rejects points outside the old client");
+    Check(!MapDesktopFitCursorPoint(
+              0, 0, 0, 2310, 982, 681, fittedX, fittedY),
+        "Desktop-fit cursor preservation rejects invalid client dimensions");
 
     if (g_failures == 0)
         std::cout << "HaloMCCVR core tests passed\n";

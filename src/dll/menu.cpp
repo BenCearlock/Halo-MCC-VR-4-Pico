@@ -14,6 +14,7 @@
 #include "d3d11_hook.h"
 #include "../common/log.h"
 #include "../common/config.h"
+#include "../common/desktop_fit_logic.h"
 
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND, UINT, WPARAM, LPARAM);
 
@@ -44,6 +45,22 @@ namespace
     // own (UI) thread, where touching window size/position is safe.
     constexpr UINT kFitGameWindowMsg = WM_APP + 0x37;
 
+    HWND RootWindowAtPoint(POINT point)
+    {
+        const HWND window = WindowFromPoint(point);
+        return window ? GetAncestor(window, GA_ROOT) : nullptr;
+    }
+
+    bool ScreenPointInClient(
+        POINT point, POINT clientOrigin, int clientWidth, int clientHeight)
+    {
+        return clientWidth > 0 && clientHeight > 0 &&
+            point.x >= clientOrigin.x &&
+            point.x < clientOrigin.x + clientWidth &&
+            point.y >= clientOrigin.y &&
+            point.y < clientOrigin.y + clientHeight;
+    }
+
     // Fit the game window inside the primary monitor's work area, preserving the
     // render aspect (kNativeRenderWidth:kNativeRenderHeight, constant because
     // resolution_scale is uniform) so the downscaled desktop picture isn't
@@ -53,10 +70,32 @@ namespace
     // thread.
     void FitGameWindow(HWND hwnd)
     {
+        RECT oldClient{};
+        POINT oldOrigin{0, 0};
+        POINT oldCursor{};
+        const bool haveOldClient =
+            GetClientRect(hwnd, &oldClient) &&
+            ClientToScreen(hwnd, &oldOrigin);
+        const bool haveCursor = GetCursorPos(&oldCursor);
+        const HWND oldCursorRoot =
+            haveCursor ? RootWindowAtPoint(oldCursor) : nullptr;
+        const HMONITOR oldCursorMonitor =
+            haveCursor
+                ? MonitorFromPoint(oldCursor, MONITOR_DEFAULTTONULL) : nullptr;
+        const int oldClientW = oldClient.right - oldClient.left;
+        const int oldClientH = oldClient.bottom - oldClient.top;
+        const bool cursorWasInOldClient =
+            haveOldClient && haveCursor &&
+            ScreenPointInClient(
+                oldCursor, oldOrigin, oldClientW, oldClientH);
+
         HMONITOR mon = MonitorFromWindow(hwnd, MONITOR_DEFAULTTOPRIMARY);
         MONITORINFO mi{sizeof(mi)};
         if (!GetMonitorInfo(mon, &mi))
             return;
+        const bool sameMonitor =
+            oldCursorMonitor != nullptr && oldCursorMonitor == mon;
+
         const int workW = mi.rcWork.right - mi.rcWork.left;
         const int workH = mi.rcWork.bottom - mi.rcWork.top;
         if (workW <= 0 || workH <= 0)
@@ -71,7 +110,100 @@ namespace
         }
         const int x = mi.rcWork.left + (workW - w) / 2;
         const int y = mi.rcWork.top + (workH - h) / 2;
-        SetWindowPos(hwnd, nullptr, x, y, w, h, SWP_NOZORDER | SWP_NOACTIVATE);
+        if (!SetWindowPos(
+                hwnd, nullptr, x, y, w, h,
+                SWP_NOZORDER | SWP_NOACTIVATE))
+        {
+            LOG("fit: SetWindowPos failed (%lu); cursor and window left unchanged",
+                static_cast<unsigned long>(GetLastError()));
+            return;
+        }
+
+        RECT newClient{};
+        POINT newOrigin{0, 0};
+        if (!GetClientRect(hwnd, &newClient) ||
+            !ClientToScreen(hwnd, &newOrigin))
+        {
+            LOG("fit: fitted window applied, but final client geometry was unavailable");
+            return;
+        }
+        const int newClientW = newClient.right - newClient.left;
+        const int newClientH = newClient.bottom - newClient.top;
+        const bool shrank =
+            haveOldClient && oldClientW > 0 && oldClientH > 0 &&
+            newClientW > 0 && newClientH > 0 &&
+            (newClientW < oldClientW || newClientH < oldClientH);
+        POINT cursorAfter{};
+        const bool cursorUnchanged =
+            haveCursor && GetCursorPos(&cursorAfter) &&
+            cursorAfter.x == oldCursor.x && cursorAfter.y == oldCursor.y;
+        const bool cursorInsideNewClient =
+            cursorUnchanged &&
+            ScreenPointInClient(
+                cursorAfter, newOrigin, newClientW, newClientH);
+
+        // MCC uses a physical WindowFromPoint query to decide whether its
+        // Windows cursor belongs to the game. An oversized client can contain a
+        // parked mouse before this shrink and strand it on the desktop after it,
+        // leaving that ownership test false even while XInput remains healthy.
+        //
+        // Move the pointer once only when the old physical point was inside
+        // this root window's client on the selected monitor and the shrink
+        // would leave it outside the new client. A cursor over non-client
+        // controls, another app, or another monitor is never touched.
+        if (cursorUnchanged && oldCursorRoot == hwnd && sameMonitor &&
+            cursorWasInOldClient && shrank && !cursorInsideNewClient)
+        {
+            int mappedX = 0;
+            int mappedY = 0;
+            if (!MapDesktopFitCursorPoint(
+                    oldCursor.x - oldOrigin.x,
+                    oldCursor.y - oldOrigin.y,
+                    oldClientW, oldClientH,
+                    newClientW, newClientH,
+                    mappedX, mappedY))
+            {
+                LOG("fit: stranded game-owned cursor left unchanged because "
+                    "its old client coordinates were invalid");
+                return;
+            }
+            const POINT newCursor{
+                newOrigin.x + mappedX,
+                newOrigin.y + mappedY};
+            if (RootWindowAtPoint(newCursor) != hwnd)
+            {
+                LOG("fit: stranded game-owned cursor left unchanged because "
+                    "the fitted destination is covered by another window");
+            }
+            else if (SetCursorPos(newCursor.x, newCursor.y))
+            {
+                const bool ownerVerified =
+                    RootWindowAtPoint(newCursor) == hwnd;
+                LOG("fit: preserved game-owned cursor (%ld,%ld) -> (%ld,%ld) "
+                    "[client %dx%d -> %dx%d, owner verified=%d]",
+                    oldCursor.x, oldCursor.y,
+                    newCursor.x, newCursor.y,
+                    oldClientW, oldClientH,
+                    newClientW, newClientH,
+                    ownerVerified ? 1 : 0);
+            }
+            else
+            {
+                LOG("fit: could not preserve stranded game-owned cursor (%lu)",
+                    static_cast<unsigned long>(GetLastError()));
+            }
+        }
+        else
+        {
+            LOG("fit: client %dx%d -> %dx%d; cursor preservation not needed "
+                "[available=%d old-owner=%d old-client=%d same-monitor=%d "
+                "unchanged=%d shrank=%d inside-new=%d]",
+                oldClientW, oldClientH, newClientW, newClientH,
+                haveCursor ? 1 : 0, oldCursorRoot == hwnd ? 1 : 0,
+                cursorWasInOldClient ? 1 : 0, sameMonitor ? 1 : 0,
+                cursorUnchanged ? 1 : 0, shrank ? 1 : 0,
+                cursorInsideNewClient ? 1 : 0);
+        }
     }
 
     // Mouse messages whose lParam is a client-area point. With the fit on the

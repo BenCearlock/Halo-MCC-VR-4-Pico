@@ -2,7 +2,9 @@
 
 #include <cstdint>
 
-inline bool MapDesktopFitPoint(
+// Preserve a cursor's normalized client position when a window is resized.
+// Both rectangles use half-open pixel bounds: [0,width) x [0,height).
+inline bool MapDesktopFitCursorPoint(
     int x, int y,
     int sourceWidth, int sourceHeight,
     int destinationWidth, int destinationHeight,
