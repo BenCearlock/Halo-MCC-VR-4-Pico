@@ -2,7 +2,11 @@
 #include <d3d11.h>
 #include <dxgi1_2.h>
 #include <cstdlib>
+#include <cmath>
+#include <intrin.h>
 #include <MinHook.h>
+
+#pragma intrinsic(_ReturnAddress)
 #include "d3d11_hook.h"
 #include "game.h"
 #include "vr.h"
@@ -124,6 +128,165 @@ static BOOL WINAPI GetClientRectHook(HWND hwnd, LPRECT rc)
         rc->bottom = (LONG)g_forcedRenderH;
     }
     return ok;
+}
+
+// --- Fitted-menu cursor coordinate remap -----------------------------------
+// With the fit on, MCC DRAWS the full render (e.g. 3204x2310) but the visible
+// window is shrunk to the monitor and the GPU downscales it on present. MCC
+// lays out and hit-tests its native shell / pause menu in that full render
+// space, yet the OS cursor that drives EVERY selection -- the mouse, and the
+// gamepad/keyboard "virtual cursor" MCC's console-style shell moves for you --
+// is confined to the small physical window. So only the top-left window-sized
+// slice of the menu is reachable: the pointer only responds top-left, and
+// keyboard/controller focus "moves but stops short" at the window edge. That is
+// the exact reported symptom.
+//
+// Fix: make MCC's OS-cursor coordinate space match the fitted window in BOTH
+// directions, and touch only calls that come from the game executable.
+//   * GetCursorPos (MCC reads the cursor): scale the physical, window-confined
+//     point UP into full render space, so the hit-test lands on the widget
+//     directly under the visibly-downscaled cursor.
+//   * SetCursorPos (MCC moves the cursor for gamepad/keyboard nav): scale its
+//     render-space target back DOWN so the OS cursor stays inside the window
+//     and the round-trip through GetCursorPos is exact.
+//   * WindowFromPoint MUST keep seeing the TRUE physical point. MCC calls it
+//     right after GetCursorPos to confirm the cursor is over its window; if it
+//     saw our scaled-up point (which lands outside the small window) it decides
+//     the cursor left and drops the input. That silent detail is what broke the
+//     earlier broad GetCursorPos rewrite. We undo the remap for exactly the
+//     value we last handed out, so no game address needs to be hardcoded.
+typedef BOOL(WINAPI* GetCursorPosFn)(LPPOINT);
+typedef BOOL(WINAPI* SetCursorPosFn)(int, int);
+typedef HWND(WINAPI* WindowFromPointFn)(POINT);
+static GetCursorPosFn g_origGetCursorPos = nullptr;
+static SetCursorPosFn g_origSetCursorPos = nullptr;
+static WindowFromPointFn g_origWindowFromPoint = nullptr;
+
+// The shell/pause cursor consumers live in the game executable (RE-notes /
+// RESOLUTION-FSR-INVESTIGATION static analysis). We only remap calls whose
+// return address is inside that image, so our own ImGui overlay and any system
+// DLL are never touched.
+static const BYTE* g_exeBase = nullptr;
+static const BYTE* g_exeEnd = nullptr;
+static void InitExeRange()
+{
+    HMODULE h = GetModuleHandleW(nullptr);
+    if (!h)
+        return;
+    auto dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(h);
+    if (dos->e_magic != IMAGE_DOS_SIGNATURE)
+        return;
+    auto nt = reinterpret_cast<const IMAGE_NT_HEADERS*>(
+        reinterpret_cast<const BYTE*>(h) + dos->e_lfanew);
+    if (nt->Signature != IMAGE_NT_SIGNATURE)
+        return;
+    g_exeBase = reinterpret_cast<const BYTE*>(h);
+    g_exeEnd = g_exeBase + nt->OptionalHeader.SizeOfImage;
+}
+static inline bool CallerInExe(const void* ret)
+{
+    return g_exeBase && ret >= static_cast<const void*>(g_exeBase) &&
+           ret < static_cast<const void*>(g_exeEnd);
+}
+
+// True (unlied) fitted-window client origin (in screen space) and size. Uses
+// the ORIGINAL GetClientRect so the WM_SIZE full-size lie can never leak in.
+static bool FitClientMetrics(POINT& originScreen, LONG& clientW, LONG& clientH)
+{
+    if (!g_gameHwnd || !g_origGetClientRect)
+        return false;
+    RECT rc{};
+    if (!g_origGetClientRect(g_gameHwnd, &rc))
+        return false;
+    clientW = rc.right - rc.left;
+    clientH = rc.bottom - rc.top;
+    if (clientW <= 0 || clientH <= 0)
+        return false;
+    originScreen.x = 0;
+    originScreen.y = 0;
+    return ClientToScreen(g_gameHwnd, &originScreen) != FALSE;
+}
+
+// The exact point we last handed MCC remapped, so WindowFromPoint can undo it.
+// Thread-local because MCC's GetCursorPos -> WindowFromPoint pair runs back to
+// back on one thread.
+static thread_local bool s_haveRemap = false;
+static thread_local POINT s_lastPhysical{};
+static thread_local POINT s_lastRemapped{};
+
+static BOOL WINAPI GetCursorPosHook(LPPOINT p)
+{
+    const void* caller = _ReturnAddress();
+    const BOOL ok = g_origGetCursorPos(p);
+    if (!ok || !p || !g_fitActive || !g_forcedRenderW || !g_forcedRenderH ||
+        !CallerInExe(caller))
+        return ok;
+    POINT origin{};
+    LONG cw = 0, ch = 0;
+    if (!FitClientMetrics(origin, cw, ch))
+        return ok;
+    // Only remap while the cursor is actually over the fitted window.
+    if (p->x < origin.x || p->y < origin.y ||
+        p->x >= origin.x + cw || p->y >= origin.y + ch)
+        return ok;
+    const POINT phys = *p;
+    POINT mapped;
+    mapped.x = origin.x +
+               (LONG)llround((double)(phys.x - origin.x) * g_forcedRenderW / cw);
+    mapped.y = origin.y +
+               (LONG)llround((double)(phys.y - origin.y) * g_forcedRenderH / ch);
+    s_haveRemap = true;
+    s_lastPhysical = phys;
+    s_lastRemapped = mapped;
+    *p = mapped;
+    static int s_log = 0;
+    if (s_log < 12)
+    {
+        ++s_log;
+        LOG("fit: menu cursor read +0x%llX phys(%ld,%ld) -> render(%ld,%ld) "
+            "client %ldx%ld",
+            (unsigned long long)((const BYTE*)caller - g_exeBase),
+            phys.x, phys.y, mapped.x, mapped.y, cw, ch);
+    }
+    return ok;
+}
+
+static BOOL WINAPI SetCursorPosHook(int X, int Y)
+{
+    const void* caller = _ReturnAddress();
+    if (!g_fitActive || !g_forcedRenderW || !g_forcedRenderH ||
+        !CallerInExe(caller))
+        return g_origSetCursorPos(X, Y);
+    POINT origin{};
+    LONG cw = 0, ch = 0;
+    if (!FitClientMetrics(origin, cw, ch))
+        return g_origSetCursorPos(X, Y);
+    // MCC targets the cursor in its own (full render) client space. Convert
+    // points that fall inside that render rectangle back into the small window
+    // so the OS cursor lands where MCC intends; leave anything else untouched.
+    const LONG relX = X - origin.x;
+    const LONG relY = Y - origin.y;
+    if (relX < 0 || relY < 0 ||
+        relX > (LONG)g_forcedRenderW || relY > (LONG)g_forcedRenderH)
+        return g_origSetCursorPos(X, Y);
+    const int px = origin.x + (int)llround((double)relX * cw / g_forcedRenderW);
+    const int py = origin.y + (int)llround((double)relY * ch / g_forcedRenderH);
+    static int s_log = 0;
+    if (s_log < 12)
+    {
+        ++s_log;
+        LOG("fit: menu cursor move +0x%llX render(%d,%d) -> phys(%d,%d)",
+            (unsigned long long)((const BYTE*)caller - g_exeBase), X, Y, px, py);
+    }
+    return g_origSetCursorPos(px, py);
+}
+
+static HWND WINAPI WindowFromPointHook(POINT pt)
+{
+    if (g_fitActive && s_haveRemap && pt.x == s_lastRemapped.x &&
+        pt.y == s_lastRemapped.y)
+        pt = s_lastPhysical;
+    return g_origWindowFromPoint(pt);
 }
 
 static HRESULT STDMETHODCALLTYPE CreateSwapChainForHwndHook(IDXGIFactory2* self, IUnknown* device,
@@ -475,6 +638,30 @@ bool InstallD3D11Hooks()
                     LOG("warning: GetClientRect hook failed; the fit may crop on "
                         "resize-polling titles");
             }
+
+            // Cursor coordinate remap so MCC's native shell / pause menu is
+            // navigable in the fitted window (see the block above the hooks).
+            // These are supplementary: if any fails, the display fit still works,
+            // the menu is just no more navigable than before -- so they do NOT
+            // gate g_fitActive.
+            InitExeRange();
+            void* pGetCursorPos = (void*)GetProcAddress(user32, "GetCursorPos");
+            void* pSetCursorPos = (void*)GetProcAddress(user32, "SetCursorPos");
+            void* pWindowFromPoint = (void*)GetProcAddress(user32, "WindowFromPoint");
+            const bool cursorHooksOk =
+                g_exeBase &&
+                pGetCursorPos &&
+                MH_CreateHook(pGetCursorPos, (void*)&GetCursorPosHook,
+                              (void**)&g_origGetCursorPos) == MH_OK &&
+                pSetCursorPos &&
+                MH_CreateHook(pSetCursorPos, (void*)&SetCursorPosHook,
+                              (void**)&g_origSetCursorPos) == MH_OK &&
+                pWindowFromPoint &&
+                MH_CreateHook(pWindowFromPoint, (void*)&WindowFromPointHook,
+                              (void**)&g_origWindowFromPoint) == MH_OK;
+            if (!cursorHooksOk)
+                LOG("warning: fitted-menu cursor remap hooks failed; the native "
+                    "shell/pause menu may not be fully navigable in the fitted window");
         }
 
         // The desktop fit only engages if BOTH levers that keep MCC drawing full

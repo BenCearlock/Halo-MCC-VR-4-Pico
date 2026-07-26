@@ -109,11 +109,37 @@ advance the accepted pointer in `docs/CURRENT-STATE.md`. Updated 2026-07-25.
   navigation was unchanged. That isolates the stock-vs-scaled message
   coordinate theory as another no-effect path; the user explicitly requested
   that the current fitted-window work not be reverted.
-- The forward candidate makes only the fitted MCC window borderless before it
-  is resized into the monitor work area. This follows the reproduced community
-  workaround that borderless mode preserves native shell/pause navigation. It
-  retains the forced full-size backbuffer, fake full-size resize transaction,
-  DXGI stretch, XInput transport, and title runtime unchanged.
+- `4424c10` made the fitted MCC window borderless before resizing it into the
+  monitor work area, on the reproduced community claim that borderless preserves
+  native shell/pause navigation. The user reported the fit still worked
+  (display), but the menu was unchanged.
+- **User headset evidence 2026-07-25 (the decisive read).** On the fitted
+  window the pointer responds only in the **top-left** region, and with the
+  keyboard alone the highlight **moves but stops short** of the lower items
+  (Halo 3 / ODST / Quit). Both symptoms are one root cause: MCC lays out and
+  hit-tests its native shell/pause menu in the **full render space**
+  (e.g. 3204x2310), but the OS cursor that drives every selection -- the mouse
+  AND the gamepad/keyboard "virtual cursor" the console-style shell moves -- is
+  confined to the **small physical window**, so only the top-left window-sized
+  slice is reachable. This is a coordinate-domain mismatch, not a focus or
+  borderless issue, and it is what every prior candidate mis-targeted.
+- **Cursor coordinate remap candidate (this change, `src/dll/d3d11_hook.cpp`).**
+  Make MCC's OS-cursor space match the fitted window in both directions, scoped
+  to callers inside the game executable image (never the mod's own ImGui overlay
+  or a system DLL), no hardcoded game address:
+    - `GetCursorPos` -> scale the physical, window-confined point UP into full
+      render space (uniform; the fitted window preserves render aspect).
+    - `SetCursorPos` -> scale MCC's render-space cursor target back DOWN into the
+      window so gamepad/keyboard nav stays inside it and the round-trip is exact.
+    - `WindowFromPoint` -> undo the remap for exactly the value last handed out,
+      so MCC's post-`GetCursorPos` "is the cursor still over my window?" check
+      keeps seeing the TRUE physical point. Feeding it the scaled-up point (which
+      lands outside the small window) is why the earlier broad `a440654` rewrite
+      dropped all input; this value-scoped undo avoids identifying that caller by
+      address. Bounded log lines `fit: menu cursor read ...` /
+      `fit: menu cursor move ...` record the first calls (caller RVA + before/
+      after coords) so, if a path is still not covered, MCC's cursor model is
+      proven rather than guessed. Built, tests pass; headset-PENDING.
 
 Evidence logs:
 
