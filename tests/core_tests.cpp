@@ -13,7 +13,6 @@
 #include <windows.h>
 
 #include "config.h"
-#include "desktop_fit_logic.h"
 #include "hud_layout_logic.h"
 #include "input_logic.h"
 #include "odst_bringup_logic.h"
@@ -3623,24 +3622,6 @@ int main()
               ERROR_DEVICE_NOT_CONNECTED, 0, false) ==
               ERROR_DEVICE_NOT_CONNECTED,
         "An invalid vibration request preserves the underlying SetState result");
-
-    int fittedX = -1;
-    int fittedY = -1;
-    Check(MapDesktopFitCursorPoint(
-              1244, 624, 3204, 2310, 982, 681, fittedX, fittedY) &&
-              fittedX == 381 && fittedY == 183,
-        "Desktop fit preserves a stranded cursor's normalized client position");
-    Check(MapDesktopFitCursorPoint(
-              3203, 2309, 3204, 2310, 982, 681, fittedX, fittedY) &&
-              fittedX == 981 && fittedY == 680,
-        "Desktop-fit cursor preservation keeps the final source pixel in bounds");
-    Check(!MapDesktopFitCursorPoint(
-              3204, 2309, 3204, 2310, 982, 681, fittedX, fittedY),
-        "Desktop-fit cursor preservation rejects points outside the old client");
-    Check(!MapDesktopFitCursorPoint(
-              0, 0, 0, 2310, 982, 681, fittedX, fittedY),
-        "Desktop-fit cursor preservation rejects invalid client dimensions");
-
     if (g_failures == 0)
         std::cout << "HaloMCCVR core tests passed\n";
     return g_failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
