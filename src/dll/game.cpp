@@ -10852,10 +10852,6 @@ namespace
         const bool rightFirst = g_config.right_eye_first;
         bool completed = false;
         bool transactionValid = true;
-        const bool authoredCrosshairRequired =
-            g_config.crosshair && g_config.kill_reticle;
-        bool authoredClass2Seen = false;
-        bool authoredCaptureCompleted = false;
         uint32_t capturedEyes = 0;
         __try
         {
@@ -10981,20 +10977,8 @@ namespace
                 {
                     fpCameraScope.active = false;
                 }
-                if (!renderReturned || fpCameraScope.chudParityFailed)
+                if (!renderReturned)
                 {
-                    transactionValid = false;
-                    break;
-                }
-                authoredClass2Seen =
-                    authoredClass2Seen || fpCameraScope.chudClass2Seen;
-                authoredCaptureCompleted = authoredCaptureCompleted ||
-                    fpCameraScope.authoredCrosshairCaptured;
-                if (pass == 1 && !ReachAuthoredCrosshairPairComplete(
-                        authoredCrosshairRequired, authoredClass2Seen,
-                        authoredCaptureCompleted))
-                {
-                    RejectReachChudParityForCurrentEye();
                     transactionValid = false;
                     break;
                 }
