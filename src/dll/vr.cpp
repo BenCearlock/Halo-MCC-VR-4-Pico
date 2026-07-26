@@ -1021,22 +1021,51 @@ float4 ps_present(VSOut i) : SV_Target
                           ID3D11RenderTargetView* dstRtv)
     {
         const bool xrSrgb = IsSrgb((DXGI_FORMAT)g_xrFormat);
-        const bool wantSharp = g_config.upscale_filter == 1;     // Catmull-Rom resolve
+        const bool wantSharp = g_config.upscale_filter == 1;     // Catmull-Rom resolve vs linear
         const bool wantAa = g_config.aa_mode != 0;               // FXAA (SMAA maps here for now)
         const bool wantRcas = g_config.sharpness > 0.001f;
-        // Our color math assumes an sRGB XR target; if anything is off or
-        // unavailable, use the proven plain blit unchanged.
-        if ((!wantSharp && !wantAa && !wantRcas) || !xrSrgb ||
-            srcDesc.SampleDesc.Count > 1 || !EnsureIqPipeline())
-            return Blit(src, srcDesc, dst, dstW, dstH, dstRtv);
+        const bool post = wantAa || wantRcas;
 
+        // NO FALLBACKS (project policy). The IQ path always renders the eye --
+        // "everything off" still runs the linear resolve pass, it never calls
+        // back into the stock blit. A genuinely missing prerequisite is a BUG and
+        // is surfaced LOUDLY, not hidden by silently reverting to the old look.
+        if (!EnsureIqPipeline())
+        {
+            static bool logged = false;
+            if (!logged) { logged = true; LOG("IQ ERROR: shader pipeline unavailable; eye NOT processed"); }
+            return false;
+        }
         ID3D11ShaderResourceView* srcSrv = AcquireSrcSrv(src, srcDesc);
         if (!srcSrv)
-            return Blit(src, srcDesc, dst, dstW, dstH, dstRtv);
-
-        const bool post = wantAa || wantRcas;
+        {
+            static bool logged = false;
+            if (!logged) { logged = true; LOG("IQ ERROR: source SRV unavailable; eye NOT processed"); }
+            return false;
+        }
         if (post && !EnsureIqChain(dstW, dstH))
-            return Blit(src, srcDesc, dst, dstW, dstH, dstRtv);
+        {
+            static bool logged = false;
+            if (!logged) { logged = true; LOG("IQ ERROR: intermediate chain unavailable; eye NOT processed"); }
+            return false;
+        }
+
+        // One-time and on-change: prove in the log exactly what the eye pass does.
+        {
+            static int lf = -99, la = -99; static float ls = -1.0f;
+            static uint32_t lsw = 0, ldw = 0;
+            if (lf != g_config.upscale_filter || la != g_config.aa_mode ||
+                ls != g_config.sharpness || lsw != srcDesc.Width || ldw != dstW)
+            {
+                lf = g_config.upscale_filter; la = g_config.aa_mode;
+                ls = g_config.sharpness; lsw = srcDesc.Width; ldw = dstW;
+                LOG("IQ: eye pass active -- resolve=%s aa=%d sharpen=%.2f "
+                    "src=%ux%u dst=%ux%u post=%d xrSrgb=%d",
+                    wantSharp ? "catmull" : "linear", g_config.aa_mode,
+                    g_config.sharpness, srcDesc.Width, srcDesc.Height, dstW, dstH,
+                    post ? 1 : 0, xrSrgb ? 1 : 0);
+            }
+        }
 
         const float srcIsSrgb = IsSrgb(srcDesc.Format) ? 1.0f : 0.0f;
 
