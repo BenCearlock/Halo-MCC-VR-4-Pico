@@ -62,7 +62,7 @@ static void Clamp()
                                         kDrawDistanceMin, kDrawDistanceMax);
     g_config.upscale_filter = std::clamp(g_config.upscale_filter, 0, 1);
     g_config.sharpness = std::clamp(g_config.sharpness, 0.0f, 1.0f);
-    g_config.aa_mode = std::clamp(g_config.aa_mode, 0, 2);
+    g_config.aa_mode = std::clamp(g_config.aa_mode, 0, 4);
     g_config.hud_size = std::clamp(g_config.hud_size, 0.30f, 1.00f);
     g_config.hud_aspect = std::clamp(g_config.hud_aspect, kHudAspectMin, kHudAspectMax);
     g_config.hud_curvature = std::clamp(g_config.hud_curvature,
@@ -541,13 +541,15 @@ void ConfigSave()
     fprintf(f, "# sharp keeps edges crisp instead of the linear shimmer. Live, no restart.\n");
     fprintf(f, "# (default %d)\n", d.upscale_filter);
     fprintf(f, "upscale_filter = %d\n\n", g_config.upscale_filter);
-    fprintf(f, "# Sharpening strength (contrast-adaptive, AMD RCAS). 0 = off, 1 = max.\n");
-    fprintf(f, "# Adds apparent detail without ringing. Live, no restart.\n");
+    fprintf(f, "# Sharpening strength (RCAS-based 2x overdrive). 0 = off, 1 = max.\n");
+    fprintf(f, "# The top is intentionally aggressive and can ring/clip; adjust down.\n");
+    fprintf(f, "# Same five taps and one pass as before. Live, no restart.\n");
     fprintf(f, "# (default %.2f, range 0 to 1)\n", d.sharpness);
     fprintf(f, "sharpness = %.2f\n\n", g_config.sharpness);
     fprintf(f, "# Anti-aliasing on the finished image: 0 = off, 1 = FXAA (balanced),\n");
-    fprintf(f, "# 2 = FXAA Strong (more smoothing/softening). Smooths jagged\n");
-    fprintf(f, "# edges without needing a huge render resolution. Live, no restart.\n");
+    fprintf(f, "# 2 = FXAA Strong, 3 = SMAA 1x, 4 = SMAA 1x + FXAA Strong.\n");
+    fprintf(f, "# Mode 4 is the most aggressive. SMAA modes cost more GPU when selected.\n");
+    fprintf(f, "# Smooths jagged edges without a huge render resolution. Live.\n");
     fprintf(f, "# (default %d)\n", d.aa_mode);
     fprintf(f, "aa_mode = %d\n\n", g_config.aa_mode);
     fprintf(f, "# HUD size: fraction of the view the HUD lays out into. Smaller pulls\n");

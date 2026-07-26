@@ -21,6 +21,9 @@
 #include "game.h"
 #include "d3d11_hook.h"
 #include "d3d_state.h"
+#include "smaa_resource.h"
+#include "AreaTex.h"
+#include "SearchTex.h"
 #include "title_adapter.h"
 #ifndef HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE
 #define HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE 0
@@ -32,6 +35,8 @@
 #include "../common/config.h"
 #include "../common/input_logic.h"
 #include "../common/scope_logic.h"
+
+extern "C" IMAGE_DOS_HEADER __ImageBase;
 
 // M0 "virtual cinema": every frame the game presents, we copy its backbuffer
 // into an OpenXR swapchain and submit it as a world-locked quad layer (a flat
@@ -310,21 +315,34 @@ namespace
     ID3D11ShaderResourceView* g_srcSrv = nullptr; // direct SRV of the backbuffer, when allowed
     ID3D11Texture2D* g_srcSrvKey = nullptr;
 
-    // Image-quality pipeline: sharp bicubic resolve + FXAA + RCAS sharpen, applied
-    // when each eye is expanded into the headset. Reuses g_blitVs/sampler/
-    // rasterizer/depth; adds pixel shaders, a params constant buffer, and two
-    // ping-pong intermediates sized to the eye. Created on demand, released with
-    // the other blit resources.
+    // Image-quality pipeline: sharp bicubic resolve + selectable FXAA/SMAA 1x +
+    // RCAS-based sharpen, applied when each eye is expanded into the headset.
+    // SMAA is lazy/opt-in and adds its third eye-sized target only while selected.
     ID3D11PixelShader* g_iqResolveSharp = nullptr;   // sharp Keys bicubic resolve/upscale
     ID3D11PixelShader* g_iqResolveLinear = nullptr;  // linear resolve (matches old blit)
     ID3D11PixelShader* g_iqFxaa = nullptr;
     ID3D11PixelShader* g_iqRcas = nullptr;
-    ID3D11PixelShader* g_iqPresent = nullptr;        // perceptual -> linear for the sRGB target
     ID3D11Buffer* g_iqCb = nullptr;
-    ID3D11Texture2D* g_iqChain[2] = {nullptr, nullptr};
-    ID3D11RenderTargetView* g_iqChainRtv[2] = {nullptr, nullptr};
-    ID3D11ShaderResourceView* g_iqChainSrv[2] = {nullptr, nullptr};
+    ID3D11Texture2D* g_iqChain[3] = {nullptr, nullptr, nullptr};
+    ID3D11RenderTargetView* g_iqChainRtv[3] = {nullptr, nullptr, nullptr};
+    ID3D11ShaderResourceView* g_iqChainSrv[3] = {nullptr, nullptr, nullptr};
     D3D11_TEXTURE2D_DESC g_iqChainDesc{};
+
+    // Official SMAA 1x shaders and immutable lookup tables. They are created on
+    // first SMAA selection and remain tiny; the third eye-sized target is the
+    // mode-scoped allocation released when SMAA is deselected.
+    ID3D11VertexShader* g_smaaEdgesVs = nullptr;
+    ID3D11VertexShader* g_smaaWeightsVs = nullptr;
+    ID3D11VertexShader* g_smaaNeighborhoodVs = nullptr;
+    ID3D11PixelShader* g_smaaEdgesPs = nullptr;
+    ID3D11PixelShader* g_smaaWeightsPs = nullptr;
+    ID3D11PixelShader* g_smaaNeighborhoodPs = nullptr;
+    ID3D11SamplerState* g_smaaPointSampler = nullptr;
+    ID3D11Texture2D* g_smaaAreaTex = nullptr;
+    ID3D11ShaderResourceView* g_smaaAreaSrv = nullptr;
+    ID3D11Texture2D* g_smaaSearchTex = nullptr;
+    ID3D11ShaderResourceView* g_smaaSearchSrv = nullptr;
+    bool g_smaaInitFailed = false;
     struct IqParams // matches cbuffer IqParams (b0); 32 bytes
     {
         float srcW, srcH, dstW, dstH;
@@ -799,7 +817,7 @@ float4 ps_pass(VSOut i) : SV_Target
     bool EnsureIqPipeline()
     {
         if (g_iqResolveSharp && g_iqResolveLinear && g_iqFxaa && g_iqRcas &&
-            g_iqPresent && g_iqCb)
+            g_iqCb)
             return true;
         if (!EnsureBlitPipeline())
             return false;
@@ -808,7 +826,6 @@ float4 ps_pass(VSOut i) : SV_Target
         release(g_iqResolveLinear);
         release(g_iqFxaa);
         release(g_iqRcas);
-        release(g_iqPresent);
         release(g_iqCb);
 
         static const char* src = R"(
@@ -818,7 +835,7 @@ cbuffer IqParams : register(b0)
 {
     float2 srcSize;      // dims of the texture being sampled this pass
     float2 dstSize;      // dims of the render target this pass
-    float  sharpness;    // 0..1 RCAS strength
+    float  sharpness;    // 0..1 UI range; RCAS correction is 2x overdriven
     float  srcIsSrgb;    // 1 = sampling srcTex already returns linear
     float  outPerceptual;// 1 = write perceptual (to UNORM); 0 = write linear (to sRGB RTV)
     float  aaStrength;   // 0 = FXAA, 1 = FXAA Strong
@@ -834,6 +851,7 @@ float3 toSrgb(float3 c){ c=saturate(c); return float3(
     c.b <= 0.0031308 ? c.b*12.92 : 1.055*pow(c.b,1.0/2.4)-0.055); }
 float3 srcLinear(float4 s){ return srcIsSrgb > 0.5 ? s.rgb : toLin(s.rgb); }
 float3 encodeOut(float3 lin){ return outPerceptual > 0.5 ? toSrgb(lin) : lin; }
+float3 finishPerceptual(float3 c){ return outPerceptual > 0.5 ? c : toLin(c); }
 float lumaP(float3 c){ return dot(c, float3(0.299, 0.587, 0.114)); }
 
 // Keys bicubic with a=-0.75. Catmull-Rom (a=-0.5) was mathematically valid but
@@ -896,7 +914,7 @@ float4 ps_fxaa(VSOut i) : SV_Target
     float edgeThresholdMin = lerp(0.0312, 0.0156, saturate(aaStrength));
     float edgeThreshold = lerp(0.125, 0.063, saturate(aaStrength));
     if ((lMax - lMin) < max(edgeThresholdMin, lMax * edgeThreshold))
-        return float4(m, 1);
+        return float4(finishPerceptual(m), 1);
     float2 dir;
     dir.x = -((lNW + lNE) - (lSW + lSE));
     dir.y =  ((lNW + lSW) - (lNE + lSE));
@@ -911,7 +929,8 @@ float4 ps_fxaa(VSOut i) : SV_Target
         srcTex.SampleLevel(smp, uv + dir * -0.5, 0).rgb +
         srcTex.SampleLevel(smp, uv + dir *  0.5, 0).rgb);
     float lB = lumaP(rgbB);
-    return (lB < lMin || lB > lMax) ? float4(rgbA, 1) : float4(rgbB, 1);
+    float3 result = (lB < lMin || lB > lMax) ? rgbA : rgbB;
+    return float4(finishPerceptual(result), 1);
 }
 
 float3 loadClamped(int2 p)
@@ -920,10 +939,9 @@ float3 loadClamped(int2 p)
     return srcTex.Load(int3(p, 0)).rgb;
 }
 
-// AMD FidelityFX FSR1 RCAS 32-bit limiter/resolve, adapted to the UI's
-// intuitive 0=off, 1=maximum scale. The previous RCAS-style approximation
-// used CAS weights and was not RCAS; in normal game neighborhoods its weights
-// stayed close enough to zero that even the top of the slider was hard to see.
+// AMD FidelityFX FSR1 RCAS 32-bit limiter/resolve, followed by a 2x correction
+// overdrive. This retains RCAS's safe lobe/denominator and the same five loads;
+// the user can pull the intentionally aggressive top end back with the slider.
 float4 ps_rcas(VSOut i) : SV_Target
 {
     int2 p = int2(i.pos.xy);
@@ -941,28 +959,27 @@ float4 ps_rcas(VSOut i) : SV_Target
     float3 hitMax = (1.0 - max(mx4, e)) / min(4.0 * mn4 - 4.0, -1e-5);
     float3 lobes = max(-hitMin, hitMax);
     float lobe = max(-0.1875, min(max(lobes.r, max(lobes.g, lobes.b)), 0.0));
-    lobe *= saturate(sharpness);
-    float3 res = (lobe * (b + d + f + h) + e) / (4.0 * lobe + 1.0);
-    return float4(saturate(res), 1);
-}
-
-// Present a perceptual intermediate to the sRGB XR target (decode -> hw re-encodes).
-float4 ps_present(VSOut i) : SV_Target
-{
-    return float4(toLin(srcTex.SampleLevel(smp, i.uv, 0).rgb), 1);
+    float scaledLobe = lobe * saturate(sharpness);
+    float3 rcas = (scaledLobe * (b + d + f + h) + e) /
+                  (4.0 * scaledLobe + 1.0);
+    float3 res = saturate(e + 2.0 * (rcas - e));
+    return float4(finishPerceptual(res), 1);
 }
 )";
         ID3DBlob* err = nullptr;
         auto compile = [&](const char* entry) -> ID3DBlob* {
             ID3DBlob* out = nullptr;
-            if (FAILED(D3DCompile(src, strlen(src), nullptr, nullptr, nullptr, entry,
-                                  "ps_5_0", 0, 0, &out, &err)))
+            const HRESULT hr = D3DCompile(
+                src, strlen(src), nullptr, nullptr, nullptr, entry, "ps_5_0",
+                D3DCOMPILE_OPTIMIZATION_LEVEL3, 0, &out, &err);
+            if (FAILED(hr))
             {
                 LOG("IQ shader '%s' failed to compile: %s", entry,
                     err ? (const char*)err->GetBufferPointer() : "?");
                 if (err) { err->Release(); err = nullptr; }
                 return nullptr;
             }
+            if (err) { err->Release(); err = nullptr; }
             return out;
         };
         struct Target { const char* entry; ID3D11PixelShader** out; };
@@ -971,7 +988,6 @@ float4 ps_present(VSOut i) : SV_Target
             {"ps_resolve_linear",  &g_iqResolveLinear},
             {"ps_fxaa",            &g_iqFxaa},
             {"ps_rcas",            &g_iqRcas},
-            {"ps_present",         &g_iqPresent},
         };
         for (const auto& t : targets)
         {
@@ -991,6 +1007,141 @@ float4 ps_present(VSOut i) : SV_Target
         return true;
     }
 
+    void ReleaseSmaaPipeline()
+    {
+        auto release = [](auto*& o) { if (o) o->Release(); o = nullptr; };
+        release(g_smaaEdgesVs);
+        release(g_smaaWeightsVs);
+        release(g_smaaNeighborhoodVs);
+        release(g_smaaEdgesPs);
+        release(g_smaaWeightsPs);
+        release(g_smaaNeighborhoodPs);
+        release(g_smaaPointSampler);
+        release(g_smaaAreaSrv);
+        release(g_smaaAreaTex);
+        release(g_smaaSearchSrv);
+        release(g_smaaSearchTex);
+    }
+
+    // Genuine SMAA 1x: official three-stage edge -> blend-weight -> neighborhood
+    // pipeline with the highest-coverage 1x preset and official lookup tables.
+    // Lazy creation keeps initial Off/FXAA startup unchanged; deselected modes
+    // run no SMAA passes and retain no SMAA-sized eye target.
+    bool EnsureSmaaPipeline()
+    {
+        if (g_smaaEdgesVs && g_smaaWeightsVs && g_smaaNeighborhoodVs &&
+            g_smaaEdgesPs && g_smaaWeightsPs && g_smaaNeighborhoodPs &&
+            g_smaaPointSampler && g_smaaAreaSrv && g_smaaSearchSrv)
+            return true;
+        if (g_smaaInitFailed)
+            return false;
+
+        ReleaseSmaaPipeline();
+        auto fail = [&]() {
+            ReleaseSmaaPipeline();
+            g_smaaInitFailed = true;
+            return false;
+        };
+
+        HMODULE self = reinterpret_cast<HMODULE>(&__ImageBase);
+        auto resourceBytes = [&](int id, const char* name,
+                                 const void*& bytes, DWORD& byteCount) {
+            HRSRC resource = FindResourceW(
+                self, MAKEINTRESOURCEW(id), RT_RCDATA);
+            HGLOBAL handle = resource ? LoadResource(self, resource) : nullptr;
+            bytes = handle ? LockResource(handle) : nullptr;
+            byteCount = resource ? SizeofResource(self, resource) : 0;
+            if (!bytes || !byteCount)
+                LOG("IQ ERROR: embedded SMAA shader '%s' unavailable (winerr=%lu)",
+                    name, GetLastError());
+            return bytes && byteCount;
+        };
+
+        auto createVs = [&](int id, const char* name, ID3D11VertexShader** out) {
+            const void* bytes = nullptr;
+            DWORD byteCount = 0;
+            if (!resourceBytes(id, name, bytes, byteCount))
+                return false;
+            const HRESULT hr = g_device->CreateVertexShader(
+                bytes, byteCount, nullptr, out);
+            if (FAILED(hr))
+                LOG("IQ ERROR: SMAA vertex shader '%s' creation failed (0x%08X)",
+                    name, (unsigned)hr);
+            return SUCCEEDED(hr);
+        };
+        auto createPs = [&](int id, const char* name, ID3D11PixelShader** out) {
+            const void* bytes = nullptr;
+            DWORD byteCount = 0;
+            if (!resourceBytes(id, name, bytes, byteCount))
+                return false;
+            const HRESULT hr = g_device->CreatePixelShader(
+                bytes, byteCount, nullptr, out);
+            if (FAILED(hr))
+                LOG("IQ ERROR: SMAA pixel shader '%s' creation failed (0x%08X)",
+                    name, (unsigned)hr);
+            return SUCCEEDED(hr);
+        };
+
+        if (!createVs(IDR_SMAA_EDGES_VS, "edges-vs", &g_smaaEdgesVs) ||
+            !createVs(IDR_SMAA_WEIGHTS_VS, "weights-vs", &g_smaaWeightsVs) ||
+            !createVs(IDR_SMAA_NEIGHBORHOOD_VS, "neighborhood-vs", &g_smaaNeighborhoodVs) ||
+            !createPs(IDR_SMAA_EDGES_PS, "edges-ps", &g_smaaEdgesPs) ||
+            !createPs(IDR_SMAA_WEIGHTS_PS, "weights-ps", &g_smaaWeightsPs) ||
+            !createPs(IDR_SMAA_NEIGHBORHOOD_PS, "neighborhood-ps", &g_smaaNeighborhoodPs))
+            return fail();
+
+        D3D11_SAMPLER_DESC point{};
+        point.Filter = D3D11_FILTER_MIN_MAG_MIP_POINT;
+        point.AddressU = point.AddressV = point.AddressW =
+            D3D11_TEXTURE_ADDRESS_CLAMP;
+        HRESULT hr = g_device->CreateSamplerState(&point, &g_smaaPointSampler);
+        if (FAILED(hr))
+        {
+            LOG("IQ ERROR: SMAA point sampler creation failed (0x%08X)",
+                (unsigned)hr);
+            return fail();
+        }
+
+        auto createLut = [&](const unsigned char* bytes, UINT width, UINT height,
+                             UINT pitch, DXGI_FORMAT format, const char* name,
+                             ID3D11Texture2D** texture,
+                             ID3D11ShaderResourceView** srv) {
+            D3D11_TEXTURE2D_DESC d{};
+            d.Width = width;
+            d.Height = height;
+            d.MipLevels = 1;
+            d.ArraySize = 1;
+            d.Format = format;
+            d.SampleDesc.Count = 1;
+            d.Usage = D3D11_USAGE_IMMUTABLE;
+            d.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+            D3D11_SUBRESOURCE_DATA init{};
+            init.pSysMem = bytes;
+            init.SysMemPitch = pitch;
+            HRESULT lutHr = g_device->CreateTexture2D(&d, &init, texture);
+            if (SUCCEEDED(lutHr))
+                lutHr = g_device->CreateShaderResourceView(*texture, nullptr, srv);
+            if (FAILED(lutHr))
+                LOG("IQ ERROR: SMAA %s lookup texture creation failed (0x%08X)",
+                    name, (unsigned)lutHr);
+            return SUCCEEDED(lutHr);
+        };
+
+        static_assert(sizeof(areaTexBytes) == AREATEX_SIZE);
+        static_assert(sizeof(searchTexBytes) == SEARCHTEX_SIZE);
+        if (!createLut(areaTexBytes, AREATEX_WIDTH, AREATEX_HEIGHT,
+                       AREATEX_PITCH, DXGI_FORMAT_R8G8_UNORM, "area",
+                       &g_smaaAreaTex, &g_smaaAreaSrv) ||
+            !createLut(searchTexBytes, SEARCHTEX_WIDTH, SEARCHTEX_HEIGHT,
+                       SEARCHTEX_PITCH, DXGI_FORMAT_R8_UNORM, "search",
+                       &g_smaaSearchTex, &g_smaaSearchSrv))
+            return fail();
+
+        LOG("IQ: SMAA 1x pipeline ready -- threshold=0.05 search=32 diag=16 "
+            "color-edge upstream=71c806a");
+        return true;
+    }
+
     void ReleaseIqChain()
     {
         for (auto*& s : g_iqChainSrv) { if (s) s->Release(); s = nullptr; }
@@ -999,31 +1150,46 @@ float4 ps_present(VSOut i) : SV_Target
         g_iqChainDesc = {};
     }
 
-    // Two ping-pong intermediates at the eye size, in the UNORM sibling of the XR
-    // format so sampling returns the raw (perceptual) values the AA/sharpen passes
-    // work on.
-    bool EnsureIqChain(uint32_t w, uint32_t h)
+    void ReleaseIqChainSlot(int i)
     {
-        if (g_iqChain[0] && g_iqChain[1] &&
-            g_iqChainDesc.Width == w && g_iqChainDesc.Height == h)
-            return true;
-        ReleaseIqChain();
+        if (g_iqChainSrv[i]) { g_iqChainSrv[i]->Release(); g_iqChainSrv[i] = nullptr; }
+        if (g_iqChainRtv[i]) { g_iqChainRtv[i]->Release(); g_iqChainRtv[i] = nullptr; }
+        if (g_iqChain[i]) { g_iqChain[i]->Release(); g_iqChain[i] = nullptr; }
+    }
+
+    // Two normal ping-pong intermediates at eye size. Genuine SMAA temporarily
+    // needs a third target for blend weights while preserving resolved color.
+    // Slot 2 is released as soon as SMAA is no longer selected.
+    bool EnsureIqChain(uint32_t w, uint32_t h, bool needSmaa)
+    {
+        const DXGI_FORMAT format = UnormSibling((DXGI_FORMAT)g_xrFormat);
+        if (g_iqChainDesc.Width != w || g_iqChainDesc.Height != h ||
+            g_iqChainDesc.Format != format)
+            ReleaseIqChain();
+        if (!needSmaa)
+            ReleaseIqChainSlot(2);
+
         D3D11_TEXTURE2D_DESC d{};
         d.Width = w;
         d.Height = h;
         d.MipLevels = 1;
         d.ArraySize = 1;
-        d.Format = UnormSibling((DXGI_FORMAT)g_xrFormat);
+        d.Format = format;
         d.SampleDesc.Count = 1;
         d.Usage = D3D11_USAGE_DEFAULT;
         d.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
-        for (int i = 0; i < 2; ++i)
+        const int targetCount = needSmaa ? 3 : 2;
+        for (int i = 0; i < targetCount; ++i)
         {
+            if (g_iqChain[i] && g_iqChainRtv[i] && g_iqChainSrv[i])
+                continue;
+            ReleaseIqChainSlot(i);
             if (FAILED(g_device->CreateTexture2D(&d, nullptr, &g_iqChain[i])) ||
                 FAILED(g_device->CreateRenderTargetView(g_iqChain[i], nullptr, &g_iqChainRtv[i])) ||
                 FAILED(g_device->CreateShaderResourceView(g_iqChain[i], nullptr, &g_iqChainSrv[i])))
             {
-                LOG("IQ: intermediate chain creation failed (%ux%u)", w, h);
+                LOG("IQ ERROR: intermediate chain slot %d creation failed (%ux%u)",
+                    i, w, h);
                 ReleaseIqChain();
                 return false;
             }
@@ -1034,16 +1200,20 @@ float4 ps_present(VSOut i) : SV_Target
 
     // Expand one captured eye (src, render resolution) into the XR eye image
     // (dst, headset resolution) with the user's chosen resolve filter, optional
-    // anti-aliasing, and optional sharpening. Universal to every title. Falls
-    // back to the plain linear Blit when everything is off or anything is
-    // unavailable, so it can never make the picture worse than before.
+    // anti-aliasing, and optional sharpening. Universal to every title. This
+    // function always owns the eye resolve; missing prerequisites fail loudly.
     bool BlitImageQuality(ID3D11Texture2D* src, const D3D11_TEXTURE2D_DESC& srcDesc,
                           ID3D11Texture2D* dst, uint32_t dstW, uint32_t dstH,
                           ID3D11RenderTargetView* dstRtv)
     {
         const bool xrSrgb = IsSrgb((DXGI_FORMAT)g_xrFormat);
+        const bool finalPerceptual = !xrSrgb;
         const bool wantSharp = g_config.upscale_filter == 1;     // sharp bicubic resolve vs linear
-        const bool wantAa = g_config.aa_mode != 0;
+        const bool wantSmaa = g_config.aa_mode == 3 || g_config.aa_mode == 4;
+        const bool wantFxaa = g_config.aa_mode == 1 || g_config.aa_mode == 2 ||
+                              g_config.aa_mode == 4;
+        const bool fxaaStrong = g_config.aa_mode == 2 || g_config.aa_mode == 4;
+        const bool wantAa = wantSmaa || wantFxaa;
         const bool wantRcas = g_config.sharpness > 0.001f;
         const bool post = wantAa || wantRcas;
 
@@ -1057,6 +1227,12 @@ float4 ps_present(VSOut i) : SV_Target
             if (!logged) { logged = true; LOG("IQ ERROR: shader pipeline unavailable; eye NOT processed"); }
             return false;
         }
+        if (wantSmaa && !EnsureSmaaPipeline())
+        {
+            static bool logged = false;
+            if (!logged) { logged = true; LOG("IQ ERROR: SMAA 1x pipeline unavailable; eye NOT processed"); }
+            return false;
+        }
         ID3D11ShaderResourceView* srcSrv = AcquireSrcSrv(src, srcDesc);
         if (!srcSrv)
         {
@@ -1064,7 +1240,9 @@ float4 ps_present(VSOut i) : SV_Target
             if (!logged) { logged = true; LOG("IQ ERROR: source SRV unavailable; eye NOT processed"); }
             return false;
         }
-        if (post && !EnsureIqChain(dstW, dstH))
+        if (!post)
+            ReleaseIqChain();
+        else if (!EnsureIqChain(dstW, dstH, wantSmaa))
         {
             static bool logged = false;
             if (!logged) { logged = true; LOG("IQ ERROR: intermediate chain unavailable; eye NOT processed"); }
@@ -1073,6 +1251,11 @@ float4 ps_present(VSOut i) : SV_Target
 
         // One-time and on-change: prove in the log exactly what the eye pass does.
         {
+            const char* aaName = "off";
+            if (g_config.aa_mode == 1) aaName = "fxaa";
+            else if (g_config.aa_mode == 2) aaName = "fxaa-strong";
+            else if (g_config.aa_mode == 3) aaName = "smaa1x";
+            else if (g_config.aa_mode == 4) aaName = "smaa1x+fxaa-strong";
             static int lf = -99, la = -99; static float ls = -1.0f;
             static uint32_t lsw = 0, ldw = 0;
             if (lf != g_config.upscale_filter || la != g_config.aa_mode ||
@@ -1080,11 +1263,11 @@ float4 ps_present(VSOut i) : SV_Target
             {
                 lf = g_config.upscale_filter; la = g_config.aa_mode;
                 ls = g_config.sharpness; lsw = srcDesc.Width; ldw = dstW;
-                LOG("IQ: eye pass active -- resolve=%s aa=%d sharpen=%.2f "
-                    "src=%ux%u dst=%ux%u post=%d xrSrgb=%d",
-                    wantSharp ? "bicubic-a075" : "linear", g_config.aa_mode,
-                    g_config.sharpness, srcDesc.Width, srcDesc.Height, dstW, dstH,
-                    post ? 1 : 0, xrSrgb ? 1 : 0);
+                LOG("IQ: eye pass active -- resolve=%s aa=%s(%d) sharpen=%.2f "
+                    "rcasGain=2.00 src=%ux%u dst=%ux%u post=%d xrSrgb=%d",
+                    wantSharp ? "bicubic-a075" : "linear", aaName,
+                    g_config.aa_mode, g_config.sharpness, srcDesc.Width,
+                    srcDesc.Height, dstW, dstH, post ? 1 : 0, xrSrgb ? 1 : 0);
             }
         }
 
@@ -1092,8 +1275,17 @@ float4 ps_present(VSOut i) : SV_Target
 
         D3DStateBackup backup;
         backup.Capture(g_context);
-        ID3D11Buffer* savedCb0 = nullptr;
-        g_context->PSGetConstantBuffers(0, 1, &savedCb0);
+        ID3D11Buffer* savedPsCb0 = nullptr;
+        ID3D11Buffer* savedVsCb0 = nullptr;
+        ID3D11ShaderResourceView* savedExtraSrvs[2]{};
+        ID3D11SamplerState* savedPointSampler = nullptr;
+        g_context->PSGetConstantBuffers(0, 1, &savedPsCb0);
+        if (wantSmaa)
+        {
+            g_context->VSGetConstantBuffers(0, 1, &savedVsCb0);
+            g_context->PSGetShaderResources(1, 2, savedExtraSrvs);
+            g_context->PSGetSamplers(1, 1, &savedPointSampler);
+        }
 
         // Shared pipeline state for every pass.
         g_context->RSSetState(g_blitRasterizer);
@@ -1101,63 +1293,109 @@ float4 ps_present(VSOut i) : SV_Target
         g_context->OMSetDepthStencilState(g_blitDepthOff, 0);
         g_context->IASetInputLayout(nullptr);
         g_context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-        g_context->VSSetShader(g_blitVs, nullptr, 0);
         g_context->GSSetShader(nullptr, nullptr, 0);
         g_context->PSSetSamplers(0, 1, &g_blitSampler);
+        if (wantSmaa)
+        {
+            g_context->PSSetSamplers(1, 1, &g_smaaPointSampler);
+            g_context->VSSetConstantBuffers(0, 1, &g_iqCb);
+        }
         g_context->PSSetConstantBuffers(0, 1, &g_iqCb);
 
-        auto pass = [&](ID3D11PixelShader* ps, ID3D11ShaderResourceView* in,
-                        ID3D11RenderTargetView* out, uint32_t inW, uint32_t inH,
-                        uint32_t outW, uint32_t outH, bool outPerceptual, float inIsSrgb) {
+        auto pass = [&](ID3D11VertexShader* vs, ID3D11PixelShader* ps,
+                         ID3D11ShaderResourceView* in0,
+                         ID3D11ShaderResourceView* in1,
+                         ID3D11ShaderResourceView* in2,
+                         ID3D11RenderTargetView* out, uint32_t inW, uint32_t inH,
+                         uint32_t outW, uint32_t outH, bool outPerceptual, float inIsSrgb) {
             IqParams p{};
             p.srcW = (float)inW; p.srcH = (float)inH;
             p.dstW = (float)outW; p.dstH = (float)outH;
             p.sharpness = g_config.sharpness;
             p.srcIsSrgb = inIsSrgb;
             p.outPerceptual = outPerceptual ? 1.0f : 0.0f;
-            p.aaStrength = g_config.aa_mode == 2 ? 1.0f : 0.0f;
+            p.aaStrength = fxaaStrong ? 1.0f : 0.0f;
             g_context->UpdateSubresource(g_iqCb, 0, nullptr, &p, 0, 0);
             g_context->OMSetRenderTargets(1, &out, nullptr);
             D3D11_VIEWPORT vp{0, 0, (float)outW, (float)outH, 0, 1};
             g_context->RSSetViewports(1, &vp);
+            g_context->VSSetShader(vs, nullptr, 0);
             g_context->PSSetShader(ps, nullptr, 0);
-            g_context->PSSetShaderResources(0, 1, &in);
+            ID3D11ShaderResourceView* inputs[3] = {in0, in1, in2};
+            const UINT inputCount = (in1 || in2) ? 3u : 1u;
+            g_context->PSSetShaderResources(0, inputCount, inputs);
             g_context->Draw(3, 0);
-            ID3D11ShaderResourceView* nullSrv = nullptr; // unbind before it becomes an RTV
-            g_context->PSSetShaderResources(0, 1, &nullSrv);
+            ID3D11ShaderResourceView* nullSrvs[3]{}; // unbind before an input becomes an RTV
+            g_context->PSSetShaderResources(0, inputCount, nullSrvs);
         };
 
         ID3D11PixelShader* resolve = wantSharp ? g_iqResolveSharp : g_iqResolveLinear;
         if (!post)
         {
-            // One pass straight to the sRGB XR target (outputs linear).
-            pass(resolve, srcSrv, dstRtv, srcDesc.Width, srcDesc.Height, dstW, dstH,
-                 false, srcIsSrgb);
+            // One pass straight to XR: linear for an sRGB RTV, perceptual for
+            // the runtime's non-sRGB fallback formats.
+            pass(g_blitVs, resolve, srcSrv, nullptr, nullptr, dstRtv,
+                 srcDesc.Width, srcDesc.Height, dstW, dstH,
+                 finalPerceptual, srcIsSrgb);
         }
         else
         {
             int cur = 0;
-            pass(resolve, srcSrv, g_iqChainRtv[cur], srcDesc.Width, srcDesc.Height,
-                 dstW, dstH, true, srcIsSrgb);
-            if (wantAa)
+            pass(g_blitVs, resolve, srcSrv, nullptr, nullptr, g_iqChainRtv[cur],
+                 srcDesc.Width, srcDesc.Height, dstW, dstH, true, srcIsSrgb);
+
+            if (wantSmaa)
             {
-                pass(g_iqFxaa, g_iqChainSrv[cur], g_iqChainRtv[1 - cur], dstW, dstH,
-                     dstW, dstH, true, 1.0f);
-                cur = 1 - cur;
+                // Preserve resolved color in slot 0; edge data goes to slot 1,
+                // official blend weights to slot 2, then slot 1 is reused for
+                // neighborhood output if another pass follows.
+                pass(g_smaaEdgesVs, g_smaaEdgesPs, g_iqChainSrv[0], nullptr,
+                     nullptr, g_iqChainRtv[1], dstW, dstH, dstW, dstH, true, 1.0f);
+                pass(g_smaaWeightsVs, g_smaaWeightsPs, g_iqChainSrv[1],
+                     g_smaaAreaSrv, g_smaaSearchSrv, g_iqChainRtv[2],
+                     dstW, dstH, dstW, dstH, true, 1.0f);
+
+                const bool smaaFinal = !wantFxaa && !wantRcas;
+                ID3D11RenderTargetView* smaaOut =
+                    smaaFinal ? dstRtv : g_iqChainRtv[1];
+                pass(g_smaaNeighborhoodVs, g_smaaNeighborhoodPs,
+                     g_iqChainSrv[0], g_iqChainSrv[2], nullptr, smaaOut,
+                     dstW, dstH, dstW, dstH,
+                     smaaFinal ? finalPerceptual : true, 1.0f);
+                cur = 1;
+            }
+
+            if (wantFxaa)
+            {
+                const bool fxaaFinal = !wantRcas;
+                const int next = 1 - cur;
+                ID3D11RenderTargetView* fxaaOut =
+                    fxaaFinal ? dstRtv : g_iqChainRtv[next];
+                pass(g_blitVs, g_iqFxaa, g_iqChainSrv[cur], nullptr, nullptr,
+                     fxaaOut, dstW, dstH, dstW, dstH,
+                     fxaaFinal ? finalPerceptual : true, 1.0f);
+                cur = next;
             }
             if (wantRcas)
             {
-                pass(g_iqRcas, g_iqChainSrv[cur], g_iqChainRtv[1 - cur], dstW, dstH,
-                     dstW, dstH, true, 1.0f);
-                cur = 1 - cur;
+                pass(g_blitVs, g_iqRcas, g_iqChainSrv[cur], nullptr, nullptr,
+                     dstRtv, dstW, dstH, dstW, dstH,
+                     finalPerceptual, 1.0f);
             }
-            pass(g_iqPresent, g_iqChainSrv[cur], dstRtv, dstW, dstH, dstW, dstH,
-                 false, 1.0f);
         }
 
-        g_context->PSSetConstantBuffers(0, 1, &savedCb0);
-        if (savedCb0) savedCb0->Release();
         backup.Restore(g_context);
+        g_context->PSSetConstantBuffers(0, 1, &savedPsCb0);
+        if (savedPsCb0) savedPsCb0->Release();
+        if (wantSmaa)
+        {
+            g_context->VSSetConstantBuffers(0, 1, &savedVsCb0);
+            g_context->PSSetShaderResources(1, 2, savedExtraSrvs);
+            g_context->PSSetSamplers(1, 1, &savedPointSampler);
+            if (savedVsCb0) savedVsCb0->Release();
+            for (auto*& srv : savedExtraSrvs) if (srv) srv->Release();
+            if (savedPointSampler) savedPointSampler->Release();
+        }
         return true;
     }
 

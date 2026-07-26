@@ -3,7 +3,7 @@
 Status: **Stage 1 desktop-fit correction in progress; no resolution/FSR change is
 accepted.** This records verified findings, failed candidates, labeled
 hypotheses, and the evidence gates for resolution scaling and FSR. It does **not**
-advance the accepted pointer in `docs/CURRENT-STATE.md`. Updated 2026-07-25.
+advance the accepted pointer in `docs/CURRENT-STATE.md`. Updated 2026-07-26.
 
 ## Session context (where the branch is)
 
@@ -57,16 +57,21 @@ so the mod is almost always **upscaling** with a linear filter -> shimmer.
 New feature (approved): a title-agnostic **image-quality pipeline** at the eye
 `Blit` boundary (`BlitImageQuality`, `src/dll/vr.cpp`), controlled in F1:
 - **Upscale filter** `upscale_filter` (0 linear / 1 strong bicubic sharp, default 1).
-- **Sharpening** `sharpness` (0..1, RCAS).
-- **Anti-aliasing** `aa_mode` (0 off / 1 FXAA / 2 FXAA Strong).
-All passes run in perceptual space via UNORM intermediates, decode to linear only
-at the final sRGB write, and **fail open** to the old linear `Blit` when everything
-is off. It reads the source (game render) and destination (headset/SteamVR eye)
+- **Sharpening** `sharpness` (0..1, RCAS-based 2x overdrive).
+- **Anti-aliasing** `aa_mode` (0 off / 1 FXAA / 2 FXAA Strong /
+  3 SMAA 1x / 4 SMAA 1x + FXAA Strong).
+All passes run in perceptual space via UNORM intermediates. The final pass decodes
+to linear for an sRGB XR write, or preserves perceptual output for a non-sRGB
+runtime fallback. The IQ path always owns the eye resolve, including when all
+options are off; missing shaders, SRVs, or intermediates produce a loud
+`IQ ERROR` and an unprocessed eye, never a silent plain-`Blit` fallback. It reads
+the source (game render) and destination (headset/SteamVR eye)
 sizes at runtime, so it scales for any in-game + any SteamVR resolution combination,
 on every title. **FSR 2 (needs game motion vectors) and MSAA (hardware raster AA)
 are not buildable mod-side** and were explained to the user. The MCC-FSR probe work
-above is retired but its findings are kept as evidence. See the approved plan for
-the full design.
+above is retired but its findings are kept as evidence. The older Claude plan
+`resilient-cooking-puppy.md` is superseded by headset evidence and this document;
+its silent-fallback, pass-order, and staged-SMAA directions are not current.
 
 ### Image-quality candidate result and corrected math - 2026-07-26
 
@@ -88,6 +93,46 @@ the full design.
   bicubic resolve (`a=-0.75`) for a visible Linear/Sharp A/B, and honest
   Off/FXAA/FXAA Strong choices with distinct thresholds. Missing resources
   remain loud errors; no plain-blit fallback is restored.
+
+### Headset result and stronger follow-up - 2026-07-26
+
+- The user confirmed that the image-quality effect was visible during a headset
+  session whose log covered Halo 3, Reach, and ODST, then requested a 2x stronger
+  adjustable sharpening range. The exact tested source was
+  `1aa5bbc899864ef7fa9c12a04613efbf46241f7e`; installed DLL SHA-256
+  `8D15A06602A31E567A5C02C0E7B05A9CCF766FFEF1F2E5308094791AB097EBFE`.
+  The log contains 3,049 active IQ entries, complete `0.00..1.00` sharpening
+  sweeps, and zero `IQ ERROR`; log SHA-256
+  `C2B005779535975DAE36EBB71277F861F23F51CCD475801A503CD309E0FF29C7`.
+  Evidence is preserved under
+  `out/test-runs/1aa5bbc-iq-visible-needs-2x-strength-h3-reach-odst-20260726-083324Z`.
+  This is narrow behavioral evidence, not an accepted-pointer advancement.
+- The follow-up keeps RCAS's `-0.1875` lobe limit and positive normalization
+  denominator, computes the same five-tap RCAS result, then applies exactly
+  twice its correction: `center + 2 * (rcas - center)`. This adds no texture
+  samples, fullscreen pass, intermediate, or bandwidth. The top can intentionally
+  ring or clip; the full `0..1` slider lets users pull it back.
+- Genuine **SMAA 1x** is now an optional three-stage edge -> blend-weight ->
+  neighborhood pipeline using the official 160x560 area and 64x16 search lookup
+  tables, pinned from `iryoku/smaa` commit
+  `71c806a838bdd7d517df19192a20f0c61b3ca29d`. It uses color-edge threshold
+  `0.05`, axis search 32, diagonal search 16, and corner rounding 25. Mode 4
+  follows it with FXAA Strong for the deliberately most aggressive visible
+  cleanup. The public labels remain honest: `SMAA 1x` and
+  `SMAA 1x + FXAA Strong`.
+- All six SMAA shader entry points compile under strict warnings-as-errors during
+  CMake configuration and are embedded as bytecode. Selecting SMAA in-headset
+  never invokes the HLSL compiler or optimizer on the render thread.
+- True SMAA S2x is not available at this boundary: it requires two distinct
+  spatial samples (MSAA subsamples or a second jittered engine render), while
+  `BlitImageQuality` receives one already-resolved eye image. A one-source
+  postprocess must not be labeled S2x.
+- Performance scope is explicit. The 2x sharpening adds only a final vector
+  correction in the existing pass. SMAA is necessarily heavier when selected
+  and lazily adds a third eye-size RGBA8 intermediate (about 67.4 MiB at
+  4164x4244), which is released when SMAA is deselected. The redundant final
+  presentation draw is fused into the last AA/sharpen pass, reducing all
+  postprocess chains by one fullscreen draw. Off/FXAA never execute SMAA searches.
 
 ## Stage 1 desktop-fit evidence (verified, still unaccepted)
 

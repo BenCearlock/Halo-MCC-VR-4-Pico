@@ -3295,12 +3295,15 @@ int main()
         file << "haptic_intensity = 2.0\n";
         file << "headset_smoothing = 1.0\n";
         file << "aim_stabilization = -1.0\n";
+        file << "aa_mode = 4\n";
     }
     ConfigLoad(primary.c_str());
     Check(g_config.haptic_intensity == 1.0f, "Haptic intensity is safely clamped");
     Check(g_config.headset_smoothing == 0.10f,
         "Headset smoothing is capped at the low-latency maximum");
     Check(g_config.aim_stabilization == 0.0f, "Aim stabilization is safely clamped");
+    Check(g_config.aa_mode == 4,
+        "SMAA 1x plus FXAA Strong survives config loading");
 
     // resolution_scale is free-form: a hand-typed value must survive exactly,
     // not snap to one of the six installer tiers (the pre-2026-07-20 behavior).

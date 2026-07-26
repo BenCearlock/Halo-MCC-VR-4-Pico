@@ -603,13 +603,15 @@ namespace
                             "renders BELOW your per-eye headset resolution, so this upscales it.\n"
                             "Sharp keeps edges crisp; Linear is the old soft/shimmery look.");
         changed |= ImGui::SliderFloat("Sharpening", &g_config.sharpness, 0.0f, 1.0f, "%.2f");
-        ImGui::TextDisabled("AMD RCAS contrast-adaptive sharpen. 0 = off; 1 = maximum.\n"
-                            "The corrected scale is deliberately obvious near the top.");
-        const char* aaItems[] = {"Off", "FXAA", "FXAA Strong"};
-        changed |= ImGui::Combo("Anti-aliasing", &g_config.aa_mode, aaItems, 3);
+        ImGui::TextDisabled("RCAS-based 2x overdrive. 0 = off; 1 = twice the prior maximum.\n"
+                            "It uses the same five taps/pass; lower it if the top rings or clips.");
+        const char* aaItems[] = {
+            "Off", "FXAA", "FXAA Strong", "SMAA 1x", "SMAA 1x + FXAA Strong"};
+        changed |= ImGui::Combo("Anti-aliasing", &g_config.aa_mode, aaItems, 5);
         ImGui::TextDisabled("Smooths jagged edges on the finished image, so a mid/low rig doesn't\n"
-                            "need a huge render resolution. Strong lowers the edge thresholds,\n"
-                            "making the A/B more obvious at the cost of more softening.");
+                            "need a huge render resolution. SMAA 1x is the real 3-stage filter;\n"
+                            "the final option adds FXAA Strong for the most aggressive cleanup.\n"
+                            "SMAA costs more GPU only when one of its modes is selected.");
         ImGui::Spacing();
         changed |= ImGui::Checkbox("Fit desktop window to my monitor",
                                    &g_config.fit_desktop_window);
