@@ -89,13 +89,19 @@ The user confirmed that this frees the shotgun left arm. The removed synthetic p
 - The launcher scales both dimensions by the same preset and rounds to even
   values. The existing normalized eye blit then expands the complete source eye
   into the full-size OpenXR projection, preserving the lens frame and aspect.
-- The restart-applied presets are Potato 50% (1456x1050), Low 67% (1952x1408),
-  Medium 80% (2330x1680), High 100% (2912x2100), Ultra 110% (3204x2310), and
-  Keith David 150% (4368x3150). Legacy or arbitrary config values normalize to
-  the nearest tier; the tier boundaries are the midpoints 0.585, 0.735, 0.90,
-  1.05, and 1.30, applied identically in config.cpp, launcher.cpp, and menu.cpp.
-- Low 67% is headset-confirmed with Toolkit scaling disabled. The other tiers
-  require headset coverage; do not describe them as validated yet.
+- resolution_scale is free-form (0.35..2.75). Any value in range is honored
+  exactly; the named F1 tiers are only shortcuts and do NOT snap the slider or a
+  hand-typed value (the pre-2026-07-20 nearest-tier normalization was removed).
+  kResolutionScaleMax and the clamp are shared by config.cpp, launcher.cpp, and
+  menu.cpp so the launcher and menu can never disagree.
+- 8K-class tiers (2026-07-26): Potato 50% (1456x1050), Low 75% (2184x1576),
+  Medium 100% (2912x2100), High 130% (3786x2730), Ultra 180% (5242x3780,
+  ~5k-class), and Keith David 264% (7688x5544, ~true 8K width). The ceiling is
+  275% (~8008x5775). All uniform, so the 2912:2100 VR aspect is preserved.
+  kResolutionScaleHeavy (1.76, ~5k width) is the F1/help "very heavy, can crash
+  weak GPUs" warning threshold — warning text only, nothing is blocked.
+- These tiers are constants-only and headset-pending; do not describe any tier
+  as validated until headset coverage confirms it renders and stays stable.
 - Enabling OpenXR Toolkit FSR produced tiled/overlapping regions in the observed
   VR View, consistent with an incompatibility around the current stereo-array
   presentation rather than ordinary low-resolution softness. The exact

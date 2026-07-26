@@ -474,21 +474,28 @@ void ConfigSave()
     fprintf(f, "# How sharp the game renders inside the headset. ANY value in range\n");
     fprintf(f, "# works, so pick your own: 0.90 really means 90%%, not \"rounded to 80\".\n");
     fprintf(f, "# The named tiers are only shortcuts in the F1 menu:\n");
-    fprintf(f, "#   0.50 potato   0.67 low     0.80 medium\n");
-    fprintf(f, "#   1.00 high     1.10 ultra   1.50 keith david\n");
-    fprintf(f, "# %d x %d is 1.00; your value scales both numbers together.\n",
+    fprintf(f, "#   0.50 potato   0.75 low     1.00 medium\n");
+    fprintf(f, "#   1.30 high     1.80 ultra   2.64 keith david (8K-class)\n");
+    fprintf(f, "# %d x %d is 1.00; your value scales both numbers together, so the\n",
             kNativeRenderWidth, kNativeRenderHeight);
+    fprintf(f, "# picture keeps its shape at every setting.\n");
     fprintf(f, "#\n");
-    fprintf(f, "# YES, YOU CAN GO OVER 100%%. Above 1.00 is supersampling: the game\n");
+    fprintf(f, "# YES, YOU CAN GO WAY OVER 100%%. Above 1.00 is supersampling: the game\n");
     fprintf(f, "# renders bigger than the headset needs and the extra detail is\n");
-    fprintf(f, "# squeezed down, which is the cleanest image available. The ceiling\n");
-    fprintf(f, "# is %.2f (%d x %d), well past keith david, and it needs a top-end\n",
+    fprintf(f, "# squeezed down, which is the cleanest image available. Keith David\n");
+    fprintf(f, "# (2.64) is true 8K width. The ceiling is %.2f (%d x %d), and the top\n",
             kResolutionScaleMax,
             (int)(kNativeRenderWidth * kResolutionScaleMax),
             (int)(kNativeRenderHeight * kResolutionScaleMax));
-    fprintf(f, "# card. A bigger number is pulled back to %.2f instead of accepted,\n",
+    fprintf(f, "# end needs a monster GPU. A bigger number is pulled back to %.2f\n",
             kResolutionScaleMax);
-    fprintf(f, "# so a typo (20 instead of 2.0) cannot leave you unable to start.\n");
+    fprintf(f, "# instead of accepted, so a typo (20 instead of 2.0) cannot leave you\n");
+    fprintf(f, "# unable to start.\n");
+    fprintf(f, "#\n");
+    fprintf(f, "# WARNING: anything above about %.2f (~5K wide) is very heavy and can\n",
+            kResolutionScaleHeavy);
+    fprintf(f, "# crash weaker GPUs or refuse to start. Try it in short sessions, and\n");
+    fprintf(f, "# drop back down if the game won't launch.\n");
     fprintf(f, "#\n");
     fprintf(f, "# CLOSE MCC COMPLETELY and relaunch after changing this one.\n");
     fprintf(f, "# The headset projection stays full-size; the complete eye is upscaled.\n");

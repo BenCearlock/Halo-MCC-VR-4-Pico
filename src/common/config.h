@@ -13,7 +13,14 @@
 inline constexpr int kNativeRenderWidth = 2912;
 inline constexpr int kNativeRenderHeight = 2100;
 inline constexpr float kResolutionScaleMin = 0.35f;
-inline constexpr float kResolutionScaleMax = 2.00f;
+// 2.75 renders ~8008x5775 (8K-class width). The "Keith David" F1 tier lands on
+// true 8K width (7680, scale ~2.64); this ceiling leaves a little headroom above
+// it. Everything is a uniform multiplier, so 2912:2100 (Halo's VR aspect) is
+// preserved at every value. Above ~1.76 (5k-class) is extremely heavy; the F1
+// menu warns there (see menu.cpp) but nothing is blocked.
+inline constexpr float kResolutionScaleMax = 2.75f;
+// F1/help "past this is very heavy" threshold: ~5k-class width (5120/2912).
+inline constexpr float kResolutionScaleHeavy = 1.76f;
 // Draw-distance trim: fraction of the engine's stock render far-clip distance
 // (stock 10240 world units). 1.00 = full stock draw distance. The floor reaches
 // deep enough to pull the far plane INTO the playable scene (~512 units), so low
@@ -129,8 +136,8 @@ struct Config
 
     // Halo's internal raster scale, applied by the launcher on the next game
     // start. ANY value from kResolutionScaleMin to kResolutionScaleMax is
-    // honored exactly; the named tiers (potato .50, low .67, medium .80,
-    // high 1.00, ultra 1.10, keith david 1.50) are only F1 shortcuts.
+    // honored exactly; the named tiers (potato .50, low .75, medium 1.00,
+    // high 1.30, ultra 1.80, keith david 2.64 = 8K width) are only F1 shortcuts.
     // The OpenXR projection remains at the headset's full size.
     float resolution_scale = 1.0f;
 

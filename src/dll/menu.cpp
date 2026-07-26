@@ -569,9 +569,12 @@ namespace
         ImGui::TextDisabled("Renders %d x %d.", scaleEven(kNativeRenderWidth, g_config.resolution_scale),
                             scaleEven(kNativeRenderHeight, g_config.resolution_scale));
         struct ResolutionPreset { const char* name; float scale; };
+        // Tiers span the full 0.35..2.75 range. "Keith David" is true 8K width
+        // (7680, scale ~2.64); "Ultra" sits at ~5k, the heavy threshold below.
+        // All uniform, so Halo's 2912:2100 VR aspect is preserved at every tier.
         static const ResolutionPreset kPresets[] = {
-            {"Potato", 0.50f}, {"Low", 0.67f}, {"Medium", 0.80f},
-            {"High", 1.00f}, {"Ultra", 1.10f}, {"Keith David", 1.50f}
+            {"Potato", 0.50f}, {"Low", 0.75f}, {"Medium", 1.00f},
+            {"High", 1.30f}, {"Ultra", 1.80f}, {"Keith David", 2.64f}
         };
         for (int i = 0; i < 6; ++i)
         {
@@ -585,8 +588,12 @@ namespace
         }
         ImGui::TextDisabled("The buttons are shortcuts; the slider takes any value in between,\n"
                             "as does resolution_scale in halomccvr.cfg. Below 1.00x trades\n"
-                            "sharpness for frame rate; above it supersamples.\n"
-                            "Changing this requires a full game restart. Close MCC and relaunch.");
+                            "sharpness for frame rate; above it supersamples. Keith David is\n"
+                            "8K-class. Changing this requires a full game restart.");
+        if (g_config.resolution_scale > kResolutionScaleHeavy)
+            ImGui::TextColored(ImVec4(1.0f, 0.55f, 0.25f, 1.0f),
+                               "[!] Very heavy (~5K and up): can crash weaker GPUs. Test in\n"
+                               "    short sessions and drop this if the game won't start.");
         changed |= ImGui::Checkbox("Fit desktop window to my monitor",
                                    &g_config.fit_desktop_window);
         ImGui::TextDisabled(

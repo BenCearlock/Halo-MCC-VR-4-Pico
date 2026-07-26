@@ -163,8 +163,15 @@ Evidence logs:
 - Hard rule (`docs/RE-notes.md` "Resolution and upscaling"): scale Halo's **source
   raster** uniformly; never shrink the OpenXR swapchain / submitted imageRect.
 - Tier constants are mirrored in three files that must stay in sync:
-  `config.cpp`, `launcher.cpp`, `menu.cpp`. Current tiers: Potato .50, Low .67,
-  Medium .80, High 1.00, Ultra 1.10, Keith David 1.50. `kResolutionScaleMax=2.00`.
+  `config.cpp`, `launcher.cpp`, `menu.cpp`. **8K-class tiers (2026-07-26):**
+  Potato .50, Low .75, Medium 1.00, High 1.30, Ultra 1.80, Keith David 2.64
+  (7680-wide = true 8K width; uniform, so 2912:2100 is preserved).
+  `kResolutionScaleMax=2.75` (~8008x5775 ceiling). New
+  `kResolutionScaleHeavy=1.76` (~5k width) is the F1/help "very heavy, can crash
+  weak GPUs" warning threshold — warning text only, nothing is blocked. The
+  launcher clamps to the same max, so a typo can never leave the game unstartable.
+  (Prior tiers: Potato .50, Low .67, Medium .80, High 1.00, Ultra 1.10,
+  Keith David 1.50, `kResolutionScaleMax=2.00`.)
 
 ## Verified findings (evidence, not guesses)
 
