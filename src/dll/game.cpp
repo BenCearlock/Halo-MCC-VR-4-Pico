@@ -11126,8 +11126,27 @@ namespace
             handled = false;
         }
         if (!handled)
-            Game_RejectReachAuthoredReticle(
-                epoch.generation, "stereo eye transaction did not complete");
+        {
+            // Skip this frame, keep the core. ReachStereoTransaction restores
+            // the workspace and player view in its own __finally, so an
+            // incomplete attempt leaves no partial engine state behind, and the
+            // eye serials it never published cannot be composited. A single
+            // failure after minutes of correct rendering is not a reason to
+            // unhook Reach and drop the player out of VR -- that is exactly the
+            // over-reaction that cost 2026-07-26. Halo 3 and ODST skip and
+            // recover.
+            static std::atomic<uint64_t> lastSkipLogMs{0};
+            const uint64_t nowMs = GetTickCount64();
+            uint64_t previousMs = lastSkipLogMs.load(std::memory_order_relaxed);
+            if (nowMs - previousMs >= 2000 &&
+                lastSkipLogMs.compare_exchange_strong(
+                    previousMs, nowMs, std::memory_order_relaxed))
+            {
+                LOG("Reach frame skipped (stereo eye transaction did not "
+                    "complete); the camera core stays armed and the next frame "
+                    "retries");
+            }
+        }
     }
 
     // Keep the counter wrapper separate from the SEH-heavy body. The wrapper's
