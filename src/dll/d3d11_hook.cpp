@@ -2,6 +2,7 @@
 #include <d3d11.h>
 #include <dxgi1_2.h>
 #include <cstdlib>
+#include <climits>
 #include <cmath>
 #include <intrin.h>
 #include <MinHook.h>
@@ -158,9 +159,11 @@ static BOOL WINAPI GetClientRectHook(HWND hwnd, LPRECT rc)
 typedef BOOL(WINAPI* GetCursorPosFn)(LPPOINT);
 typedef BOOL(WINAPI* SetCursorPosFn)(int, int);
 typedef HWND(WINAPI* WindowFromPointFn)(POINT);
+typedef BOOL(WINAPI* ClipCursorFn)(const RECT*);
 static GetCursorPosFn g_origGetCursorPos = nullptr;
 static SetCursorPosFn g_origSetCursorPos = nullptr;
 static WindowFromPointFn g_origWindowFromPoint = nullptr;
+static ClipCursorFn g_origClipCursor = nullptr;
 
 // The shell/pause cursor consumers live in the game executable (RE-notes /
 // RESOLUTION-FSR-INVESTIGATION static analysis). We only remap calls whose
@@ -229,13 +232,16 @@ static BOOL WINAPI GetCursorPosHook(LPPOINT p)
     mapped.y = origin.y +
                (LONG)llround((double)(phys.y - origin.y) * g_forcedRenderH / ch);
     *p = mapped;
-    // Only log once the window is actually shrunk (client < render); otherwise
-    // the pre-shrink startup reads (client == render, no-op) burn the budget
-    // and the fitted-menu reads we care about never get recorded.
+    // Log only when the physical cursor actually MOVES (and only once the
+    // window is shrunk), so the budget records real navigation instead of 40
+    // copies of one idle frame.
     static int s_log = 0;
-    if (cw < (LONG)g_forcedRenderW && s_log < 40)
+    static POINT s_lastLogged{LONG_MIN, LONG_MIN};
+    if (cw < (LONG)g_forcedRenderW && s_log < 60 &&
+        (phys.x != s_lastLogged.x || phys.y != s_lastLogged.y))
     {
         ++s_log;
+        s_lastLogged = phys;
         LOG("fit: menu cursor read +0x%llX phys(%ld,%ld) -> render(%ld,%ld) "
             "client %ldx%ld",
             (unsigned long long)((const BYTE*)caller - g_exeBase),
@@ -265,13 +271,59 @@ static BOOL WINAPI SetCursorPosHook(int X, int Y)
     const int px = origin.x + (int)llround((double)relX * cw / g_forcedRenderW);
     const int py = origin.y + (int)llround((double)relY * ch / g_forcedRenderH);
     static int s_log = 0;
-    if (cw < (LONG)g_forcedRenderW && s_log < 40)
+    static POINT s_lastLogged{LONG_MIN, LONG_MIN};
+    if (cw < (LONG)g_forcedRenderW && s_log < 60 &&
+        (X != s_lastLogged.x || Y != s_lastLogged.y))
     {
         ++s_log;
+        s_lastLogged.x = X;
+        s_lastLogged.y = Y;
         LOG("fit: menu cursor move +0x%llX render(%d,%d) -> phys(%d,%d)",
             (unsigned long long)((const BYTE*)caller - g_exeBase), X, Y, px, py);
     }
     return g_origSetCursorPos(px, py);
+}
+
+// If MCC confines the cursor (ClipCursor) to a rectangle expressed in its
+// believed full-render space, the OS clips the physical cursor to that (often
+// off-screen) rectangle and you can't move the pointer to the lower menu items
+// at all. Fold any render-space clip rect back into the real window client so
+// the cursor stays free across the whole fitted menu. Fail-open: on anything
+// unexpected we pass the request through untouched.
+static BOOL WINAPI ClipCursorHook(const RECT* rc)
+{
+    if (!g_fitActive || !g_forcedRenderW || !g_forcedRenderH || !rc)
+        return g_origClipCursor(rc);
+    POINT origin{};
+    LONG cw = 0, ch = 0;
+    if (!FitClientMetrics(origin, cw, ch))
+        return g_origClipCursor(rc);
+    RECT mapped = *rc;
+    auto foldX = [&](LONG v) {
+        LONG r = v - origin.x;
+        if (r < 0) r = 0;
+        if (r > (LONG)g_forcedRenderW) r = (LONG)g_forcedRenderW;
+        return origin.x + (LONG)llround((double)r * cw / g_forcedRenderW);
+    };
+    auto foldY = [&](LONG v) {
+        LONG r = v - origin.y;
+        if (r < 0) r = 0;
+        if (r > (LONG)g_forcedRenderH) r = (LONG)g_forcedRenderH;
+        return origin.y + (LONG)llround((double)r * ch / g_forcedRenderH);
+    };
+    mapped.left = foldX(rc->left);
+    mapped.right = foldX(rc->right);
+    mapped.top = foldY(rc->top);
+    mapped.bottom = foldY(rc->bottom);
+    static int s_log = 0;
+    if (cw < (LONG)g_forcedRenderW && s_log < 12)
+    {
+        ++s_log;
+        LOG("fit: menu cursor clip (%ld,%ld,%ld,%ld) -> (%ld,%ld,%ld,%ld)",
+            rc->left, rc->top, rc->right, rc->bottom,
+            mapped.left, mapped.top, mapped.right, mapped.bottom);
+    }
+    return g_origClipCursor(&mapped);
 }
 
 static HWND WINAPI WindowFromPointHook(POINT pt)
@@ -677,6 +729,15 @@ bool InstallD3D11Hooks()
             if (!cursorHooksOk)
                 LOG("warning: fitted-menu cursor remap hooks failed; the native "
                     "shell/pause menu may not be fully navigable in the fitted window");
+
+            // ClipCursor correction is independent of the remap trio; warn-only.
+            if (void* pClipCursor = (void*)GetProcAddress(user32, "ClipCursor"))
+            {
+                if (MH_CreateHook(pClipCursor, (void*)&ClipCursorHook,
+                                  (void**)&g_origClipCursor) != MH_OK)
+                    LOG("warning: ClipCursor hook failed; a fitted-menu cursor "
+                        "clip could still confine the pointer to the wrong rect");
+            }
         }
 
         // The desktop fit only engages if BOTH levers that keep MCC drawing full
