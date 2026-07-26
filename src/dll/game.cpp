@@ -10893,17 +10893,11 @@ namespace
     {
         if (!ReachInnerScopeMatchesLive(playerView, returnAddress))
         {
-            if (g_reachOwnerScope.active &&
-                !g_reachNestedOuterSuppressed)
-            {
-                // The outer transaction has already claimed this call tree.
-                // Any caller/stack/player-view drift is terminal; invoking the
-                // original here could redraw flat class-2 CHUD after ownership.
-                Game_RejectReachAuthoredReticle(
-                    g_reachCamera.generation.load(
-                        std::memory_order_acquire));
-                return;
-            }
+            // This invocation has not crossed the exact Reach eye-ownership
+            // boundary. Match Halo 3/ODST and leave unrelated native passes
+            // stock, including authored states that emit no crosshair widget.
+            // Only a call that passes ReachInnerScopeMatchesLive below is a
+            // claimed VR transaction whose later failure must tear down.
             g_reachOrigPlayerViewRender(playerView);
             return;
         }

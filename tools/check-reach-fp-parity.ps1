@@ -242,8 +242,8 @@ $requiredChudGame = [ordered]@{
         'if\s*\(pass\s*==\s*1\s*&&\s*!ReachAuthoredCrosshairPairComplete\([\s\S]{0,260}?RejectReachChudParityForCurrentEye\(\)[\s\S]{0,180}?break[\s\S]{0,180}?VR_ReachCopyEye'
     'claimed Reach transaction failure is terminal' =
         'if\s*\(\s*!handled\s*\)[\s\S]{0,120}?Game_RejectReachAuthoredReticle\(epoch\.generation\)'
-    'claimed outer scope rejects mismatched inner calls without flat rerender' =
-        '!ReachInnerScopeMatchesLive\(playerView,\s*returnAddress\)[\s\S]{0,260}?g_reachOwnerScope\.active[\s\S]{0,420}?Game_RejectReachAuthoredReticle\([\s\S]{0,220}?return[\s\S]{0,180}?g_reachOrigPlayerViewRender\(playerView\)'
+    'unclaimed Reach inner calls remain native like Halo 3 and ODST' =
+        '!ReachInnerScopeMatchesLive\(playerView,\s*returnAddress\)[\s\S]{0,520}?g_reachOrigPlayerViewRender\(playerView\)[\s\S]{0,80}?return'
     'exact owned scope disarm is terminal without flat rerender' =
         'if\s*\(\s*!g_reachCamera\.armed\.load[\s\S]{0,420}?Game_RejectReachAuthoredReticle\([\s\S]{0,180}?return'
     'Reach uses the shared Halo 3/ODST render-thread authored capture path' =
