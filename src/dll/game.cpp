@@ -57,6 +57,16 @@ namespace
         TitleCapability_Haptics;
     constexpr uint32_t kOdstRuntimeCapabilities =
         kHalo3RuntimeCapabilities;
+    // Matches kReachCapabilities in title_registry.cpp. Native HUD stays
+    // withheld until Reach's CHUD anchor is proven and wired.
+    constexpr uint32_t kReachRuntimeCapabilities =
+        TitleCapability_Stereo |
+        TitleCapability_ControllerAim |
+        TitleCapability_ArmIk |
+        TitleCapability_RuntimeModes |
+        TitleCapability_RoomScale |
+        TitleCapability_ControllerInput |
+        TitleCapability_Haptics;
     constexpr uint32_t kRuntimeCapabilitiesRequiringArm =
         TitleCapability_Stereo |
         TitleCapability_ControllerAim |
@@ -10607,9 +10617,22 @@ namespace
     // It hooks nothing, allocates nothing, and cannot affect camera ownership:
     // every step is guarded, and failure simply leaves the stock crosshair up.
     constexpr size_t kReachChudGlobalsTlsOffset = 0x5B0;
-    constexpr size_t kReachChudWidgetAlphaOffset = 0x334;
-    constexpr size_t kReachChudWidgetStride = 0xC60;
-    constexpr size_t kReachChudCrosshairSlots = 16;
+    // The CHUD widget alpha state is three parallel arrays of nine widgets.
+    // Derived by disassembling every chud_fade_*_for_player implementation in
+    // haloreach.dll and reading the displacement each one writes:
+    //
+    //   current alpha  +0x32C + i*4      fade target +0x350 + i*4
+    //   fade duration  +0x374 + i*4
+    //
+    //   i=1 weapon stats   i=2 CROSSHAIR    i=3 shield     i=4 grenades
+    //   i=5 messages       i=6 motion sensor i=7 chapter title i=8 cinematics
+    //
+    // Crosshair therefore owns exactly these three fields, and nothing else.
+    // Setting only the current alpha is not enough: the engine drives current
+    // toward the fade target every frame, so the target must be cleared too.
+    constexpr size_t kReachChudCrosshairAlpha = 0x334;
+    constexpr size_t kReachChudCrosshairFadeTarget = 0x358;
+    constexpr size_t kReachChudCrosshairFadeDuration = 0x37C;
 
     // Resolved once on the cold title worker, never guessed. Chain:
     //   "chud_show_crosshair\0"   -> exactly one occurrence in the image
@@ -10718,23 +10741,31 @@ namespace
         if (!chudGlobals)
             return;
 
-        for (size_t slot = 0; slot < kReachChudCrosshairSlots; ++slot)
-        {
-            float* alpha = reinterpret_cast<float*>(
-                chudGlobals + kReachChudWidgetAlphaOffset +
-                slot * kReachChudWidgetStride);
-            float current = 0.0f;
-            // Only clear a currently visible widget, and never fight a value
-            // the engine is already holding at zero.
-            if (!SafeReadFloat(alpha, &current) || !(current > 0.0f))
-                continue;
-            (void)SafeWriteFloat(alpha, 0.0f);
-        }
+        // Exactly the crosshair's three fields, in one record. An earlier
+        // version also wrote +0x334 at 0xC60 strides for 16 "slots"; fifteen of
+        // those landed on unrelated CHUD records and dragged player markers
+        // around with the weapon. There is no stride: there is one crosshair.
+        float* alpha = reinterpret_cast<float*>(
+            chudGlobals + kReachChudCrosshairAlpha);
+        float* fadeTarget = reinterpret_cast<float*>(
+            chudGlobals + kReachChudCrosshairFadeTarget);
+        float* fadeDuration = reinterpret_cast<float*>(
+            chudGlobals + kReachChudCrosshairFadeDuration);
+        float current = 0.0f;
+        float target = 0.0f;
+        if (!SafeReadFloat(alpha, &current) ||
+            !SafeReadFloat(fadeTarget, &target))
+            return;
+        if (!(current > 0.0f) && !(target > 0.0f))
+            return; // already hidden; never fight the engine needlessly
+        (void)SafeWriteFloat(fadeDuration, 0.0f); // snap, no fade
+        (void)SafeWriteFloat(fadeTarget, 0.0f);
+        (void)SafeWriteFloat(alpha, 0.0f);
 
         static std::atomic<bool> logged{false};
         if (!logged.exchange(true))
             LOG("Reach crosshair: native CHUD crosshair alpha cleared through "
-                "the title's own chud_show_crosshair field (kill_reticle=1)");
+                "the title's own crosshair alpha/fade fields (kill_reticle=1)");
     }
 
     bool ReachStereoTransaction(uintptr_t playerView, ReachVrRenderAccess& access)
@@ -13385,6 +13416,30 @@ namespace
 
     // Called from the 50 ms title worker's Reach block. Self-contained: it never
     // touches the Halo 3 or ODST state machines.
+    // Parity with PublishOdstLifecycle above. Without this Reach never reports
+    // an armed lifecycle, so TitleRuntimeMaskUnarmedCapabilities strips every
+    // arm-gated capability -- including ControllerAim -- and shared features
+    // that ask Game_HasTitleCapability (the VR crosshair quad) stay refused
+    // even while Reach's camera core is fully armed and rendering stereo.
+    bool PublishReachLifecycle()
+    {
+        const uint32_t generation =
+            TitleAdapter_GetGeneration(GameTitle::HaloReach);
+        if (!generation)
+            return false;
+        TitleRuntimeLifecycle lifecycle{};
+        lifecycle.installed =
+            g_reachCamera.installed.load(std::memory_order_acquire);
+        lifecycle.armed =
+            g_reachCamera.armed.load(std::memory_order_acquire);
+        lifecycle.teardownRequested =
+            g_reachCamera.teardownRequested.load(std::memory_order_acquire);
+        lifecycle.enabledCapabilities =
+            lifecycle.installed && !lifecycle.teardownRequested
+                ? kReachRuntimeCapabilities : TitleCapability_None;
+        return TitleAdapter_PublishLifecycle(
+            GameTitle::HaloReach, generation, lifecycle);
+    }
     void ReachCameraCore_Poll(
         uintptr_t base, size_t size, uint32_t generation, bool soleReachTitle)
     {
@@ -13439,6 +13494,10 @@ namespace
                 "camera/FP transaction is live; failed owned eyes "
                 "are revoked and never published");
         }
+        // Parity with ODST: publish the lifecycle every tick so armed state and
+        // capabilities stay current for shared features. Without this Reach's
+        // arm-gated capabilities are masked off permanently.
+        PublishReachLifecycle();
     }
 #endif
 
