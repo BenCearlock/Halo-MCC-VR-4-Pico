@@ -218,10 +218,14 @@ typedef BOOL(WINAPI* GetCursorPosFn)(LPPOINT);
 typedef BOOL(WINAPI* SetCursorPosFn)(int, int);
 typedef HWND(WINAPI* WindowFromPointFn)(POINT);
 typedef BOOL(WINAPI* ClipCursorFn)(const RECT*);
+typedef int(WINAPI* GetSystemMetricsFn)(int);
+typedef BOOL(WINAPI* GetMonitorInfoWFn)(HMONITOR, LPMONITORINFO);
 static GetCursorPosFn g_origGetCursorPos = nullptr;
 static SetCursorPosFn g_origSetCursorPos = nullptr;
 static WindowFromPointFn g_origWindowFromPoint = nullptr;
 static ClipCursorFn g_origClipCursor = nullptr;
+static GetSystemMetricsFn g_origGetSystemMetrics = nullptr;
+static GetMonitorInfoWFn g_origGetMonitorInfoW = nullptr;
 
 // The shell/pause cursor consumers live in the game executable (RE-notes /
 // RESOLUTION-FSR-INVESTIGATION static analysis). We only remap calls whose
@@ -410,6 +414,82 @@ static HWND WINAPI WindowFromPointHook(POINT pt)
         }
     }
     return g_origWindowFromPoint(pt);
+}
+
+// THE root cause of the "menu items are drawn but dead below a certain row"
+// symptom (which happens with the fit ON *or* OFF, because it is driven by the
+// desktop resolution, not our window): MCC lays out and clips its native shell /
+// pause menu against the size it believes the SCREEN is. It asks Windows via
+// GetSystemMetrics(SM_CXSCREEN/SM_CYSCREEN) and GetMonitorInfo, and Windows
+// truthfully answers the real desktop size (e.g. 1280x720). But MCC renders the
+// menu across the full headset canvas (e.g. 3204x2310), so every widget below
+// the real screen height is treated as off-screen and refuses focus -- for the
+// mouse, the keyboard, AND the d-pad alike (they all obey this one clip).
+//
+// Fix: for game-side callers only, report the full render size as the screen /
+// monitor size so MCC's layout-vs-viewport clip matches what it actually draws.
+// The compositor, DXGI and our own fit math call these from system DLLs / this
+// DLL (not the game EXE), so they keep the true desktop size and the display
+// downscale is unchanged. Works at ANY desktop resolution or aspect ratio
+// because we always hand back the current forced render extent, never a constant.
+static int WINAPI GetSystemMetricsHook(int index)
+{
+    const void* caller = _ReturnAddress();
+    const int real = g_origGetSystemMetrics(index);
+    if (!g_forcedRenderW || !g_forcedRenderH || !CallerInExe(caller))
+        return real;
+    // Only the primary-screen extent metrics; every other index passes through.
+    int lied = real;
+    if (index == SM_CXSCREEN || index == SM_CXFULLSCREEN || index == SM_CXVIRTUALSCREEN)
+        lied = (int)g_forcedRenderW;
+    else if (index == SM_CYSCREEN || index == SM_CYFULLSCREEN || index == SM_CYVIRTUALSCREEN)
+        lied = (int)g_forcedRenderH;
+    else
+        return real;
+    static int s_log = 0;
+    static const void* s_lastCaller = nullptr;
+    if (s_log < 16 && caller != s_lastCaller && g_exeBase)
+    {
+        ++s_log;
+        s_lastCaller = caller;
+        LOG("fit: GetSystemMetrics(%d) game-side +0x%llX -> %d (real %d)",
+            index, (unsigned long long)((const BYTE*)caller - g_exeBase), lied, real);
+    }
+    return lied;
+}
+
+static BOOL WINAPI GetMonitorInfoWHook(HMONITOR mon, LPMONITORINFO mi)
+{
+    const void* caller = _ReturnAddress();
+    const BOOL ok = g_origGetMonitorInfoW(mon, mi);
+    if (!ok || !mi || !g_forcedRenderW || !g_forcedRenderH || !CallerInExe(caller))
+        return ok;
+    // Only rewrite the monitor that hosts the game window; leave others intact so
+    // multi-monitor geometry MCC may query for other reasons stays truthful.
+    if (g_gameHwnd &&
+        MonitorFromWindow(g_gameHwnd, MONITOR_DEFAULTTONEAREST) != mon)
+        return ok;
+    // Extend both the monitor and work rects from their real top-left to the full
+    // render extent, so MCC's fullscreen/menu layout treats the screen as large as
+    // what it draws. Keeps the true origin (multi-monitor offsets stay correct).
+    mi->rcMonitor.right = mi->rcMonitor.left + (LONG)g_forcedRenderW;
+    mi->rcMonitor.bottom = mi->rcMonitor.top + (LONG)g_forcedRenderH;
+    mi->rcWork.right = mi->rcWork.left + (LONG)g_forcedRenderW;
+    mi->rcWork.bottom = mi->rcWork.top + (LONG)g_forcedRenderH;
+    static int s_log = 0;
+    static const void* s_lastCaller = nullptr;
+    if (s_log < 16 && caller != s_lastCaller && g_exeBase)
+    {
+        ++s_log;
+        s_lastCaller = caller;
+        LOG("fit: GetMonitorInfo game-side +0x%llX -> monitor %ldx%ld work %ldx%ld",
+            (unsigned long long)((const BYTE*)caller - g_exeBase),
+            mi->rcMonitor.right - mi->rcMonitor.left,
+            mi->rcMonitor.bottom - mi->rcMonitor.top,
+            mi->rcWork.right - mi->rcWork.left,
+            mi->rcWork.bottom - mi->rcWork.top);
+    }
+    return ok;
 }
 
 static HRESULT STDMETHODCALLTYPE CreateSwapChainForHwndHook(IDXGIFactory2* self, IUnknown* device,
@@ -808,6 +888,29 @@ bool InstallD3D11Hooks()
                                   (void**)&g_origClipCursor) != MH_OK)
                     LOG("warning: ClipCursor hook failed; a fitted-menu cursor "
                         "clip could still confine the pointer to the wrong rect");
+            }
+
+            // Screen-size lie (game-side only): THE fix for the menu row-clip that
+            // happens whether the fit is on or off, because MCC clips its menu
+            // layout against the real desktop size (SM_CYSCREEN / GetMonitorInfo)
+            // while drawing at full render. Report the full render extent to
+            // MCC's own code so every drawn item stays navigable. System/DXGI/our
+            // own callers keep the true desktop size. Warn-only; the display fit
+            // does not depend on these.
+            if (void* pGetSysMetrics = (void*)GetProcAddress(user32, "GetSystemMetrics"))
+            {
+                if (MH_CreateHook(pGetSysMetrics, (void*)&GetSystemMetricsHook,
+                                  (void**)&g_origGetSystemMetrics) != MH_OK)
+                    LOG("warning: GetSystemMetrics hook failed; the native menu's "
+                        "lower rows may stay unreachable (MCC clips layout to the "
+                        "real screen height)");
+            }
+            if (void* pGetMonInfo = (void*)GetProcAddress(user32, "GetMonitorInfoW"))
+            {
+                if (MH_CreateHook(pGetMonInfo, (void*)&GetMonitorInfoWHook,
+                                  (void**)&g_origGetMonitorInfoW) != MH_OK)
+                    LOG("warning: GetMonitorInfoW hook failed; the native menu may "
+                        "still clip layout to the real monitor size");
             }
         }
 
