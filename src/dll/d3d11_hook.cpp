@@ -114,19 +114,43 @@ static void InitForcedRenderSize()
         g_forcedRenderW, g_forcedRenderH);
 }
 
-// Feed MCC's own resize code the full render size (so it keeps drawing full),
-// but only on the game's WM_SIZE call stack and only for the game window. DXGI's
-// present-time query (render thread, flag clear) still gets the real small size.
+// Game-executable image range, used to scope the client-rect lie and cursor
+// remap to game-side callers (never DXGI/DWM or our own overlay). Populated by
+// InitExeRange() at hook install; the accessors are defined with the cursor
+// hooks below.
+static const BYTE* g_exeBase = nullptr;
+static const BYTE* g_exeEnd = nullptr;
+static inline bool CallerInExe(const void* ret); // defined with the cursor hooks
+
+// Feed the game the full render size for the game window whenever the caller is
+// game-side: MCC's resize code (so it keeps drawing full) AND its menu hit-test
+// (which clamps the cursor against the client size -- if that returns the true
+// small window while our cursor is scaled up to render space, only client/render
+// of the menu is reachable, i.e. the top-left ~31% dead-zone). DXGI/DWM query
+// the client at present time from system DLLs (not the game EXE), so they still
+// get the real small size and keep downscaling the full frame into the window.
 static BOOL WINAPI GetClientRectHook(HWND hwnd, LPRECT rc)
 {
+    const void* caller = _ReturnAddress();
     const BOOL ok = g_origGetClientRect(hwnd, rc);
-    if (ok && rc && g_lieClientToGame && hwnd == g_gameHwnd &&
-        g_forcedRenderW && g_forcedRenderH)
+    if (ok && rc && hwnd == g_gameHwnd && g_forcedRenderW && g_forcedRenderH &&
+        (g_lieClientToGame || CallerInExe(caller)))
     {
         rc->left = 0;
         rc->top = 0;
         rc->right = (LONG)g_forcedRenderW;
         rc->bottom = (LONG)g_forcedRenderH;
+        static int s_log = 0;
+        static const void* s_lastCaller = nullptr;
+        if (!g_lieClientToGame && s_log < 16 && caller != s_lastCaller &&
+            g_exeBase)
+        {
+            ++s_log;
+            s_lastCaller = caller;
+            LOG("fit: GetClientRect game-side +0x%llX -> forced %ux%u",
+                (unsigned long long)((const BYTE*)caller - g_exeBase),
+                g_forcedRenderW, g_forcedRenderH);
+        }
     }
     return ok;
 }
@@ -168,9 +192,7 @@ static ClipCursorFn g_origClipCursor = nullptr;
 // The shell/pause cursor consumers live in the game executable (RE-notes /
 // RESOLUTION-FSR-INVESTIGATION static analysis). We only remap calls whose
 // return address is inside that image, so our own ImGui overlay and any system
-// DLL are never touched.
-static const BYTE* g_exeBase = nullptr;
-static const BYTE* g_exeEnd = nullptr;
+// DLL are never touched. (g_exeBase/g_exeEnd are declared above GetClientRectHook.)
 static void InitExeRange()
 {
     HMODULE h = GetModuleHandleW(nullptr);
