@@ -21,6 +21,21 @@ advance the accepted pointer in `docs/CURRENT-STATE.md`. Updated 2026-07-26.
 - This track covers desktop/render decoupling first, then the 8K-class cap and
   tiers, then FSR as a separate diagnostic-first behavior.
 
+## Final rollback boundary - 2026-07-26
+
+- The fitted desktop-window work through `725d5c9` remains intact, as does the
+  8K-class resolution slider and tier work in `2b29140`.
+- The later FSR probe series (`81853f0` through `6cce21d`) and the complete
+  mod-owned eye resolve/upscale/AA/sharpen series (`92d951a` through
+  `0c413ef`) are rejected and removed from the runtime rather than left dormant.
+- The final failed installed source was
+  `0c413ef221dec58b862482baae2a6878c8d7e7dc`, DLL SHA-256
+  `4CF4E2CD5E90E95478732BDE38830A16086F7D2CEC1CDA29B31A51A255208C14`.
+  Its log proved the IQ pass active at `3786x2730 -> 4164x4244`, while the user
+  reported the headset remained stuck at approximately 60 FPS.
+- Per the user's explicit direction, the forward runtime source and tests are
+  restored exactly to `2b29140`; only this evidence ledger differs.
+
 ## What the user wants
 
 1. Change resolution without a full game restart — ideally re-applied on the
@@ -32,85 +47,6 @@ advance the accepted pointer in `docs/CURRENT-STATE.md`. Updated 2026-07-26.
    FSR must work across **all MCC titles** (persistent feature), not only the
    three the mod ships today. The user suspects the resolution revert **might be
    ODST-specific** (untested — their captured logs were Halo 3).
-
-**Universal requirement (user, 2026-07-26): the FSR fix must work on ALL THREE
-Halos (Halo 3, ODST, Reach) AND every subsequent title added to the collection --
-not a per-title hack.** This is the natural shape anyway: MCC's FSR is a single
-MCC-wide video setting, and the scene-capture code it interacts with
-(`VR_RedirectRenderTargets` and the D3D11 hooks in `src/dll/d3d11_hook.cpp`) is
-MCC's shared D3D layer, common to every title. So the correct fix belongs at that
-shared capture layer, applied uniformly, and must fail **open** to stock rendering
-for any title/state it doesn't recognize. The hardened probe must therefore be
-captured across titles (Halo 3 + ODST at minimum, Reach if it renders) to confirm
-the FSR render graph is the same everywhere before the fix is written.
-
-### DIRECTION CHANGE 2026-07-26: MCC FSR abandoned; build a MOD-OWNED image-quality pipeline
-
-The user discovered **Reach does not have MCC's FSR at all**, so "make MCC's FSR
-work" can never be the universal answer. More importantly, the real complaint is
-image quality: even at high resolution the picture is more aliased/soft than it
-should be. Root cause: the mod's final eye expansion (`Blit`, `src/dll/vr.cpp`)
-used a **plain linear sampler**, and the game usually renders *below* the headset's
-per-eye resolution (eye ~4164x4244 vs 2912x2100 at scale 1.0, 4368x3150 at 1.5x),
-so the mod is almost always **upscaling** with a linear filter -> shimmer.
-
-New feature (approved): a title-agnostic **image-quality pipeline** at the eye
-`Blit` boundary (`BlitImageQuality`, `src/dll/vr.cpp`), controlled in F1:
-- **Upscale filter** `upscale_filter` (0 linear / 1 strong bicubic sharp, default 1).
-- **Sharpening** `sharpness` (0..1, RCAS-based 2x overdrive).
-- **Anti-aliasing** `aa_mode` (0 off / 1 FXAA / 2 FXAA Strong).
-All passes run in perceptual space via UNORM intermediates, decode to linear only
-at the final sRGB write, and **fail open** to the old linear `Blit` when everything
-is off. It reads the source (game render) and destination (headset/SteamVR eye)
-sizes at runtime, so it scales for any in-game + any SteamVR resolution combination,
-on every title. **FSR 2 (needs game motion vectors) and MSAA (hardware raster AA)
-are not buildable mod-side** and were explained to the user. The MCC-FSR probe work
-above is retired but its findings are kept as evidence. See the approved plan for
-the full design.
-
-### Image-quality candidate result and corrected math - 2026-07-26
-
-- Candidate `c12bad3ff221efd32ebc25837e1d4f3bc2c91289`, installed DLL
-  SHA-256 `2C898A5F801AE291F03675370A57343CDB81F52A0711E6CB31E01AE08BD3A849`,
-  proved the shared eye pass ran at `3786x2730 -> 4164x4244`, XR format 29.
-  The retained log contains live Linear/Sharp, AA off/on, and sharpening
-  transitions through 0.99 with zero `IQ ERROR` lines. The user still saw no
-  useful difference, rejecting fallback/menu wiring as the cause. Evidence is
-  preserved under
-  `out/test-runs/c12bad3-iq-passes-no-visible-difference-20260726-031008Z`;
-  log SHA-256 `0BF13732845FD2848B71915613564203D71AE588DF2C62D58AC563CE26B95F71`.
-- Source review found that the shader labeled RCAS was only a small
-  CAS-like approximation, not AMD's RCAS limiter/resolve, and the AA mode
-  labeled SMAA merely selected the same FXAA shader. Both misleading paths are
-  removed in the forward candidate.
-- The forward math uses the actual RCAS five-tap limiter/resolve with the F1
-  scale mapped intuitively from 0=off to 1=maximum, a stronger bounded Keys
-  bicubic resolve (`a=-0.75`) for a visible Linear/Sharp A/B, and honest
-  Off/FXAA/FXAA Strong choices with distinct thresholds. Missing resources
-  remain loud errors; no plain-blit fallback is restored.
-
-### FXAA headset pass, SMAA failure, and sharpening follow-up - 2026-07-26
-
-- The user confirmed that the FXAA-only image-quality effect was visible during
-  a headset session whose log covered Halo 3, Reach, and ODST, then requested a
-  stronger adjustable sharpening range. The exact tested source was
-  `1aa5bbc899864ef7fa9c12a04613efbf46241f7e`; installed DLL SHA-256
-  `8D15A06602A31E567A5C02C0E7B05A9CCF766FFEF1F2E5308094791AB097EBFE`.
-  The log contains complete `0.00..1.00` sharpening sweeps and zero `IQ ERROR`;
-  evidence is preserved under
-  `out/test-runs/1aa5bbc-iq-visible-needs-2x-strength-h3-reach-odst-20260726-083324Z`.
-- The later SMAA 1x experiment at source
-  `35b7db7c0e3cbc24a42990adfe9c1b3d41d40844`, installed DLL SHA-256
-  `82A34644C4855FD3AC2CBDCBD68BF0A6173C5F75212A00DA418BC982F47A4932`,
-  failed the headset test and is rejected. Its shaders, lookup tables, build
-  integration, modes, and configuration range were reverted rather than left
-  dormant. The forward path is again only Off/FXAA/FXAA Strong.
-- The retained sharpening follow-up keeps RCAS's `-0.1875` lobe limit and
-  positive normalization denominator, computes the same five-tap RCAS result,
-  then applies exactly twice its correction:
-  `center + 2 * (rcas - center)`. This adds no texture samples, fullscreen
-  pass, intermediate, or bandwidth. The top can intentionally ring or clip;
-  the full `0..1` slider lets the user pull it back.
 
 ## Stage 1 desktop-fit evidence (verified, still unaccepted)
 
@@ -287,58 +223,10 @@ Evidence logs:
   runtime/headset; 8k-class source resolution can still bring real
   anti-aliasing gains with steep GPU cost and diminishing returns. This should
   shape the safety warning framing.
-- **PROVEN 2026-07-26 (fsr_probe): MCC FSR renders the scene into a SMALLER
-  pre-upscale target, then upscales to the full backbuffer.** In a Halo 3 session
-  at resolution_scale 1.30 (backbuffer `3786x2730`) with MCC FSR enabled, the
-  probe logged the scene rendering into `1893x1365` targets -- **exactly half the
-  backbuffer** (50.0% per axis) in both dimensions. Two formats appear at that
-  half size: `fmt=10` (R16G16B16A16_FLOAT, the HDR scene color, ~54k binds) and
-  `fmt=28` (R8G8B8A8_TYPELESS, ~4k binds). The mod's discovery predicate requires
-  a typeless RGBA scene target at **exactly backbuffer size**, so with FSR on it
-  never matches the real (half-res) scene render and instead learns the full-size
-  post-upscale target -- capturing the wrong image. That mismatch is the root
-  cause of the reported second-screen / wrong-FOV symptom. Evidence: distilled
-  target histogram in the 2026-07-26 probe run (145 MB raw log; the standout
-  lines are `RT 1893x1365 fmt=10/28 ... backbuffer 3786x2730`).
-- **The FSR pre-upscale size is TIER-DEPENDENT, not fixed.** MCC's FSR has 4
-  quality tiers. Standard AMD FSR 1 render scales are Ultra Quality 77% (1.30x),
-  Quality 66.6% (1.50x), Balanced 58.8% (1.70x), Performance 50% (2.00x). The
-  measured session was **exactly 50%**; the user recalled selecting "Balanced,"
-  but 50% is standard **Performance**, so either the tier was actually
-  Performance or MCC relabels its ratios. **This is unverified and does not need
-  verifying for the fix** -- the fix must **detect** whatever sub-backbuffer scene
-  target FSR is currently rendering into (e.g. a typeless/HDR RGBA target smaller
-  than the backbuffer, learned like the current predicate but with the exact-size
-  constraint relaxed), which works for all four tiers regardless of the exact
-  percentage. Do not hardcode a half-res assumption. (Confirming the exact
-  MCC-tier-to-percentage map would take one more probe run per tier, but the fix
-  does not depend on it.)
-- **CORRECTION 2026-07-26: the first fix design was wrong, and the raw log
-  proves why.** The planned fix ("relax the scene-color predicate to accept a
-  smaller target with the SAME typeless-RGBA + RT+SRV+UAV signature") cannot fire,
-  because the half-res FSR targets do NOT carry that signature. Decoding the
-  earlier histogram:
-  - The mod's scene-color predicate wants **format 27** (`R8G8B8A8_TYPELESS`) with
-    bind **0xA8** (RT+SRV+**UAV**).
-  - The **half-res** (`1893x1365`) targets are **fmt=10** (`R16G16B16A16_FLOAT`)
-    and **fmt=28** (`R8G8B8A8_UNORM`), both bind **0x28** (RT+SRV, **no UAV**) --
-    neither matches.
-  - The full-size `3786x2730` **fmt=27 bind=0xA8** target (the one the mod DOES
-    learn with FSR on) appears with a **partial viewport** `2224x1604` (~58.8%),
-    i.e. the scene renders into a sub-rect of it. The mod redirects that target
-    and captures the WHOLE texture, so only the top-left sub-rect holds the scene
-    -> the reported "second screen." So FSR uses BOTH dedicated half-res textures
-    AND partial-viewport sub-rects on full-size targets; the exact stage the mod
-    should capture is not yet proven. A correct fix needs the raster-eye + viewport
-    context the old flat log lacked, so the probe is hardened and re-run FIRST.
-- **PROBE HARDENED 2026-07-26 (candidate pending):** `ProbeFsrTargets`
-  (`src/dll/vr.cpp`) now (a) filters to scene-scale targets only (>= 40% of the
-  backbuffer width; FSR's lowest tier is 50%), (b) dedups into a 96-slot table
-  keyed on (w,h,format,bind,**rasterEye**), and (c) logs the current **rasterEye**
-  so we can see whether each large target is bound inside the per-eye redirect
-  scope (0/1) or outside it (-1). This replaces the 12-slot table that saturated
-  into a 1.16M-line / 145 MB log. Re-run FSR off then on and the log stays bounded
-  and readable; that decides which stage the real capture fix must target.
+- **FSR is invisible to the mod.** Enabling MCC's FSR produced **zero** recognized
+  log events. The mod captures and reprojects the full frame assuming FSR isn't
+  touching the render target/viewport, which is the likely cause of the
+  second-screen / wrong-FOV symptom.
 - **There is no FSR implementation in this repository.** No config key, F1
   control, launcher argument, FidelityFX dependency/shader, or MCC-setting owner
   exists. The current final eye expansion uses an ordinary linear sampler.
@@ -369,17 +257,7 @@ Evidence logs:
   and viewport? A read-only probe logging the scene-color desc (size/format) and
   bound viewport when FSR is toggled on/off would reveal whether FSR shrinks the
   render target (so the mod must capture the pre-upscale target) or changes the
-  viewport rect (so the mod's projection assumptions break).
-  **BUILT 2026-07-26 (`fsr_probe`, log-only, off by default).**
-  `ProbeFsrTargets` in `src/dll/vr.cpp` runs at the top of
-  `VR_RedirectRenderTargets` (render thread only, allocation/lock-free, fixed
-  12-slot static). It logs each DISTINCT slot-0 render target MCC binds --
-  `FSRPROBE: slot0 RT WxH fmt=.. bind=0x.. | viewport WxH at (x,y) | backbuffer
-  WxH | rtCount=..`. Toggling MCC FSR should emit a new line if FSR introduces a
-  smaller pre-upscale target or a changed viewport. Set `fsr_probe = 1` in
-  `halomccvr.cfg` (file-only; no F1 toggle). Capture with the exact same DLL
-  hash, FSR Off then On, Halo 3 first then ODST. Headset/log capture pending; no
-  capture-behavior change ships until the transaction is proven. The mod already sees
+  viewport rect (so the mod's projection assumptions break). The mod already sees
   the depth-stencil and RTV in `OMSetRenderTargets` → `VR_RedirectRenderTargets`
   and logs swapchain resizes, so most of the instrumentation hooks already exist.
   The probe must use fixed storage in the D3D hot hooks and emit the completed

@@ -60,9 +60,6 @@ static void Clamp()
                                            kResolutionScaleMin, kResolutionScaleMax);
     g_config.draw_distance = std::clamp(g_config.draw_distance,
                                         kDrawDistanceMin, kDrawDistanceMax);
-    g_config.upscale_filter = std::clamp(g_config.upscale_filter, 0, 1);
-    g_config.sharpness = std::clamp(g_config.sharpness, 0.0f, 1.0f);
-    g_config.aa_mode = std::clamp(g_config.aa_mode, 0, 2);
     g_config.hud_size = std::clamp(g_config.hud_size, 0.30f, 1.00f);
     g_config.hud_aspect = std::clamp(g_config.hud_aspect, kHudAspectMin, kHudAspectMax);
     g_config.hud_curvature = std::clamp(g_config.hud_curvature,
@@ -175,8 +172,6 @@ void ConfigLoad(const wchar_t* path)
             continue; // retired: the composed-wrist snap was reverted (hand spin); accept old cfgs quietly
         else if (!strcmp(key, "hud_probe"))
             g_config.hud_probe = atoi(val) != 0;
-        else if (!strcmp(key, "fsr_probe"))
-            g_config.fsr_probe = atoi(val) != 0;
         else if (!strcmp(key, "bullet_probe"))
             g_config.bullet_probe = atoi(val) != 0;
         else if (!strcmp(key, "weapon_probe"))
@@ -227,12 +222,6 @@ void ConfigLoad(const wchar_t* path)
             g_config.fit_desktop_window = atoi(val) != 0;
         else if (!strcmp(key, "draw_distance"))
             g_config.draw_distance = (float)atof(val);
-        else if (!strcmp(key, "upscale_filter"))
-            g_config.upscale_filter = atoi(val);
-        else if (!strcmp(key, "sharpness"))
-            ParseFloatSetting(key, val, g_config.sharpness);
-        else if (!strcmp(key, "aa_mode"))
-            g_config.aa_mode = atoi(val);
         else if (!strcmp(key, "hud_size"))
             g_config.hud_size = (float)atof(val);
         else if (!strcmp(key, "hud_aspect"))
@@ -535,21 +524,6 @@ void ConfigSave()
     fprintf(f, "# (default %.2f, range %.2f to %.2f)\n",
             d.draw_distance, kDrawDistanceMin, kDrawDistanceMax);
     fprintf(f, "draw_distance = %.2f\n\n", g_config.draw_distance);
-    fprintf(f, "# Upscale/resolve filter for the headset image: 0 = linear (old),\n");
-    fprintf(f, "# 1 = sharp (strong bicubic). The game usually renders below your\n");
-    fprintf(f, "# headset's per-eye resolution, so the mod upscales the difference;\n");
-    fprintf(f, "# sharp keeps edges crisp instead of the linear shimmer. Live, no restart.\n");
-    fprintf(f, "# (default %d)\n", d.upscale_filter);
-    fprintf(f, "upscale_filter = %d\n\n", g_config.upscale_filter);
-    fprintf(f, "# Sharpening strength (RCAS-based 2x overdrive). 0 = off, 1 = max.\n");
-    fprintf(f, "# Twice the prior maximum; lower it if the top rings or clips. Live.\n");
-    fprintf(f, "# (default %.2f, range 0 to 1)\n", d.sharpness);
-    fprintf(f, "sharpness = %.2f\n\n", g_config.sharpness);
-    fprintf(f, "# Anti-aliasing on the finished image: 0 = off, 1 = FXAA (balanced),\n");
-    fprintf(f, "# 2 = FXAA Strong (more smoothing/softening). Smooths jagged\n");
-    fprintf(f, "# edges without needing a huge render resolution. Live, no restart.\n");
-    fprintf(f, "# (default %d)\n", d.aa_mode);
-    fprintf(f, "aa_mode = %d\n\n", g_config.aa_mode);
     fprintf(f, "# HUD size: fraction of the view the HUD lays out into. Smaller pulls\n");
     fprintf(f, "# shields/radar/ammo toward the center so both VR eyes see them.\n");
     fprintf(f, "# (default %.2f = calibrated stock layout, range 0.30 to 1.00)\n", d.hud_size);
@@ -635,11 +609,6 @@ void ConfigSave()
     fprintf(f, "# enemy-red reticle state and per-element HUD flags). Log-only.\n");
     fprintf(f, "# Not in the F1 menu; this file only. (default %d)\n", d.hud_probe ? 1 : 0);
     fprintf(f, "hud_probe = %d\n\n", g_config.hud_probe ? 1 : 0);
-    fprintf(f, "# Diagnostic: 1 logs each distinct scene render target MCC binds\n");
-    fprintf(f, "# (size/format/flags + viewport) so toggling MCC's built-in FSR shows\n");
-    fprintf(f, "# what it changes. Not in the F1 menu; this file only. (default %d)\n",
-            d.fsr_probe ? 1 : 0);
-    fprintf(f, "fsr_probe = %d\n\n", g_config.fsr_probe ? 1 : 0);
     fprintf(f, "# Diagnostic: log camera-vs-muzzle offset on each shot (bullet origin).\n");
     fprintf(f, "# Not in the F1 menu; this file only. (default %d)\n", d.bullet_probe ? 1 : 0);
     fprintf(f, "bullet_probe = %d\n\n", g_config.bullet_probe ? 1 : 0);

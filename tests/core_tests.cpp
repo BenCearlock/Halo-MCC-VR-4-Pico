@@ -3274,13 +3274,12 @@ int main()
         "gun_roll_deg", "gun_forward_m", "scope_enabled", "scope_zoom",
         "scope_screen_width_m", "scope_screen_right_m", "scope_screen_up_m",
         "scope_screen_forward_m", "scope_refresh_divisor", "game_brightness",
-        "resolution_scale", "upscale_filter", "sharpness", "aa_mode",
-        "hud_size", "hud_aspect", "hud_curvature",
+        "resolution_scale", "hud_size", "hud_aspect", "hud_curvature",
         "hud_vertical_offset", "motion_blur", "auto_vr", "two_handed_aim",
         "two_hand_toggle", "left_hand_forward_m", "two_hand_zone_right_m",
         "left_grip_forward_m", "arm_ik", "floating_hands",
         "right_shoulder_drop", "shoulder_level", "body_wip", "weapon_probe",
-        "hud_probe", "fsr_probe", "bullet_probe", "right_eye_first"
+        "hud_probe", "bullet_probe", "right_eye_first"
     };
     for (const char* key : universalKeys)
     {
@@ -3289,25 +3288,18 @@ int main()
             key + "' assignment";
         Check(CountText(organizedConfig, assignment) == 1, message.c_str());
     }
-    Check(CountText(organizedConfig, "SMAA") == 0,
-        "Generated FXAA config contains no stale SMAA text");
-    Check(CountText(organizedConfig, "RCAS-based 2x overdrive") == 1,
-        "Generated config describes the stronger sharpening range");
     {
         std::ofstream file(primary);
         file << "config_version = 1\n";
         file << "haptic_intensity = 2.0\n";
         file << "headset_smoothing = 1.0\n";
         file << "aim_stabilization = -1.0\n";
-        file << "aa_mode = 4\n";
     }
     ConfigLoad(primary.c_str());
     Check(g_config.haptic_intensity == 1.0f, "Haptic intensity is safely clamped");
     Check(g_config.headset_smoothing == 0.10f,
         "Headset smoothing is capped at the low-latency maximum");
     Check(g_config.aim_stabilization == 0.0f, "Aim stabilization is safely clamped");
-    Check(g_config.aa_mode == 2,
-        "A stale SMAA config value migrates safely to FXAA Strong");
 
     // resolution_scale is free-form: a hand-typed value must survive exactly,
     // not snap to one of the six installer tiers (the pre-2026-07-20 behavior).

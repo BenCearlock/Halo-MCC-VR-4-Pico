@@ -153,25 +153,6 @@ struct Config
     // this takes effect on the next game start (close MCC and relaunch).
     bool fit_desktop_window = false;
 
-    // Image quality (mod-owned, applied live when each eye is expanded into the
-    // headset — universal to every title, no restart). These replace/augment the
-    // plain linear upscale that made edges shimmer even at high resolution.
-    //
-    // Upscale/resolve filter: 0 = linear (the old behavior), 1 = sharp
-    // (Keys bicubic, a=-0.75). Sharp is the default and the single biggest clarity
-    // win, since the game usually renders BELOW the headset's per-eye resolution
-    // and the mod upscales the difference.
-    int upscale_filter = 1;
-
-    // Sharpening strength (AMD FidelityFX RCAS), 0.00 = off, 1.00 = a 2x
-    // correction overdrive. The aggressive top may ring or clip; users can lower it.
-    float sharpness = 0.30f;
-
-    // Anti-aliasing on the finished eye: 0 = off, 1 = FXAA (balanced), 2 = FXAA
-    // Strong (lower edge thresholds, more smoothing). Lets a lower/mid-tier rig
-    // get clean edges without rendering at a huge resolution.
-    int aa_mode = 0;
-
     // Render draw-distance trim, applied live to every title's shared
     // render_far_clip_distance debug var (stock 10240 world units), resolved by
     // name — no hardcoded addresses. 1.00 = full stock draw distance (no
@@ -303,16 +284,6 @@ struct Config
     // changes, to locate the reticle "on target" (enemy red) state and the
     // per-element visibility flags. Log-only; changes nothing.
     bool hud_probe = false;
-
-    // DIAGNOSTIC (off by default; set fsr_probe=1 in the cfg to investigate
-    // MCC's built-in FSR). Log-only: on each distinct slot-0 render target MCC
-    // binds, records its width/height/format/bind-flags and the current
-    // viewport. When MCC's FSR is toggled on/off, a new line reveals whether FSR
-    // makes the scene render into a SMALLER target (so the mod must capture the
-    // pre-upscale image) or changes the VIEWPORT rect (so the mod's projection
-    // assumptions break). Changes nothing; it only observes. See
-    // docs/RESOLUTION-FSR-INVESTIGATION.md.
-    bool fsr_probe = false;
 
     // DIAGNOSTIC (off by default; set bullet_probe=1 in the cfg for the
     // fire-hook hunt). On each shot, logs the camera (where Halo spawns your

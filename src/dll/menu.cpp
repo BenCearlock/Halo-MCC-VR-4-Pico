@@ -594,23 +594,6 @@ namespace
             ImGui::TextColored(ImVec4(1.0f, 0.55f, 0.25f, 1.0f),
                                "[!] Very heavy (~5K and up): can crash weaker GPUs. Test in\n"
                                "    short sessions and drop this if the game won't start.");
-        ImGui::Spacing();
-        ImGui::Text("Image quality (applies live, every title)");
-        const char* upscaleItems[] = {"Linear (old)", "Sharp (strong bicubic)"};
-        changed |= ImGui::Combo("Upscale filter", &g_config.upscale_filter,
-                                upscaleItems, 2);
-        ImGui::TextDisabled("How the game image is scaled to your headset. The game usually\n"
-                            "renders BELOW your per-eye headset resolution, so this upscales it.\n"
-                            "Sharp keeps edges crisp; Linear is the old soft/shimmery look.");
-        changed |= ImGui::SliderFloat("Sharpening", &g_config.sharpness, 0.0f, 1.0f, "%.2f");
-        ImGui::TextDisabled("RCAS-based 2x overdrive. 0 = off; 1 = twice the prior maximum.\n"
-                            "It uses the same five taps/pass; lower it if the top rings or clips.");
-        const char* aaItems[] = {"Off", "FXAA", "FXAA Strong"};
-        changed |= ImGui::Combo("Anti-aliasing", &g_config.aa_mode, aaItems, 3);
-        ImGui::TextDisabled("Smooths jagged edges on the finished image, so a mid/low rig doesn't\n"
-                            "need a huge render resolution. Strong lowers the edge thresholds,\n"
-                            "making the A/B more obvious at the cost of more softening.");
-        ImGui::Spacing();
         changed |= ImGui::Checkbox("Fit desktop window to my monitor",
                                    &g_config.fit_desktop_window);
         ImGui::TextDisabled(
