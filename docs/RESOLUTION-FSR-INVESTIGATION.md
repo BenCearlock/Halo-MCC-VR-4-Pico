@@ -210,24 +210,30 @@ Evidence logs:
   shape the safety warning framing.
 - **PROVEN 2026-07-26 (fsr_probe): MCC FSR renders the scene into a SMALLER
   pre-upscale target, then upscales to the full backbuffer.** In a Halo 3 session
-  at resolution_scale 1.30 (backbuffer `3786x2730`) with MCC FSR on **Balanced**,
-  the probe logged the scene rendering into `1893x1365` targets -- **exactly half
-  the backbuffer** in both dimensions. Two formats appear at that half size:
-  `fmt=10` (R16G16B16A16_FLOAT, the HDR scene color, ~54k binds) and `fmt=28`
-  (R8G8B8A8_TYPELESS, ~4k binds). The mod's discovery predicate requires a
-  typeless RGBA scene target at **exactly backbuffer size**, so with FSR on it
+  at resolution_scale 1.30 (backbuffer `3786x2730`) with MCC FSR enabled, the
+  probe logged the scene rendering into `1893x1365` targets -- **exactly half the
+  backbuffer** (50.0% per axis) in both dimensions. Two formats appear at that
+  half size: `fmt=10` (R16G16B16A16_FLOAT, the HDR scene color, ~54k binds) and
+  `fmt=28` (R8G8B8A8_TYPELESS, ~4k binds). The mod's discovery predicate requires
+  a typeless RGBA scene target at **exactly backbuffer size**, so with FSR on it
   never matches the real (half-res) scene render and instead learns the full-size
   post-upscale target -- capturing the wrong image. That mismatch is the root
   cause of the reported second-screen / wrong-FOV symptom. Evidence: distilled
   target histogram in the 2026-07-26 probe run (145 MB raw log; the standout
   lines are `RT 1893x1365 fmt=10/28 ... backbuffer 3786x2730`).
 - **The FSR pre-upscale size is TIER-DEPENDENT, not fixed.** MCC's FSR has 4
-  quality tiers (Ultra Quality / Quality / Balanced / Performance); each uses a
-  different render scale, so the smaller target's dimensions change with the tier
-  (Balanced measured at 50%). A fix must **detect** whatever sub-backbuffer scene
+  quality tiers. Standard AMD FSR 1 render scales are Ultra Quality 77% (1.30x),
+  Quality 66.6% (1.50x), Balanced 58.8% (1.70x), Performance 50% (2.00x). The
+  measured session was **exactly 50%**; the user recalled selecting "Balanced,"
+  but 50% is standard **Performance**, so either the tier was actually
+  Performance or MCC relabels its ratios. **This is unverified and does not need
+  verifying for the fix** -- the fix must **detect** whatever sub-backbuffer scene
   target FSR is currently rendering into (e.g. a typeless/HDR RGBA target smaller
-  than the backbuffer, learned like the current predicate but with the size
-  constraint relaxed), not hardcode a half-res assumption.
+  than the backbuffer, learned like the current predicate but with the exact-size
+  constraint relaxed), which works for all four tiers regardless of the exact
+  percentage. Do not hardcode a half-res assumption. (Confirming the exact
+  MCC-tier-to-percentage map would take one more probe run per tier, but the fix
+  does not depend on it.)
 - **PROBE BUG to fix before the next probe build:** `ProbeFsrTargets`'
   distinct-shape dedup uses a fixed 12-slot table keyed on (w,h,format,bind).
   MCC binds far more than 12 transient shapes (1x1, 2x2, 32x32 post-fx/shadow
