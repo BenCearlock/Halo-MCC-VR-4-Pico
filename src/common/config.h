@@ -158,7 +158,7 @@ struct Config
     // plain linear upscale that made edges shimmer even at high resolution.
     //
     // Upscale/resolve filter: 0 = linear (the old behavior), 1 = sharp
-    // (Catmull-Rom bicubic). Sharp is the default and the single biggest clarity
+    // (Keys bicubic, a=-0.75). Sharp is the default and the single biggest clarity
     // win, since the game usually renders BELOW the headset's per-eye resolution
     // and the mod upscales the difference.
     int upscale_filter = 1;
@@ -167,8 +167,8 @@ struct Config
     // contrast-adaptive sharpen that adds apparent detail without ringing.
     float sharpness = 0.30f;
 
-    // Anti-aliasing on the finished eye: 0 = off, 1 = FXAA (cheap, slight
-    // softening), 2 = SMAA (sharper edges, heavier). Lets a lower/mid-tier rig
+    // Anti-aliasing on the finished eye: 0 = off, 1 = FXAA (balanced), 2 = FXAA
+    // Strong (lower edge thresholds, more smoothing). Lets a lower/mid-tier rig
     // get clean edges without rendering at a huge resolution.
     int aa_mode = 0;
 

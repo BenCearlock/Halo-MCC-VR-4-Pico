@@ -310,12 +310,12 @@ namespace
     ID3D11ShaderResourceView* g_srcSrv = nullptr; // direct SRV of the backbuffer, when allowed
     ID3D11Texture2D* g_srcSrvKey = nullptr;
 
-    // Image-quality pipeline: Catmull-Rom resolve + FXAA + RCAS sharpen, applied
+    // Image-quality pipeline: sharp bicubic resolve + FXAA + RCAS sharpen, applied
     // when each eye is expanded into the headset. Reuses g_blitVs/sampler/
     // rasterizer/depth; adds pixel shaders, a params constant buffer, and two
     // ping-pong intermediates sized to the eye. Created on demand, released with
     // the other blit resources.
-    ID3D11PixelShader* g_iqResolveCatmull = nullptr; // sharp resolve/upscale
+    ID3D11PixelShader* g_iqResolveSharp = nullptr;   // sharp Keys bicubic resolve/upscale
     ID3D11PixelShader* g_iqResolveLinear = nullptr;  // linear resolve (matches old blit)
     ID3D11PixelShader* g_iqFxaa = nullptr;
     ID3D11PixelShader* g_iqRcas = nullptr;
@@ -328,7 +328,7 @@ namespace
     struct IqParams // matches cbuffer IqParams (b0); 32 bytes
     {
         float srcW, srcH, dstW, dstH;
-        float sharpness, srcIsSrgb, outPerceptual, pad;
+        float sharpness, srcIsSrgb, outPerceptual, aaStrength;
     };
 
     // Deliberately separate from the eye/menu blitter: scope upload failures
@@ -794,17 +794,17 @@ float4 ps_pass(VSOut i) : SV_Target
     // the params constant buffer once; reuses the blit VS/sampler/rasterizer/
     // depth. All passes operate in the display's perceptual (sRGB-encoded) space
     // via UNORM intermediates, decoding to linear only at the final write to the
-    // sRGB XR target. The Catmull-Rom resolve deliberately uses the LINEAR
+    // sRGB XR target. The sharp bicubic resolve deliberately uses the LINEAR
     // sampler (its 9-tap form combines bilinear fetches).
     bool EnsureIqPipeline()
     {
-        if (g_iqResolveCatmull && g_iqResolveLinear && g_iqFxaa && g_iqRcas &&
+        if (g_iqResolveSharp && g_iqResolveLinear && g_iqFxaa && g_iqRcas &&
             g_iqPresent && g_iqCb)
             return true;
         if (!EnsureBlitPipeline())
             return false;
         auto release=[&](auto*& o){ if (o) o->Release(); o=nullptr; };
-        release(g_iqResolveCatmull);
+        release(g_iqResolveSharp);
         release(g_iqResolveLinear);
         release(g_iqFxaa);
         release(g_iqRcas);
@@ -821,7 +821,7 @@ cbuffer IqParams : register(b0)
     float  sharpness;    // 0..1 RCAS strength
     float  srcIsSrgb;    // 1 = sampling srcTex already returns linear
     float  outPerceptual;// 1 = write perceptual (to UNORM); 0 = write linear (to sRGB RTV)
-    float  _pad;
+    float  aaStrength;   // 0 = FXAA, 1 = FXAA Strong
 };
 struct VSOut { float4 pos : SV_Position; float2 uv : TEXCOORD0; };
 float3 toLin(float3 c){ return float3(
@@ -836,16 +836,21 @@ float3 srcLinear(float4 s){ return srcIsSrgb > 0.5 ? s.rgb : toLin(s.rgb); }
 float3 encodeOut(float3 lin){ return outPerceptual > 0.5 ? toSrgb(lin) : lin; }
 float lumaP(float3 c){ return dot(c, float3(0.299, 0.587, 0.114)); }
 
-float4 sampleCatmull(float2 uv)
+// Keys bicubic with a=-0.75. Catmull-Rom (a=-0.5) was mathematically valid but
+// too close to linear at the modest horizontal scale used by this headset.
+// The stronger negative lobe is still bounded, while making the F1 A/B visible.
+float4 sampleSharpBicubic(float2 uv)
 {
     float2 texSize = srcSize;
     float2 samplePos = uv * texSize;
     float2 texPos1 = floor(samplePos - 0.5) + 0.5;
     float2 f = samplePos - texPos1;
-    float2 w0 = f * (-0.5 + f * (1.0 - 0.5 * f));
-    float2 w1 = 1.0 + f * f * (-2.5 + 1.5 * f);
-    float2 w2 = f * (0.5 + f * (2.0 - 1.5 * f));
-    float2 w3 = f * f * (-0.5 + 0.5 * f);
+    const float a = -0.75;
+    float2 w0 = a * f * (1.0 - f) * (1.0 - f);
+    float2 w1 = 1.0 - (a + 3.0) * f * f + (a + 2.0) * f * f * f;
+    float2 g = 1.0 - f;
+    float2 w2 = 1.0 - (a + 3.0) * g * g + (a + 2.0) * g * g * g;
+    float2 w3 = a * f * f * (1.0 - f);
     float2 w12 = w1 + w2;
     float2 offset12 = w2 / w12;
     float2 p0 = (texPos1 - 1.0) / texSize;
@@ -864,9 +869,9 @@ float4 sampleCatmull(float2 uv)
     return r;
 }
 
-float4 ps_resolve_catmull(VSOut i) : SV_Target
+float4 ps_resolve_sharp(VSOut i) : SV_Target
 {
-    float4 s = sampleCatmull(i.uv);
+    float4 s = sampleSharpBicubic(i.uv);
     return float4(encodeOut(srcLinear(s)), s.a);
 }
 float4 ps_resolve_linear(VSOut i) : SV_Target
@@ -888,14 +893,17 @@ float4 ps_fxaa(VSOut i) : SV_Target
     float lM=lumaP(m), lNW=lumaP(nw), lNE=lumaP(ne), lSW=lumaP(sw), lSE=lumaP(se);
     float lMin = min(lM, min(min(lNW,lNE), min(lSW,lSE)));
     float lMax = max(lM, max(max(lNW,lNE), max(lSW,lSE)));
-    if ((lMax - lMin) < max(0.0312, lMax * 0.125))
+    float edgeThresholdMin = lerp(0.0312, 0.0156, saturate(aaStrength));
+    float edgeThreshold = lerp(0.125, 0.063, saturate(aaStrength));
+    if ((lMax - lMin) < max(edgeThresholdMin, lMax * edgeThreshold))
         return float4(m, 1);
     float2 dir;
     dir.x = -((lNW + lNE) - (lSW + lSE));
     dir.y =  ((lNW + lSW) - (lNE + lSE));
     float dirReduce = max((lNW + lNE + lSW + lSE) * (0.25 * 0.03125), 0.0078125);
     float rcpDirMin = 1.0 / (min(abs(dir.x), abs(dir.y)) + dirReduce);
-    dir = clamp(dir * rcpDirMin, -8.0, 8.0) * rcp;
+    float span = lerp(8.0, 12.0, saturate(aaStrength));
+    dir = clamp(dir * rcpDirMin, -span, span) * rcp;
     float3 rgbA = 0.5 * (
         srcTex.SampleLevel(smp, uv + dir * (1.0/3.0 - 0.5), 0).rgb +
         srcTex.SampleLevel(smp, uv + dir * (2.0/3.0 - 0.5), 0).rgb);
@@ -906,22 +914,35 @@ float4 ps_fxaa(VSOut i) : SV_Target
     return (lB < lMin || lB > lMax) ? float4(rgbA, 1) : float4(rgbB, 1);
 }
 
-// RCAS-style contrast-adaptive sharpening, in perceptual space.
+float3 loadClamped(int2 p)
+{
+    p = clamp(p, int2(0, 0), int2(srcSize) - 1);
+    return srcTex.Load(int3(p, 0)).rgb;
+}
+
+// AMD FidelityFX FSR1 RCAS 32-bit limiter/resolve, adapted to the UI's
+// intuitive 0=off, 1=maximum scale. The previous RCAS-style approximation
+// used CAS weights and was not RCAS; in normal game neighborhoods its weights
+// stayed close enough to zero that even the top of the slider was hard to see.
 float4 ps_rcas(VSOut i) : SV_Target
 {
-    float2 rcp = 1.0 / srcSize;
-    float2 uv = i.uv;
-    float3 e = srcTex.SampleLevel(smp, uv, 0).rgb;
-    float3 b = srcTex.SampleLevel(smp, uv + float2(0,-rcp.y), 0).rgb;
-    float3 d = srcTex.SampleLevel(smp, uv + float2(-rcp.x,0), 0).rgb;
-    float3 f = srcTex.SampleLevel(smp, uv + float2( rcp.x,0), 0).rgb;
-    float3 h = srcTex.SampleLevel(smp, uv + float2(0, rcp.y), 0).rgb;
-    float3 mn = min(e, min(min(b,d), min(f,h)));
-    float3 mx = max(e, max(max(b,d), max(f,h)));
-    float3 amp = sqrt(saturate(min(mn, 1.0 - mx) / max(mx, 1e-4)));
-    float peak = -1.0 / lerp(8.0, 5.0, saturate(sharpness));
-    float3 w = amp * peak;
-    float3 res = (b*w + d*w + f*w + h*w + e) / (1.0 + 4.0*w);
+    int2 p = int2(i.pos.xy);
+    float3 b = loadClamped(p + int2( 0,-1));
+    float3 d = loadClamped(p + int2(-1, 0));
+    float3 e = loadClamped(p);
+    float3 f = loadClamped(p + int2( 1, 0));
+    float3 h = loadClamped(p + int2( 0, 1));
+    float3 mn4 = min(min(b, d), min(f, h));
+    float3 mx4 = max(max(b, d), max(f, h));
+
+    // Solve the negative lobe that cannot clip either side of [0,1], then
+    // apply RCAS's documented -0.1875 natural-result limit.
+    float3 hitMin = min(mn4, e) / max(4.0 * mx4, 1e-5);
+    float3 hitMax = (1.0 - max(mx4, e)) / min(4.0 * mn4 - 4.0, -1e-5);
+    float3 lobes = max(-hitMin, hitMax);
+    float lobe = max(-0.1875, min(max(lobes.r, max(lobes.g, lobes.b)), 0.0));
+    lobe *= saturate(sharpness);
+    float3 res = (lobe * (b + d + f + h) + e) / (4.0 * lobe + 1.0);
     return float4(saturate(res), 1);
 }
 
@@ -946,7 +967,7 @@ float4 ps_present(VSOut i) : SV_Target
         };
         struct Target { const char* entry; ID3D11PixelShader** out; };
         const Target targets[] = {
-            {"ps_resolve_catmull", &g_iqResolveCatmull},
+            {"ps_resolve_sharp",   &g_iqResolveSharp},
             {"ps_resolve_linear",  &g_iqResolveLinear},
             {"ps_fxaa",            &g_iqFxaa},
             {"ps_rcas",            &g_iqRcas},
@@ -1021,8 +1042,8 @@ float4 ps_present(VSOut i) : SV_Target
                           ID3D11RenderTargetView* dstRtv)
     {
         const bool xrSrgb = IsSrgb((DXGI_FORMAT)g_xrFormat);
-        const bool wantSharp = g_config.upscale_filter == 1;     // Catmull-Rom resolve vs linear
-        const bool wantAa = g_config.aa_mode != 0;               // FXAA (SMAA maps here for now)
+        const bool wantSharp = g_config.upscale_filter == 1;     // sharp bicubic resolve vs linear
+        const bool wantAa = g_config.aa_mode != 0;
         const bool wantRcas = g_config.sharpness > 0.001f;
         const bool post = wantAa || wantRcas;
 
@@ -1061,7 +1082,7 @@ float4 ps_present(VSOut i) : SV_Target
                 ls = g_config.sharpness; lsw = srcDesc.Width; ldw = dstW;
                 LOG("IQ: eye pass active -- resolve=%s aa=%d sharpen=%.2f "
                     "src=%ux%u dst=%ux%u post=%d xrSrgb=%d",
-                    wantSharp ? "catmull" : "linear", g_config.aa_mode,
+                    wantSharp ? "bicubic-a075" : "linear", g_config.aa_mode,
                     g_config.sharpness, srcDesc.Width, srcDesc.Height, dstW, dstH,
                     post ? 1 : 0, xrSrgb ? 1 : 0);
             }
@@ -1094,6 +1115,7 @@ float4 ps_present(VSOut i) : SV_Target
             p.sharpness = g_config.sharpness;
             p.srcIsSrgb = inIsSrgb;
             p.outPerceptual = outPerceptual ? 1.0f : 0.0f;
+            p.aaStrength = g_config.aa_mode == 2 ? 1.0f : 0.0f;
             g_context->UpdateSubresource(g_iqCb, 0, nullptr, &p, 0, 0);
             g_context->OMSetRenderTargets(1, &out, nullptr);
             D3D11_VIEWPORT vp{0, 0, (float)outW, (float)outH, 0, 1};
@@ -1105,7 +1127,7 @@ float4 ps_present(VSOut i) : SV_Target
             g_context->PSSetShaderResources(0, 1, &nullSrv);
         };
 
-        ID3D11PixelShader* resolve = wantSharp ? g_iqResolveCatmull : g_iqResolveLinear;
+        ID3D11PixelShader* resolve = wantSharp ? g_iqResolveSharp : g_iqResolveLinear;
         if (!post)
         {
             // One pass straight to the sRGB XR target (outputs linear).

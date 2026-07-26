@@ -56,10 +56,9 @@ so the mod is almost always **upscaling** with a linear filter -> shimmer.
 
 New feature (approved): a title-agnostic **image-quality pipeline** at the eye
 `Blit` boundary (`BlitImageQuality`, `src/dll/vr.cpp`), controlled in F1:
-- **Upscale filter** `upscale_filter` (0 linear / 1 Catmull-Rom sharp, default 1).
+- **Upscale filter** `upscale_filter` (0 linear / 1 strong bicubic sharp, default 1).
 - **Sharpening** `sharpness` (0..1, RCAS).
-- **Anti-aliasing** `aa_mode` (0 off / 1 FXAA / 2 SMAA; SMAA is candidate 2, maps
-  to FXAA behaviour for now).
+- **Anti-aliasing** `aa_mode` (0 off / 1 FXAA / 2 FXAA Strong).
 All passes run in perceptual space via UNORM intermediates, decode to linear only
 at the final sRGB write, and **fail open** to the old linear `Blit` when everything
 is off. It reads the source (game render) and destination (headset/SteamVR eye)
@@ -68,6 +67,27 @@ on every title. **FSR 2 (needs game motion vectors) and MSAA (hardware raster AA
 are not buildable mod-side** and were explained to the user. The MCC-FSR probe work
 above is retired but its findings are kept as evidence. See the approved plan for
 the full design.
+
+### Image-quality candidate result and corrected math - 2026-07-26
+
+- Candidate `c12bad3ff221efd32ebc25837e1d4f3bc2c91289`, installed DLL
+  SHA-256 `2C898A5F801AE291F03675370A57343CDB81F52A0711E6CB31E01AE08BD3A849`,
+  proved the shared eye pass ran at `3786x2730 -> 4164x4244`, XR format 29.
+  The retained log contains live Linear/Sharp, AA off/on, and sharpening
+  transitions through 0.99 with zero `IQ ERROR` lines. The user still saw no
+  useful difference, rejecting fallback/menu wiring as the cause. Evidence is
+  preserved under
+  `out/test-runs/c12bad3-iq-passes-no-visible-difference-20260726-031008Z`;
+  log SHA-256 `0BF13732845FD2848B71915613564203D71AE588DF2C62D58AC563CE26B95F71`.
+- Source review found that the shader labeled RCAS was only a small
+  CAS-like approximation, not AMD's RCAS limiter/resolve, and the AA mode
+  labeled SMAA merely selected the same FXAA shader. Both misleading paths are
+  removed in the forward candidate.
+- The forward math uses the actual RCAS five-tap limiter/resolve with the F1
+  scale mapped intuitively from 0=off to 1=maximum, a stronger bounded Keys
+  bicubic resolve (`a=-0.75`) for a visible Linear/Sharp A/B, and honest
+  Off/FXAA/FXAA Strong choices with distinct thresholds. Missing resources
+  remain loud errors; no plain-blit fallback is restored.
 
 ## Stage 1 desktop-fit evidence (verified, still unaccepted)
 

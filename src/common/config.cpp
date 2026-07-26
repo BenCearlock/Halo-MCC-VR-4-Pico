@@ -536,7 +536,7 @@ void ConfigSave()
             d.draw_distance, kDrawDistanceMin, kDrawDistanceMax);
     fprintf(f, "draw_distance = %.2f\n\n", g_config.draw_distance);
     fprintf(f, "# Upscale/resolve filter for the headset image: 0 = linear (old),\n");
-    fprintf(f, "# 1 = sharp (Catmull-Rom). The game usually renders below your\n");
+    fprintf(f, "# 1 = sharp (strong bicubic). The game usually renders below your\n");
     fprintf(f, "# headset's per-eye resolution, so the mod upscales the difference;\n");
     fprintf(f, "# sharp keeps edges crisp instead of the linear shimmer. Live, no restart.\n");
     fprintf(f, "# (default %d)\n", d.upscale_filter);
@@ -545,8 +545,8 @@ void ConfigSave()
     fprintf(f, "# Adds apparent detail without ringing. Live, no restart.\n");
     fprintf(f, "# (default %.2f, range 0 to 1)\n", d.sharpness);
     fprintf(f, "sharpness = %.2f\n\n", g_config.sharpness);
-    fprintf(f, "# Anti-aliasing on the finished image: 0 = off, 1 = FXAA (cheap,\n");
-    fprintf(f, "# slight softening), 2 = SMAA (sharper edges, heavier). Smooths jagged\n");
+    fprintf(f, "# Anti-aliasing on the finished image: 0 = off, 1 = FXAA (balanced),\n");
+    fprintf(f, "# 2 = FXAA Strong (more smoothing/softening). Smooths jagged\n");
     fprintf(f, "# edges without needing a huge render resolution. Live, no restart.\n");
     fprintf(f, "# (default %d)\n", d.aa_mode);
     fprintf(f, "aa_mode = %d\n\n", g_config.aa_mode);
