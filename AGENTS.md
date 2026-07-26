@@ -61,10 +61,16 @@ whose absence caused the 2026-07-26 Reach regressions.
   feature hook, only that feature stays stock.
 - Never copy a Halo 3 offset, struct member, bone, marker, tag meaning, or
   constant into another title without title-specific evidence.
-- Reach evidence comes from official HREK/mod tools and the pinned
-  `haloreach.dll`. Do not derive bindings from Reclaimer or archived console
-  binaries. HREK proves semantics and ABI shape; the shipping module must still
-  be matched on its own terms, because it is a separate compile.
+- **Reach facts come from HREK. Retail is not a discovery tool.** Understand
+  what a system does, and what its functions and structures are, from the
+  official HREK executables and tags -- they carry full symbols, source paths,
+  assert text and tag definitions. `haloreach.dll` is stripped and optimized;
+  reading it to *discover* behavior produces plausible-looking wrong answers,
+  which is exactly how 2026-07-26 was lost.
+- Use the pinned `haloreach.dll` only to **match and verify** something HREK
+  already explained: to locate the homologous function, confirm a layout, or
+  check uniqueness before hooking. Never to invent a binding.
+- Never derive bindings from Reclaimer or archived console binaries at all.
 - Never write a theory into an evidence document as a finding. Ship a probe, or
   write down the negative result.
 

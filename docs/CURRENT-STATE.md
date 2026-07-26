@@ -22,7 +22,66 @@ milestone, not a public release or tag. The public known-good product remains
 | Reach milestone | Shared virtual-controller transport only; Reach runtime hooks remain OFF |
 | Preserved test evidence | `out/test-runs/a5524d3-reach-h3-odst-headset-pass-20260724-023358Z` |
 
-### Reach controller and cross-title headset confirmation - 2026-07-23
+### ACCEPTED: Reach VR crosshair + left hand + no-unhook - 2026-07-26
+
+Headset confirmed by the user in one session. Reach is still experimental; the
+product pointer is unchanged.
+
+| Result | Candidate | DLL SHA-256 |
+| --- | --- | --- |
+| VR crosshair on the controller ray | `bc66451` | `CD6EC9BC12061F7B6E63CFDCA4F5E677E0D036C0A08B52129C789A5A03DFB265` |
+| Left hand returned to the controller | `32f666e` | `B3FEA059D76E7405AAF4D8C6C88085C56BB3107F9A83CFA4113B5176F1FC2211` |
+| Failed eye frame skips, never unhooks | `c43e5cc` | `680F0A9F677F707E7749E9A8FD16C4D0DAE16DDD4CE09F428500418F41CE50C0` |
+
+User confirmation: the crosshair is present and aimable, bullets track it, the
+left hand is back on the controller, and floating hands work.
+
+**Why the crosshair was missing for so long.** Reach never published a title
+lifecycle. Halo 3 has `PublishHalo3Lifecycle` and ODST has
+`PublishOdstLifecycle`; Reach had no equivalent, so its runtime slot reported
+`armed=false` with zero capabilities permanently.
+`TitleRuntimeMaskUnarmedCapabilities` then stripped every arm-gated capability,
+`Game_HasTitleCapability(TitleCapability_ControllerAim)` returned false, and the
+reticle admission short-circuited before `EnsureReticleChain` could run - the
+log showed the stereo swapchain created with no crosshair chain beside it.
+`PublishReachLifecycle` fixes the gap. The reticle additionally now asks
+`Game_OwnsReachAuthoredReticle()` directly, exactly as ODST asks
+`Game_IsCameraOnlyBringup()`, so it no longer depends on the shared snapshot
+being settled.
+
+**ArmIk is deliberately withheld** from `kReachRuntimeCapabilities`. Publishing
+the lifecycle turned on every arm-gated capability at once, and `ArmIk`
+immediately attached the left hand to the player's face because Reach's arm IK
+is not solved. Grant it only after that is proven in the headset.
+
+**Two silent teardown paths removed.** Both called
+`Game_RejectReachAuthoredReticle`, which disarms the core and removes every
+hook. `projection.viewCount != 2` fires on an ordinary one-frame ordering gap,
+and `!handled` fired once after 3.5 minutes of correct rendering. Both now skip
+the frame, keep the core armed, and log a rate-limited reason. This is the
+behavior Halo 3 and ODST already had, and it is why the same binary could work
+in one session and die in 9 ms in the next: the failure was timing-dependent and
+the response was permanent. `Game_RejectReachAuthoredReticle` now takes a reason
+string and all callers name themselves; both fixes above were diagnosed from
+that single log line in seconds.
+
+**Still open, reported in the same session:**
+- Reach's flat centre crosshair is still drawn. The CHUD alpha array at
+  `chud_globals + 0x32C + i*4` (crosshair is `i=2`, i.e. `+0x334`) is REAL -
+  derived from every `chud_fade_*_for_player` implementation - but writing it is
+  inert: it read `1.000` across 860 live samples while the mod wrote `0` every
+  frame. The real draw path is not located.
+- World-anchored CHUD navpoints (Noble Team markers) sit in the wrong place in
+  3D and move inversely with the weapon. Not CHUD memory: nothing there changed
+  while the gun swung. HREK `chud_navpoints.cpp` gives the structure - 20
+  entries, stride `0x88`, `position_worldspace` at `+0x3C/+0x40/+0x44`, reached
+  through a TLS block. Retail chain: `ai_add_navpoint` ->
+  `haloreach.dll+0x1A1A7C` -> worker `+0x6C2E68`, which reaches its data via TLS
+  slot `+0x30`.
+- One muzzle flash is stuck at screen centre while another tracks the weapon.
+  Very likely the same transform bug as the navpoints.
+
+
 
 - The installed DLL and launcher were hashed separately after the manual copy
   and matched the candidate manifest exactly.
@@ -40,6 +99,7 @@ milestone, not a public release or tag. The public known-good product remains
 - This result does not authorize or claim Reach camera, stereo, 6DOF, aim,
   movement, HUD, IK, haptics, or lifecycle hooks.
 
+### Reach controller and cross-title headset confirmation - 2026-07-23
 ### Partial/failed Reach floating-hands / FP-camera result - 2026-07-25
 
 Candidate `a1dcb7beeb0bec56b3b7c04a6f15a897eaa63fa4` combined the
