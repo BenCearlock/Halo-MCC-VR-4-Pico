@@ -5339,12 +5339,18 @@ bool VR_GetScopeRenderAspect(float& outAspect)
 
 // FSR diagnostic (fsr_probe, off by default). Log-only: observe slot 0 of every
 // OMSetRenderTargets bind and record each DISTINCT (width, height, format,
-// bind-flags) render target, plus the viewport active at that bind. When MCC's
-// built-in FSR is toggled, a newly logged tuple tells us whether FSR renders the
-// scene into a smaller target (the mod would then need to capture the
-// pre-upscale image) or changes the viewport rect (the mod's projection would
-// break) -- instead of guessing. Runs on the render thread only, allocation-free
-// and lock-free: the table is a fixed 12-slot static seen only from that thread.
+// bind-flags) SCENE-SCALE render target, plus the viewport and current raster
+// eye at that bind. When MCC's built-in FSR is toggled, a newly logged tuple
+// shows whether FSR renders the scene into a smaller target (proven: it does)
+// and, via the raster-eye column, whether that target is bound inside the
+// per-eye render loop. Runs on the render thread only, allocation-free and
+// lock-free: the table is a fixed static seen only from that thread.
+//
+// Two guards keep the log bounded (the first version dumped 1.16M lines / 145MB
+// because MCC binds hundreds of tiny transient post-fx/shadow targets and the
+// 12-slot table saturated instantly): skip anything narrower than ~40% of the
+// backbuffer (below any real FSR render scale, which bottoms out at 50%), and
+// dedup into a 64-slot table.
 static void ProbeFsrTargets(ID3D11DeviceContext* context, UINT count,
                             ID3D11RenderTargetView* const* input)
 {
@@ -5367,30 +5373,44 @@ static void ProbeFsrTargets(ID3D11DeviceContext* context, UINT count,
     if (!isTexture)
         return;
 
-    struct SeenTarget { UINT w, h; UINT format, bind; };
-    static SeenTarget seen[12]{};
+    // Only scene-scale targets are interesting for the FSR question. Anything
+    // below ~40% of the backbuffer width is a shadow/post-fx buffer, not a
+    // candidate scene render (FSR's lowest tier is 50%). Fail-open if the
+    // backbuffer size is not known yet: keep a fixed 800px floor.
+    const UINT bbW = g_gameBackbufferDescValid ? g_gameBackbufferDesc.Width : 0;
+    const UINT bbH = g_gameBackbufferDescValid ? g_gameBackbufferDesc.Height : 0;
+    const UINT minWidth = bbW ? (bbW * 2) / 5 : 800u;
+    if (desc.Width < minWidth)
+        return;
+
+    // Dedup on (size, format, bind, rasterEye) so each distinct large target is
+    // logged once PER eye-context. The raster eye is the key new signal: it tells
+    // us whether a given FSR target is bound inside the per-eye redirect scope
+    // (0/1) or outside it (-1), which the old flat log could not show.
+    const int rasterEye = g_rasterEye.load(std::memory_order_relaxed);
+    struct SeenTarget { UINT w, h; UINT format, bind; int eye; };
+    static SeenTarget seen[96]{};
     static unsigned seenCount = 0;
     const UINT descFormat = static_cast<UINT>(desc.Format);
     for (unsigned i = 0; i < seenCount; ++i)
         if (seen[i].w == desc.Width && seen[i].h == desc.Height &&
-            seen[i].format == descFormat && seen[i].bind == desc.BindFlags)
-            return; // already logged this exact target shape
+            seen[i].format == descFormat && seen[i].bind == desc.BindFlags &&
+            seen[i].eye == rasterEye)
+            return; // already logged this exact target shape in this eye-context
 
     D3D11_VIEWPORT vp{};
     UINT vpCount = 1;
     context->RSGetViewports(&vpCount, &vp);
 
-    const UINT bbW = g_gameBackbufferDescValid ? g_gameBackbufferDesc.Width : 0;
-    const UINT bbH = g_gameBackbufferDescValid ? g_gameBackbufferDesc.Height : 0;
     LOG("FSRPROBE: slot0 RT %ux%u fmt=%u bind=0x%X | viewport %.0fx%.0f at (%.0f,%.0f) "
-        "| backbuffer %ux%u | rtCount=%u",
+        "| backbuffer %ux%u | rasterEye=%d | rtCount=%u",
         desc.Width, desc.Height, descFormat, desc.BindFlags,
         vpCount ? vp.Width : 0.0f, vpCount ? vp.Height : 0.0f,
         vpCount ? vp.TopLeftX : 0.0f, vpCount ? vp.TopLeftY : 0.0f,
-        bbW, bbH, count);
+        bbW, bbH, rasterEye, count);
 
-    if (seenCount < 12)
-        seen[seenCount++] = {desc.Width, desc.Height, descFormat, desc.BindFlags};
+    if (seenCount < 96)
+        seen[seenCount++] = {desc.Width, desc.Height, descFormat, desc.BindFlags, rasterEye};
 }
 
 bool VR_RedirectRenderTargets(ID3D11DeviceContext* context, UINT count,

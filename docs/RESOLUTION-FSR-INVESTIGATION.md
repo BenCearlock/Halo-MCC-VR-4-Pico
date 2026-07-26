@@ -33,6 +33,17 @@ advance the accepted pointer in `docs/CURRENT-STATE.md`. Updated 2026-07-25.
    three the mod ships today. The user suspects the resolution revert **might be
    ODST-specific** (untested — their captured logs were Halo 3).
 
+**Universal requirement (user, 2026-07-26): the FSR fix must work on ALL THREE
+Halos (Halo 3, ODST, Reach) AND every subsequent title added to the collection --
+not a per-title hack.** This is the natural shape anyway: MCC's FSR is a single
+MCC-wide video setting, and the scene-capture code it interacts with
+(`VR_RedirectRenderTargets` and the D3D11 hooks in `src/dll/d3d11_hook.cpp`) is
+MCC's shared D3D layer, common to every title. So the correct fix belongs at that
+shared capture layer, applied uniformly, and must fail **open** to stock rendering
+for any title/state it doesn't recognize. The hardened probe must therefore be
+captured across titles (Halo 3 + ODST at minimum, Reach if it renders) to confirm
+the FSR render graph is the same everywhere before the fix is written.
+
 ## Stage 1 desktop-fit evidence (verified, still unaccepted)
 
 - `546d301` preserved the full `3204x2310` backbuffer while fitting the visible
@@ -234,13 +245,32 @@ Evidence logs:
   percentage. Do not hardcode a half-res assumption. (Confirming the exact
   MCC-tier-to-percentage map would take one more probe run per tier, but the fix
   does not depend on it.)
-- **PROBE BUG to fix before the next probe build:** `ProbeFsrTargets`'
-  distinct-shape dedup uses a fixed 12-slot table keyed on (w,h,format,bind).
-  MCC binds far more than 12 transient shapes (1x1, 2x2, 32x32 post-fx/shadow
-  targets), so the table saturates immediately and every later bind logs
-  unconditionally -> 1.16M lines / 145 MB. Any future FSR probe must dedup on a
-  larger/smarter key (or filter to >=1000px-wide targets and rate-limit) before
-  shipping.
+- **CORRECTION 2026-07-26: the first fix design was wrong, and the raw log
+  proves why.** The planned fix ("relax the scene-color predicate to accept a
+  smaller target with the SAME typeless-RGBA + RT+SRV+UAV signature") cannot fire,
+  because the half-res FSR targets do NOT carry that signature. Decoding the
+  earlier histogram:
+  - The mod's scene-color predicate wants **format 27** (`R8G8B8A8_TYPELESS`) with
+    bind **0xA8** (RT+SRV+**UAV**).
+  - The **half-res** (`1893x1365`) targets are **fmt=10** (`R16G16B16A16_FLOAT`)
+    and **fmt=28** (`R8G8B8A8_UNORM`), both bind **0x28** (RT+SRV, **no UAV**) --
+    neither matches.
+  - The full-size `3786x2730` **fmt=27 bind=0xA8** target (the one the mod DOES
+    learn with FSR on) appears with a **partial viewport** `2224x1604` (~58.8%),
+    i.e. the scene renders into a sub-rect of it. The mod redirects that target
+    and captures the WHOLE texture, so only the top-left sub-rect holds the scene
+    -> the reported "second screen." So FSR uses BOTH dedicated half-res textures
+    AND partial-viewport sub-rects on full-size targets; the exact stage the mod
+    should capture is not yet proven. A correct fix needs the raster-eye + viewport
+    context the old flat log lacked, so the probe is hardened and re-run FIRST.
+- **PROBE HARDENED 2026-07-26 (candidate pending):** `ProbeFsrTargets`
+  (`src/dll/vr.cpp`) now (a) filters to scene-scale targets only (>= 40% of the
+  backbuffer width; FSR's lowest tier is 50%), (b) dedups into a 96-slot table
+  keyed on (w,h,format,bind,**rasterEye**), and (c) logs the current **rasterEye**
+  so we can see whether each large target is bound inside the per-eye redirect
+  scope (0/1) or outside it (-1). This replaces the 12-slot table that saturated
+  into a 1.16M-line / 145 MB log. Re-run FSR off then on and the log stays bounded
+  and readable; that decides which stage the real capture fix must target.
 - **There is no FSR implementation in this repository.** No config key, F1
   control, launcher argument, FidelityFX dependency/shader, or MCC-setting owner
   exists. The current final eye expansion uses an ordinary linear sampler.
