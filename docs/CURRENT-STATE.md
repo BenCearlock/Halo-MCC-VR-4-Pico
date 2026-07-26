@@ -437,6 +437,54 @@ friendly-green and hostile-red changes, shared crosshair configuration parity,
 safe title transitions/teardown, and a Halo 3 regression for the touched shared
 authored-reticle composition path.
 
+### UNTESTED Reach native HUD layout (size + aspect) - 2026-07-26
+
+Reach laid its HUD out at its authored ~0.87 safe frame while Halo 3 and ODST
+were pulled in to the user's `hud_size`, so Reach's HUD looked enormous beside
+them. This candidate gives Reach the same shared HUD layout writer, against
+Reach's own record.
+
+| Identity | Value |
+| --- | --- |
+| Candidate source | `3df1c196b97e691ada98f180a432701848ae568e` |
+| Candidate package | `out/candidates/3df1c19-reach-fp-parity-20260726-223801744Z` |
+| `halo3xr.dll` SHA-256 | `EF7B5452685F4301559DD6C2610B03E8A5F84B9D8DA4A91A3274B3BB0DF015D4` |
+| `halo3xr_launcher.exe` SHA-256 | `CC959758F723EDEE6D433D8D341340C958FB7FF44CCDD9B0F45437B791031F9C` |
+| Preserved previous install | `out/deploy-backups/79eb9c4-before-3df1c19-20260726-223802433Z` |
+| Headset result | **PENDING** |
+
+The installed DLL was hashed separately after install and matched the manifest.
+
+Evidence is official HREK only. HREK's `chud_curvature_info_block` load-time
+postprocess (`reach_tag_test.exe 0x8E7170`, the code behind
+`"Curvature points are invalid.  Defaulting to no curvature"`) writes the
+identity curvature grid to `+0x04..+0x4B`, pinning the record start; the
+official `chud_globals_definition` export gives the field order after it. Reach
+inserts nine curvature points, a derived screen transform basis, a
+`vehicle 3d sensor radius` and four minimap points that Halo 3 does not have, so
+its `global safe frame horiz./vert.` pair sits 60 bytes after virtual width
+instead of 24. No Halo 3 or ODST anchor, offset or record count was copied.
+
+`HudLayoutAdapter` now carries the record shape - anchor length, wildcard mask,
+safe-frame offset, and whether the record has a depth field - instead of
+assuming Halo 3's. Halo 3 and ODST keep their exact 24-byte anchor, safe-frame
+offset 24 and depth at -28, so their behavior is unchanged; that shared path is
+what the required Halo 3 regression covers.
+
+`hud_curvature` is deliberately **not** written for Reach. Reach has no
+`dest offset z`; its curvature is folded into the derived basis when the tag
+block is postprocessed at load, so writing the authored points at runtime would
+be inert exactly like the CHUD alpha array. The adapter declares the depth field
+absent, and the log and config file both say so rather than shipping a dead
+knob. Making it live needs the derived basis written, or Reach's own builder
+re-run over the record; that is a separate candidate. `hud_vertical_offset`
+also stays Halo 3/ODST-only until Reach's `chud_compute_anchor_basis` homolog is
+located.
+
+Acceptance requires: Reach's HUD visibly shrinking to match Halo 3 at the same
+`hud_size`, `hud_aspect` behaving the same way, a `SAFEFRAME [Halo: Reach]` line
+reporting three accepted blocks, and a Halo 3 regression for the shared writer.
+
 ### Failed Reach final-palette-only candidate - 2026-07-24
 
 Candidate `abea61f0daf2b70ba779a40a3a2ad72b3debf121` implemented the
