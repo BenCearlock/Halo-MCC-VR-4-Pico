@@ -3,7 +3,7 @@
 Status: **Stage 1 desktop-fit correction in progress; no resolution/FSR change is
 accepted.** This records verified findings, failed candidates, labeled
 hypotheses, and the evidence gates for resolution scaling and FSR. It does **not**
-advance the accepted pointer in `docs/CURRENT-STATE.md`. Updated 2026-07-25.
+advance the accepted pointer in `docs/CURRENT-STATE.md`. Updated 2026-07-26.
 
 ## Session context (where the branch is)
 
@@ -57,7 +57,7 @@ so the mod is almost always **upscaling** with a linear filter -> shimmer.
 New feature (approved): a title-agnostic **image-quality pipeline** at the eye
 `Blit` boundary (`BlitImageQuality`, `src/dll/vr.cpp`), controlled in F1:
 - **Upscale filter** `upscale_filter` (0 linear / 1 strong bicubic sharp, default 1).
-- **Sharpening** `sharpness` (0..1, RCAS).
+- **Sharpening** `sharpness` (0..1, RCAS-based 2x overdrive).
 - **Anti-aliasing** `aa_mode` (0 off / 1 FXAA / 2 FXAA Strong).
 All passes run in perceptual space via UNORM intermediates, decode to linear only
 at the final sRGB write, and **fail open** to the old linear `Blit` when everything
@@ -88,6 +88,29 @@ the full design.
   bicubic resolve (`a=-0.75`) for a visible Linear/Sharp A/B, and honest
   Off/FXAA/FXAA Strong choices with distinct thresholds. Missing resources
   remain loud errors; no plain-blit fallback is restored.
+
+### FXAA headset pass, SMAA failure, and sharpening follow-up - 2026-07-26
+
+- The user confirmed that the FXAA-only image-quality effect was visible during
+  a headset session whose log covered Halo 3, Reach, and ODST, then requested a
+  stronger adjustable sharpening range. The exact tested source was
+  `1aa5bbc899864ef7fa9c12a04613efbf46241f7e`; installed DLL SHA-256
+  `8D15A06602A31E567A5C02C0E7B05A9CCF766FFEF1F2E5308094791AB097EBFE`.
+  The log contains complete `0.00..1.00` sharpening sweeps and zero `IQ ERROR`;
+  evidence is preserved under
+  `out/test-runs/1aa5bbc-iq-visible-needs-2x-strength-h3-reach-odst-20260726-083324Z`.
+- The later SMAA 1x experiment at source
+  `35b7db7c0e3cbc24a42990adfe9c1b3d41d40844`, installed DLL SHA-256
+  `82A34644C4855FD3AC2CBDCBD68BF0A6173C5F75212A00DA418BC982F47A4932`,
+  failed the headset test and is rejected. Its shaders, lookup tables, build
+  integration, modes, and configuration range were reverted rather than left
+  dormant. The forward path is again only Off/FXAA/FXAA Strong.
+- The retained sharpening follow-up keeps RCAS's `-0.1875` lobe limit and
+  positive normalization denominator, computes the same five-tap RCAS result,
+  then applies exactly twice its correction:
+  `center + 2 * (rcas - center)`. This adds no texture samples, fullscreen
+  pass, intermediate, or bandwidth. The top can intentionally ring or clip;
+  the full `0..1` slider lets the user pull it back.
 
 ## Stage 1 desktop-fit evidence (verified, still unaccepted)
 

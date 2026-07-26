@@ -603,8 +603,8 @@ namespace
                             "renders BELOW your per-eye headset resolution, so this upscales it.\n"
                             "Sharp keeps edges crisp; Linear is the old soft/shimmery look.");
         changed |= ImGui::SliderFloat("Sharpening", &g_config.sharpness, 0.0f, 1.0f, "%.2f");
-        ImGui::TextDisabled("AMD RCAS contrast-adaptive sharpen. 0 = off; 1 = maximum.\n"
-                            "The corrected scale is deliberately obvious near the top.");
+        ImGui::TextDisabled("RCAS-based 2x overdrive. 0 = off; 1 = twice the prior maximum.\n"
+                            "It uses the same five taps/pass; lower it if the top rings or clips.");
         const char* aaItems[] = {"Off", "FXAA", "FXAA Strong"};
         changed |= ImGui::Combo("Anti-aliasing", &g_config.aa_mode, aaItems, 3);
         ImGui::TextDisabled("Smooths jagged edges on the finished image, so a mid/low rig doesn't\n"

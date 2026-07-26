@@ -920,10 +920,9 @@ float3 loadClamped(int2 p)
     return srcTex.Load(int3(p, 0)).rgb;
 }
 
-// AMD FidelityFX FSR1 RCAS 32-bit limiter/resolve, adapted to the UI's
-// intuitive 0=off, 1=maximum scale. The previous RCAS-style approximation
-// used CAS weights and was not RCAS; in normal game neighborhoods its weights
-// stayed close enough to zero that even the top of the slider was hard to see.
+// AMD FidelityFX FSR1 RCAS 32-bit limiter/resolve, followed by a 2x correction
+// overdrive. This retains RCAS's safe lobe/denominator and the same five loads;
+// the user can pull the intentionally aggressive top end back with the slider.
 float4 ps_rcas(VSOut i) : SV_Target
 {
     int2 p = int2(i.pos.xy);
@@ -941,9 +940,11 @@ float4 ps_rcas(VSOut i) : SV_Target
     float3 hitMax = (1.0 - max(mx4, e)) / min(4.0 * mn4 - 4.0, -1e-5);
     float3 lobes = max(-hitMin, hitMax);
     float lobe = max(-0.1875, min(max(lobes.r, max(lobes.g, lobes.b)), 0.0));
-    lobe *= saturate(sharpness);
-    float3 res = (lobe * (b + d + f + h) + e) / (4.0 * lobe + 1.0);
-    return float4(saturate(res), 1);
+    float scaledLobe = lobe * saturate(sharpness);
+    float3 rcas = (scaledLobe * (b + d + f + h) + e) /
+                  (4.0 * scaledLobe + 1.0);
+    float3 res = saturate(e + 2.0 * (rcas - e));
+    return float4(res, 1);
 }
 
 // Present a perceptual intermediate to the sRGB XR target (decode -> hw re-encodes).
@@ -1081,7 +1082,7 @@ float4 ps_present(VSOut i) : SV_Target
                 lf = g_config.upscale_filter; la = g_config.aa_mode;
                 ls = g_config.sharpness; lsw = srcDesc.Width; ldw = dstW;
                 LOG("IQ: eye pass active -- resolve=%s aa=%d sharpen=%.2f "
-                    "src=%ux%u dst=%ux%u post=%d xrSrgb=%d",
+                    "rcasGain=2.00 src=%ux%u dst=%ux%u post=%d xrSrgb=%d",
                     wantSharp ? "bicubic-a075" : "linear", g_config.aa_mode,
                     g_config.sharpness, srcDesc.Width, srcDesc.Height, dstW, dstH,
                     post ? 1 : 0, xrSrgb ? 1 : 0);
