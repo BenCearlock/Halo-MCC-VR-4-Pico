@@ -1,8 +1,8 @@
 [CmdletBinding()]
 param()
 
-# Halo MCC VR is one cumulative build: Halo 3 + ODST + Halo: Reach, all
-# permanent and fail-open. There is a single `release` preset and no Reach
+# Halo MCC VR is one cumulative build: Halo 3 + ODST + Halo: Reach, with Reach
+# admitted only as one complete parity transaction. There is one `release` preset and no Reach
 # on/off switch. This stages one unaccepted local candidate under out/candidates
 # after a clean rebuild and passing tests, then automatically installs those
 # exact manifest-verified bytes into the dedicated MCC mod directory. It never
@@ -145,7 +145,7 @@ try {
             launches_mcc = $false
             changes_config = $false
         }
-        # Reach is now a permanent, fail-open per-eye camera core.
+        # Reach is one permanent, all-or-nothing per-eye parity transaction.
         reach_permanent = $true
         reach_controller_input_enabled = $true
         reach_render_candidate_compiled = $true
@@ -156,6 +156,12 @@ try {
         reach_two_arm_ik_guarded = $true
         reach_fp_interpolation_palette_transaction = $true
         reach_fp_h3_odst_transaction_parity_gate = $true
+        reach_hrek_authored_crosshair_enabled = $true
+        reach_hrek_authored_crosshair_mandatory = $true
+        reach_flat_crosshair_substitute_enabled = $false
+        reach_procedural_crosshair_substitute_enabled = $false
+        reach_native_hud_layout_enabled = $false
+        reach_projectile_alignment_enabled = $false
         reach_fp_nested_camera_workspace = $true
         reach_fp_world_projection_execution_status = $true
         reach_forced_floating_hands = $true
@@ -173,7 +179,7 @@ try {
                 sha256 = $launcherHash
             }
         }
-        note = 'Reach temporarily forces independently controller-bound floating hands regardless of shared arm_ik/floating_hands settings. Not accepted until this exact DLL hash passes the Reach Spartan/Elite headset matrix plus Halo 3 and ODST regressions.'
+        note = 'Reach temporarily forces independently controller-bound floating hands and adds the mandatory HREK-authored class-2 crosshair transaction. Full HUD layout and projectile alignment are not included. Not accepted until this exact DLL hash passes authored red/green crosshair, Reach Spartan/Elite, lifecycle, and Halo 3/ODST regression testing.'
     }
 
     $manifestPath = Join-Path $packageDir 'CANDIDATE-MANIFEST.json'

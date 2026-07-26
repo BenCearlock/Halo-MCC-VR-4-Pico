@@ -31,6 +31,7 @@
 #if HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE
 #include "reach_render_candidate.h"
 #endif
+#include "../common/reach_chud_logic.h"
 #include "../common/log.h"
 #include "../common/config.h"
 #include "../common/frame_pacing_logic.h"
@@ -114,6 +115,15 @@ namespace
     // along the weapon's true aim ray. Drawn once; the compositor keeps
     // re-showing the last released image, so it costs nothing per frame.
     XrSwapchain g_reticleChain = XR_NULL_HANDLE;
+    std::atomic<bool> g_reticleChainFailed{false};
+    std::atomic<bool> g_authoredReticlePreparationReady{false};
+    // A strict Reach swapchain failure aborts the current layer transaction and
+    // enters the existing fatal session drain. Some failures (for example a
+    // wait timeout) can leave an image acquired; other non-XR_SUCCESS results
+    // (for example XR_SESSION_LOSS_PENDING from release) can still mean the
+    // operation completed. In either case, submit no layers and pair a begun
+    // frame with one empty xrEndFrame before session recovery.
+    bool g_abortFrameForReachSwapchainFailure = false;
     std::vector<ID3D11Texture2D*> g_reticleImages;
     std::vector<ID3D11RenderTargetView*> g_reticleRtvs;
     constexpr uint32_t kReticleSize = 512;
@@ -993,6 +1003,8 @@ namespace
         else
             snprintf(msg, sizeof(msg), "%s", what);
         LOG("VR FAILED: %s", msg);
+        g_authoredReticlePreparationReady.store(
+            false, std::memory_order_release);
         g_state = State::Failed;
 
         static char popupText[640];
@@ -3684,6 +3696,8 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
             SetEvent(g_waitReadyEvent);
         if (g_waitStartedEvent)
             SetEvent(g_waitStartedEvent);
+        g_authoredReticlePreparationReady.store(
+            false, std::memory_order_release);
         g_sessionRunning = false;
         if (!g_frameWaitFatalExitReason)
             g_frameWaitFatalExitReason = reason;
@@ -3691,6 +3705,21 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
         g_frameWaitExitLastRequestMs = 0;
         g_frameWaitExitLastLogMs = 0;
         Game_DetachForVrRuntimeFailure();
+    }
+
+    bool RequireReachSwapchainCompletion(
+        XrResult result, const char* failureReason)
+    {
+        // Reach accepts only exact XR_SUCCESS. XR_TIMEOUT_EXPIRED does not
+        // complete a wait; XR_SESSION_LOSS_PENDING is a successful operation
+        // result but signals an unhealthy session. Both abort this candidate's
+        // complete layer transaction and enter terminal session recovery. Do
+        // not attempt another acquire/release from this frame.
+        if (result == XR_SUCCESS)
+            return true;
+        g_abortFrameForReachSwapchainFailure = true;
+        EnterFrameWaitFatalDrain(failureReason);
+        return false;
     }
 
     // -------------------------------------------------------------- events
@@ -3722,6 +3751,11 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
                         if (StartFrameWaitThread())
                         {
                             g_sessionRunning = true;
+                            // Publish only after xrBeginSession and the exclusive
+                            // frame-wait worker are both live. SteamVR can accept
+                            // earlier swapchains yet present them black.
+                            g_authoredReticlePreparationReady.store(
+                                true, std::memory_order_release);
                         }
                         else
                         {
@@ -3739,6 +3773,8 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
                         g_frameWaitFatalExitReason;
                     StopControllerHaptics();
                     EndPreparedFrameWithoutLayers("session stopping");
+                    g_authoredReticlePreparationReady.store(
+                        false, std::memory_order_release);
                     g_sessionRunning = false;
                     if (!StopFrameWaitThread())
                     {
@@ -3764,6 +3800,8 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
                 {
                     StopControllerHaptics();
                     ResetPreparedFrame();
+                    g_authoredReticlePreparationReady.store(
+                        false, std::memory_order_release);
                     g_sessionRunning = false;
                     StopFrameWaitThread();
                     Fail("The VR runtime ended the session (headset off / SteamVR closed?)");
@@ -3773,6 +3811,8 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
             case XR_TYPE_EVENT_DATA_INSTANCE_LOSS_PENDING:
                 StopControllerHaptics();
                 ResetPreparedFrame();
+                g_authoredReticlePreparationReady.store(
+                    false, std::memory_order_release);
                 g_sessionRunning = false;
                 StopFrameWaitThread();
                 Fail("The OpenXR runtime is shutting down");
@@ -4029,15 +4069,14 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
 
     bool EnsureReticleChain()
     {
-        static bool failed = false;
-        if (failed)
+        if (g_reticleChainFailed.load(std::memory_order_acquire))
             return false;
         if (g_reticleChain == XR_NULL_HANDLE)
         {
             if (!CreateChain(kReticleSize, kReticleSize, g_reticleChain, g_reticleImages,
                              g_reticleRtvs, "crosshair"))
             {
-                failed = true;
+                g_reticleChainFailed.store(true, std::memory_order_release);
                 return false;
             }
         }
@@ -4091,7 +4130,7 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
         const bool clearingAuthored = g_reticleContainsAuthored;
         if (!PaintReticle(wantR, wantG, wantB, kProceduralOpacity))
         {
-            failed = true;
+            g_reticleChainFailed.store(true, std::memory_order_release);
             return false;
         }
         g_reticlePaintedColor[0]=wantR;
@@ -4105,7 +4144,7 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
         return true;
     }
 
-    bool UploadAuthoredReticle()
+    bool UploadAuthoredReticle(bool requireSuccessfulRelease)
     {
         if (!g_authoredReticleReady ||
             g_authoredReticleSerial != g_preparedFrame.serial ||
@@ -4120,8 +4159,32 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
         XrSwapchainImageWaitInfo wait{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO};
         wait.timeout = 1000000000;
         XrSwapchainImageReleaseInfo release{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
-        if (XR_FAILED(xrAcquireSwapchainImage(g_reticleChain, &acquire, &index)) ||
-            XR_FAILED(xrWaitSwapchainImage(g_reticleChain, &wait)))
+        const XrResult acquireResult =
+            xrAcquireSwapchainImage(g_reticleChain, &acquire, &index);
+        if (requireSuccessfulRelease && acquireResult != XR_SUCCESS)
+        {
+            if (XR_SUCCEEDED(acquireResult))
+            {
+                (void)RequireReachSwapchainCompletion(
+                    acquireResult,
+                    "Reach authored-reticle swapchain acquire did not complete");
+            }
+            return false;
+        }
+        if (XR_FAILED(acquireResult))
+            return false;
+        const XrResult waitResult =
+            xrWaitSwapchainImage(g_reticleChain, &wait);
+        if (requireSuccessfulRelease)
+        {
+            if (!RequireReachSwapchainCompletion(
+                    waitResult,
+                    "Reach authored-reticle swapchain wait did not complete"))
+            {
+                return false;
+            }
+        }
+        else if (XR_FAILED(waitResult))
             return false;
 
         D3D11_TEXTURE2D_DESC sourceDesc{};
@@ -4130,8 +4193,14 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
                                  g_reticleImages[index], kReticleSize,
                                  kReticleSize,
                                  GetRtv(g_reticleImages, g_reticleRtvs, index));
-        xrReleaseSwapchainImage(g_reticleChain, &release);
-        if (!copied)
+        const XrResult releaseResult =
+            xrReleaseSwapchainImage(g_reticleChain, &release);
+        const bool released = requireSuccessfulRelease
+            ? RequireReachSwapchainCompletion(
+                  releaseResult,
+                  "Reach authored-reticle swapchain release did not complete")
+            : XR_SUCCEEDED(releaseResult);
+        if (!copied || (requireSuccessfulRelease && !released))
             return false;
         g_authoredReticleUploadedSerial = g_authoredReticleSerial;
         g_reticleContainsAuthored = true;
@@ -5474,6 +5543,7 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
         g_waitCallInFlight.store(0, std::memory_order_release);
         g_waitConsumedSequence.store(0, std::memory_order_release);
         g_waitPipelineFaulted.store(false, std::memory_order_release);
+        g_abortFrameForReachSwapchainFailure = false;
         g_waitedPacketSequence.store(0, std::memory_order_release);
         g_waitedPacketVersion.store(0, std::memory_order_release);
         g_waitReadyEvent = CreateEventW(nullptr, FALSE, FALSE, nullptr);
@@ -6001,6 +6071,7 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
 #if HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE
                     ReachVrRenderAccess reachAccess{};
                     bool reachImages = false;
+                    uint32_t reachGeneration = 0;
                     const bool reachTitle =
                         TitleAdapter_GetActiveTitle() == GameTitle::HaloReach;
                     if (reachTitle)
@@ -6012,6 +6083,7 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
                         const ReachModuleEpoch epoch{
                             availability.moduleBases[reachSlot],
                             TitleAdapter_GetGeneration(GameTitle::HaloReach)};
+                        reachGeneration = epoch.generation;
                         const ReachPreparedFrameToken prepared =
                             ReachPreparedFrameToken::Create(
                                 epoch, g_preparedFrame.serial, true);
@@ -6029,6 +6101,7 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
 #else
                     const bool reachTitle = false;
                     const bool reachImages = false;
+                    const uint32_t reachGeneration = 0;
 #endif
                     if (!reachTitle)
                         ValidateStereoImagesOnce();
@@ -6037,9 +6110,33 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
                     XrSwapchainImageWaitInfo swi{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO};
                     swi.timeout = 1000000000;
                     XrSwapchainImageReleaseInfo ri{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
-                    if (XR_SUCCEEDED(xrAcquireSwapchainImage(g_stereoChain, &ai, &idx)) &&
-                        XR_SUCCEEDED(xrWaitSwapchainImage(g_stereoChain, &swi)))
+                    bool reachStereoUploadComplete = !reachTitle;
+                    const XrResult stereoAcquire =
+                        xrAcquireSwapchainImage(g_stereoChain, &ai, &idx);
+                    const bool stereoAcquired = reachTitle
+                        ? stereoAcquire == XR_SUCCESS
+                        : XR_SUCCEEDED(stereoAcquire);
+                    if (reachTitle && stereoAcquire != XR_SUCCESS &&
+                        XR_SUCCEEDED(stereoAcquire))
                     {
+                        (void)RequireReachSwapchainCompletion(
+                            stereoAcquire,
+                            "Reach world swapchain acquire did not complete");
+                    }
+                    bool stereoWaitCompleted = false;
+                    if (stereoAcquired)
+                    {
+                        const XrResult stereoWait =
+                            xrWaitSwapchainImage(g_stereoChain, &swi);
+                        stereoWaitCompleted = reachTitle
+                            ? RequireReachSwapchainCompletion(
+                                  stereoWait,
+                                  "Reach world swapchain wait did not complete")
+                            : XR_SUCCEEDED(stereoWait);
+                    }
+                    if (stereoAcquired && stereoWaitCompleted)
+                    {
+                        bool everyReachEyeUploaded = reachImages;
                         for (uint32_t eye = 0; eye < 2; ++eye)
                         {
                             const bool haveImage = reachImages ||
@@ -6049,20 +6146,53 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
                                 : (reachTitle ? nullptr : g_eyeCache[eye]);
                             const D3D11_TEXTURE2D_DESC& sourceDesc = reachImages
                                 ? g_reachCaptureDesc : g_eyeCacheDesc;
+                            bool eyeUploaded = false;
                             if (haveImage && source)
                                 if (ID3D11RenderTargetView* rtv = GetStereoRtv(idx, eye))
-                                    BlitImageQuality(source, sourceDesc, g_stereoImages[idx],
-                                                     g_stereoW, g_stereoH, rtv);
+                                    eyeUploaded = BlitImageQuality(
+                                        source, sourceDesc, g_stereoImages[idx],
+                                        g_stereoW, g_stereoH, rtv);
+                            if (reachTitle)
+                                everyReachEyeUploaded =
+                                    everyReachEyeUploaded && eyeUploaded;
                         }
-                        xrReleaseSwapchainImage(g_stereoChain, &ri);
+                        const XrResult stereoRelease =
+                            xrReleaseSwapchainImage(g_stereoChain, &ri);
+                        const bool stereoReleased = reachTitle
+                            ? RequireReachSwapchainCompletion(
+                                  stereoRelease,
+                                  "Reach world swapchain release did not complete")
+                            : XR_SUCCEEDED(stereoRelease);
+                        if (reachTitle)
+                            reachStereoUploadComplete =
+                                everyReachEyeUploaded && stereoReleased;
                     }
 
-                    if ((reachImages || (!reachTitle &&
-                         g_eyeHasImage[0] && g_eyeHasImage[1])) &&
+                    // Once a complete Reach eye pair reaches the compositor,
+                    // acquiring, waiting, resolving both eyes, releasing, and
+                    // exposing two projection views are all mandatory. Revoke
+                    // the copied serials and title generation on any loss; no
+                    // stale projection, flat reticle, or partial layer may be
+                    // queued from this frame.
+#if HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE
+                    if (reachTitle && reachImages &&
+                        (!reachStereoUploadComplete || projection.viewCount != 2))
+                    {
+                        g_reachEyeSerial[0].store(
+                            0, std::memory_order_release);
+                        g_reachEyeSerial[1].store(
+                            0, std::memory_order_release);
+                        g_authoredReticleReady = false;
+                        g_authoredReticleSerial = 0;
+                        Game_RejectReachAuthoredReticle(reachGeneration);
+                    }
+#endif
+                    const bool projectionImagesReady = reachTitle
+                        ? reachImages && reachStereoUploadComplete
+                        : g_eyeHasImage[0] && g_eyeHasImage[1];
+                    if (projectionImagesReady &&
                         projection.viewCount == 2)
                     {
-                        layers.push_back(reinterpret_cast<XrCompositionLayerBaseHeader*>(&projection));
-
                         // Use the same predicted OpenXR controller pose captured
                         // for this displayed frame. Routing the quad through
                         // Halo's virtual-stick aim introduced visible catch-up
@@ -6073,20 +6203,97 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
                         // deliberately trade visual reticle response for calm.
                         float aimQ[4], aimP[3];
                         const bool haveAim = VR_GetAimPose(aimQ, aimP);
-                        if (Game_HasTitleCapability(
+                        const bool authoredReticleThisFrame =
+                            g_authoredReticleReady &&
+                            g_authoredReticleSerial == g_preparedFrame.serial;
+                        const bool reachAuthoredReticleThisFrame =
+                            reachTitle && reachImages &&
+                            authoredReticleThisFrame &&
+                            Game_OwnsReachAuthoredReticle();
+                        const bool nonReachReticleUploadAdmitted =
+                            !reachTitle &&
+                            Game_HasTitleCapability(
                                 TitleCapability_ControllerAim) &&
-                            g_config.crosshair &&
-                            haveAim && EnsureReticleChain())
+                            g_config.crosshair && haveAim &&
+                            EnsureReticleChain();
+                        const bool shouldUploadAuthoredReticle = reachTitle
+                            ? reachAuthoredReticleThisFrame
+                            : authoredReticleThisFrame &&
+                                nonReachReticleUploadAdmitted;
+                        bool authoredUploadFailed = false;
+                        if (shouldUploadAuthoredReticle &&
+                            !UploadAuthoredReticle(reachTitle))
                         {
-                            if (g_authoredReticleReady &&
-                                g_authoredReticleSerial == g_preparedFrame.serial &&
-                                !UploadAuthoredReticle())
+                            // Never expose stale or undefined swapchain
+                            // contents if the authored upload fails. Halo 3 and
+                            // ODST retain their accepted behavior; Reach's
+                            // mandatory transaction rejects the generation and
+                            // permits no transparent/procedural substitute.
+                            g_authoredReticleReady = false;
+                            authoredUploadFailed = true;
+                            if (reachTitle)
                             {
-                                // Never expose stale or undefined swapchain
-                                // contents if the authored upload fails.
-                                g_authoredReticleReady = false;
-                                EnsureReticleChain();
+                                // Revoke the already-copied pair before any
+                                // layer is queued. The next prepared serial also
+                                // cannot reuse either eye after this rejection.
+#if HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE
+                                g_reachEyeSerial[0].store(
+                                    0, std::memory_order_release);
+                                g_reachEyeSerial[1].store(
+                                    0, std::memory_order_release);
+#endif
+                                Game_RejectReachAuthoredReticle(
+                                    reachGeneration);
                             }
+                            else
+                                EnsureReticleChain();
+                        }
+                        const bool liveReachOwnerAfterUpload =
+                            !reachTitle || Game_OwnsReachAuthoredReticle();
+                        if (reachTitle && !liveReachOwnerAfterUpload)
+                        {
+                            // A title/lifecycle transition can complete while
+                            // OpenXR waits for the authored upload. Revoke the
+                            // pair again after that wait and age out any uploaded
+                            // Reach art so the next title clears it before use.
+#if HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE
+                            g_reachEyeSerial[0].store(
+                                0, std::memory_order_release);
+                            g_reachEyeSerial[1].store(
+                                0, std::memory_order_release);
+#endif
+                            if (reachAuthoredReticleThisFrame)
+                            {
+                                g_authoredReticleReady = false;
+                                g_authoredReticleSerial = 0;
+                            }
+                        }
+                        const bool reachProjectionAdmitted =
+                            ReachCanSubmitCompleteProjection(
+                                reachTitle, reachStereoUploadComplete,
+                                authoredUploadFailed,
+                                liveReachOwnerAfterUpload);
+                        const bool reachReticleReadyForSubmit =
+                            reachProjectionAdmitted &&
+                            reachAuthoredReticleThisFrame &&
+                            !authoredUploadFailed;
+                        const bool reticleOwnerAdmitted = reachTitle
+                            ? reachReticleReadyForSubmit
+                            : Game_HasTitleCapability(
+                                  TitleCapability_ControllerAim);
+                        if (reachProjectionAdmitted)
+                        {
+                            layers.push_back(
+                                reinterpret_cast<XrCompositionLayerBaseHeader*>(
+                                    &projection));
+                        }
+                        const bool reticleChainAdmitted = reachTitle
+                            ? reachReticleReadyForSubmit
+                            : nonReachReticleUploadAdmitted;
+                        if (reticleOwnerAdmitted &&
+                            g_config.crosshair &&
+                            haveAim && reticleChainAdmitted)
+                        {
                             XrPosef rawAim{{aimQ[0],aimQ[1],aimQ[2],aimQ[3]},
                                            {aimP[0],aimP[1],aimP[2]}};
                             const float smoothing =
@@ -6141,7 +6348,8 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
                             g_reticleAimPoseValid = false;
                         }
 
-                        if (Game_AllowsSharedGameplayFeatures() &&
+                        if (reachProjectionAdmitted &&
+                            Game_AllowsSharedGameplayFeatures() &&
                             g_config.scope_enabled &&
                             g_scopeActive.load() &&
                             !Menu_IsOpen() && haveAim && PrepareScopeImageDelivery())
@@ -6205,6 +6413,19 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
                                               headLock);
                         layers.push_back(reinterpret_cast<XrCompositionLayerBaseHeader*>(&screenQuad));
                     }
+                }
+
+                if (g_abortFrameForReachSwapchainFailure)
+                {
+                    // Do not acquire menu/fade images or submit any partial
+                    // Reach layer set. xrBeginFrame still requires a matching
+                    // xrEndFrame; an empty layer list references no potentially
+                    // outstanding swapchain image.
+                    Menu_ClearVrPointer();
+                    backbuffer->Release();
+                    EndPreparedFrameWithoutLayers(
+                        "Reach swapchain transaction failed");
+                    return;
                 }
 
                 // The menu is submitted in BOTH modes (it used to live only in
@@ -7607,19 +7828,82 @@ float VR_GetScopeZoom()
     return g_scopeRuntimeZoom.load(std::memory_order_acquire);
 }
 
-bool VR_BeginAuthoredReticleCapture()
+bool VR_CanPrepareAuthoredReticleResources()
+{
+    return g_authoredReticlePreparationReady.load(
+        std::memory_order_acquire);
+}
+
+AuthoredReticlePreparationResult VR_PrepareAuthoredReticleResources()
+{
+#if HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE
+    ReachExclusiveResourceLock lock(g_reachDisplayResourceLock);
+#endif
+    if (!VR_CanPrepareAuthoredReticleResources() ||
+        !g_device || !g_context || g_session == XR_NULL_HANDLE)
+    {
+        return AuthoredReticlePreparationResult::NotReady;
+    }
+    if (g_reticleChainFailed.load(std::memory_order_acquire))
+        return AuthoredReticlePreparationResult::Failed;
+    if (g_reticleChain == XR_NULL_HANDLE &&
+        !CreateChain(kReticleSize, kReticleSize, g_reticleChain,
+                     g_reticleImages, g_reticleRtvs, "crosshair"))
+    {
+        g_reticleChainFailed.store(true, std::memory_order_release);
+        return AuthoredReticlePreparationResult::Failed;
+    }
+    if (g_reticleImages.empty() ||
+        g_reticleRtvs.size() != g_reticleImages.size())
+    {
+        return AuthoredReticlePreparationResult::Failed;
+    }
+    for (uint32_t index = 0;
+         index < static_cast<uint32_t>(g_reticleImages.size()); ++index)
+    {
+        if (!GetRtv(g_reticleImages, g_reticleRtvs, index))
+            return AuthoredReticlePreparationResult::Failed;
+    }
+    return EnsureAuthoredReticleTexture()
+        ? AuthoredReticlePreparationResult::Ready
+        : AuthoredReticlePreparationResult::Failed;
+}
+
+void VR_InvalidatePreparedReachAuthoredReticleCapture()
+{
+    // Reach calls this only on the render thread before opening a new admitted
+    // eye transaction. Halo 3/ODST retain their accepted serial lifecycle.
+    g_authoredReticleReady = false;
+    g_authoredReticleSerial = 0;
+}
+
+static bool BeginAuthoredReticleCaptureInternal(bool requirePreparedResources)
 {
     if (!g_context || !g_config.crosshair ||
         !g_stereoEnabled.load(std::memory_order_relaxed) ||
         !g_preparedFrame.begun || g_reticleCaptureState.active)
         return false;
 
-    // Prove that the runtime can host the hand-ray composition layer before
-    // diverting Halo's native crosshair away from the eye render. Previously
-    // the native widget could be hidden first and the swapchain could fail
-    // later, leaving no crosshair on any headset using that runtime path.
-    if (!EnsureReticleChain() || !EnsureAuthoredReticleTexture())
-        return false;
+    if (requirePreparedResources)
+    {
+        if (g_reticleChain == XR_NULL_HANDLE || g_reticleImages.empty() ||
+            g_reticleRtvs.size() != g_reticleImages.size() ||
+            !g_authoredReticleTexture || !g_authoredReticleRtv)
+        {
+            return false;
+        }
+        for (ID3D11RenderTargetView* rtv : g_reticleRtvs)
+            if (!rtv)
+                return false;
+    }
+    else
+    {
+        // Preserve the accepted Halo 3/ODST lazy preparation path. Reach calls
+        // only the prepared entry above, so allocation and logging never occur
+        // from its HREK widget hook.
+        if (!EnsureReticleChain() || !EnsureAuthoredReticleTexture())
+            return false;
+    }
 
     const uint64_t serial = g_preparedFrame.serial;
     if (g_authoredReticleSerial != serial)
@@ -7672,11 +7956,21 @@ bool VR_BeginAuthoredReticleCapture()
     return true;
 }
 
-void VR_EndAuthoredReticleCapture()
+bool VR_BeginAuthoredReticleCapture()
+{
+    return BeginAuthoredReticleCaptureInternal(false);
+}
+
+bool VR_BeginPreparedAuthoredReticleCapture()
+{
+    return BeginAuthoredReticleCaptureInternal(true);
+}
+
+static bool EndAuthoredReticleCaptureInternal(bool allowFirstCaptureLog)
 {
     auto& saved = g_reticleCaptureState;
     if (!saved.active || !g_context)
-        return;
+        return false;
 
     g_context->OMSetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT,
                                   saved.rtvs, saved.dsv);
@@ -7700,11 +7994,22 @@ void VR_EndAuthoredReticleCapture()
     saved.active = false;
     g_authoredReticleReady = true;
     static bool logged = false;
-    if (!logged)
+    if (allowFirstCaptureLog && !logged)
     {
         LOG("M3: Halo authored per-weapon crosshair redirected to VR aim quad");
         logged = true;
     }
+    return true;
+}
+
+void VR_EndAuthoredReticleCapture()
+{
+    (void)EndAuthoredReticleCaptureInternal(true);
+}
+
+bool VR_EndPreparedAuthoredReticleCapture()
+{
+    return EndAuthoredReticleCaptureInternal(false);
 }
 
 void VR_SetReticleEnemy(bool enemy)

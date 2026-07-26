@@ -9,7 +9,7 @@
     {
       "name": "release",
       "displayName": "Halo MCC VR cumulative Release",
-      "description": "x64 cumulative build: Halo 3 + ODST + Halo: Reach, all permanent and fail-open",
+      "description": "x64 cumulative build: Halo 3 + ODST + Halo: Reach, all permanent with gated ownership",
       "generator": "Visual Studio 17 2022",
       "architecture": "x64",
       "binaryDir": "${sourceDir}/out/build/release",

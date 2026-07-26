@@ -32,6 +32,14 @@ void Game_Init();
 bool Game_IsHooked();
 bool Game_IsHeadTracking(); // true while F2 head tracking is on
 bool Game_IsCameraOnlyBringup(); // private ODST camera core; no gameplay features
+// True only while the exact Reach stereo + mandatory authored-crosshair
+// transaction owns the active title. Used to admit its frame-bound authored
+// quad without granting unrelated shared gameplay capabilities.
+bool Game_OwnsReachAuthoredReticle();
+// Atomically rejects the active Reach authored-reticle transaction after a
+// frame-bound upload failure. The title worker performs verified teardown;
+// there is no procedural, transparent, or flat-crosshair substitute.
+void Game_RejectReachAuthoredReticle(uint32_t expectedGeneration);
 bool Game_AllowsSharedGameplayFeatures();
 bool Game_AllowsSharedControllerInput();
 bool Game_HasTitleCapability(uint32_t requiredCapabilities);

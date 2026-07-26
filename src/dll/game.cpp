@@ -13,6 +13,7 @@
 #include "vr.h"
 #include "ik.h"
 #include "title_adapter.h"
+#include "../common/reach_chud_logic.h"
 #include "../common/reach_render_logic.h"
 #ifndef HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE
 #define HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE 0
@@ -9569,13 +9570,13 @@ namespace
     // +0x18, vertical FOV +0x28 -- exactly what ValidateReachCompactCamera
     // decodes), and the player-view rollback regions.
     //
-    // The worker installs the two hooks only after the loaded-image preflight
-    // PASSes and the VR eye-capture resources are published, then arms after a
-    // one-second fresh-camera safety interval, exactly like the accepted ODST
-    // core. Any runtime precondition that is not met falls open to a single
-    // stock render, and the per-eye transaction is guarded so a fault can never
-    // do worse than one stock frame. This is the first armed Reach camera
-    // candidate; its camera-injection correctness is a headset-tuning result.
+    // The worker installs the complete six-hook transaction only after the
+    // loaded-image preflight passes and the VR eye-capture resources are
+    // published, then arms after a one-second fresh-camera safety interval,
+    // exactly like the accepted ODST core. A failed owned eye is invalidated and
+    // never published as Reach stereo. The one-original-render safety call stays
+    // outside that completed pair and cannot become a partial VR mode.
+    // Camera-injection correctness remains an exact-hash headset result.
     using ReachPlayerViewRenderFn = void(__fastcall*)(uintptr_t);
     using ReachMainRenderViewFn =
         uintptr_t(__fastcall*)(uintptr_t, uintptr_t, uint32_t);
@@ -9591,7 +9592,6 @@ namespace
         void(__fastcall*)(void*, void*, void*, void*, void*);
     using ReachFpCameraRebuildFn = void(__fastcall*)(void*, bool);
     using ReachFpCameraUploadFn = void(__fastcall*)(void*, void*);
-    using ReachFpWeaponSlotForDatumFn = int(__fastcall*)(int, uint32_t);
 
     struct ReachRenderHelpers
     {
@@ -9769,6 +9769,9 @@ namespace
     struct ReachFpCameraEyeScope
     {
         bool active = false;
+        bool chudParityFailed = false;
+        bool chudClass2Seen = false;
+        bool authoredCrosshairCaptured = false;
         uint32_t generation = 0;
         uint32_t eye = 0;
         uint64_t preparedSerial = 0;
@@ -9784,15 +9787,14 @@ namespace
         std::atomic<bool> installed{false};
         std::atomic<bool> armed{false};
         std::atomic<bool> teardownRequested{false};
-        // Counts the five full Reach wrappers through their original calls and
-        // the sixth projectile predicate while its compiled body executes.
-        // Teardown additionally scans the emitted projectile relay and every
-        // MinHook trampoline/relay slot, covering that midhook's pre-counter and
-        // post-counter windows before freeing code or the retained title DLL.
+        // Counts every Reach detour from wrapper entry until every
+        // trampoline/original call has returned. Teardown disables all hooks,
+        // then proves that neither a callback nor a MinHook relay ingress
+        // remains before freeing either trampoline or the retained title DLL.
         std::atomic<int> activeCallbacks{0};
         uintptr_t base = 0;
         size_t size = 0;
-        uint32_t generation = 0;
+        std::atomic<uint32_t> generation{0};
         HMODULE moduleReference = nullptr;
         void* innerTarget = nullptr;
         void* outerTarget = nullptr;
@@ -9805,17 +9807,13 @@ namespace
         uint8_t nativeWeaponIkDisableOriginal = 0;
         bool nativeWeaponIkBypassActive = false;
         void* fpInterpolateTarget = nullptr;
-        void* fpMarkerQueryTarget = nullptr;
-        void* fpMarkerComposeTarget = nullptr;
         void* fpPaletteTarget = nullptr;
         void* fpCameraTarget = nullptr;
-        void* fpProjectileOriginTarget = nullptr;
-        void* fpProjectileOriginRelay = nullptr;
-        size_t fpProjectileOriginRelaySize = 0;
-        size_t fpProjectileOriginRelayAllocationSize = 0;
+        void* hudDrawWidgetTarget = nullptr;
     } g_reachCamera;
     bool RestoreReachNativeWeaponIkBypass();
     static_assert(std::atomic<int>::is_always_lock_free);
+    static_assert(std::atomic<uint32_t>::is_always_lock_free);
 
     // Published only after the matching eye was rendered and copied. The
     // release/acquire serial binds each pair of projection scales to the exact
@@ -9829,12 +9827,6 @@ namespace
     using ReachFpInterpolateFn = bool(__fastcall*)(
         int, int, int, BoneMatrix**, int*);
     ReachFpInterpolateFn g_reachOrigFpInterpolate = nullptr;
-    using ReachFpMarkerQueryFn = void(__fastcall*)(
-        void*, uint16_t, BoneMatrix*, bool);
-    ReachFpMarkerQueryFn g_reachOrigFpMarkerQuery = nullptr;
-    using ReachFpMarkerComposeFn = BoneMatrix*(__fastcall*)(
-        void*, const unsigned char*, BoneMatrix*, bool);
-    ReachFpMarkerComposeFn g_reachOrigFpMarkerCompose = nullptr;
     // Production first-person palette trampoline. ABI verified against the
     // pinned Reach image at 0x2B4EB0.
     using ReachFpPaletteFn = void(__fastcall*)(
@@ -9843,229 +9835,145 @@ namespace
     ReachFpPaletteFn g_reachOrigFpPalette = nullptr;
     ReachFpCameraRebuildFn g_reachOrigFpCameraRebuild = nullptr;
     ReachFpCameraUploadFn g_reachFpCameraUpload = nullptr;
-    ReachFpWeaponSlotForDatumFn g_reachFpWeaponSlotForDatum = nullptr;
-    void* g_reachOrigFpProjectileOriginDecision = nullptr;
+    using ReachHudDrawWidgetFn = void(__fastcall*)(
+        int, void*, unsigned short, unsigned char, void*);
+    ReachHudDrawWidgetFn g_reachOrigHudDrawWidget = nullptr;
+    // A runtime authored-target loss rejects parity for this exact title-module
+    // generation. Do not churn through remove/reinstall loops or silently arm a
+    // lesser mode; a fresh module generation is required for another proof.
+    std::atomic<uint32_t> g_reachChudParityFailedGeneration{0};
 
-    // HREK export of the official Reach assault-rifle render model proves that
-    // primary_trigger is one marker on node 0 with this authored local matrix:
-    // translation (0.233427, 1.90735e-08, 0.0512855), identity rotation,
-    // scale 0.01, direction +X. The final first-person marker composer at
-    // retail 0x11BFB0 combines that record with the interpolated node matrix.
-    // Publish its already-composed world matrix, never a guessed offset.
-    struct ReachFpPrimaryTriggerWorld
+    bool ReachOwnsHudStereoTransaction()
     {
-        AtomicBoneMatrix matrix{};
-        std::atomic<uint32_t> weaponDatum{0xFFFFFFFFu};
-        std::atomic<uint32_t> generation{0};
-    } g_reachFpPrimaryTriggerWorld;
-    std::atomic<uint64_t> g_reachFpPrimaryTriggerPublished{0};
-    std::atomic<uint64_t> g_reachFpPrimaryTriggerProjectileApplied{0};
-    std::atomic<uint64_t> g_reachFpMarkerComposeCalls{0};
-    std::atomic<uint64_t> g_reachFpPrimaryTriggerMatched{0};
-    std::atomic<bool> g_reachFpPrimaryTriggerPublishLogged{false};
-    std::atomic<bool> g_reachFpPrimaryTriggerApplyLogged{false};
-    std::atomic<bool> g_reachFpMarkerComposeDiagnosticLogged{false};
-
-    // The stock projectile routine reaches this decision on simulation/gameplay
-    // threads, not necessarily inside the render-owner scope. Locality therefore
-    // comes from Reach's exact output-user first-person slot table: only the
-    // incoming full datum in output-user 0 slot 0 may take the native barrel
-    // origin branch. Any inactive lifecycle, exception, or other slot stays
-    // byte-for-byte stock. No tag flag is ever mutated.
-    bool ReachFpProjectileOriginPredicateBody(uint32_t weaponDatum)
-    {
-        const bool controllerAimActive =
-            TitleAdapter_GetActiveTitle() == GameTitle::HaloReach &&
+        if (TitleAdapter_GetActiveTitle() != GameTitle::HaloReach)
+            return false;
+        const uint32_t cameraGeneration =
+            g_reachCamera.generation.load(std::memory_order_acquire);
+        return cameraGeneration != 0 &&
+            TitleAdapter_GetGeneration(GameTitle::HaloReach) ==
+                cameraGeneration &&
+            g_reachCamera.installed.load(std::memory_order_acquire) &&
             g_reachCamera.armed.load(std::memory_order_acquire) &&
             !g_reachCamera.teardownRequested.load(std::memory_order_acquire) &&
-            g_enabled.load(std::memory_order_acquire) &&
-            g_vrAim.load(std::memory_order_acquire) &&
-            VR_IsStereoEnabled();
-        ReachFpWeaponSlotForDatumFn const slotForDatum =
-            g_reachFpWeaponSlotForDatum;
-        if (!controllerAimActive || !slotForDatum)
-            return false;
-
-        int firstPersonSlot = -1;
-        __try
-        {
-            firstPersonSlot = slotForDatum(0, weaponDatum);
-        }
-        __except (EXCEPTION_EXECUTE_HANDLER)
-        {
-            firstPersonSlot = -1;
-        }
-        return ReachShouldUseNativeWeaponProjectileOrigin(
-            controllerAimActive, firstPersonSlot);
+            g_enabled.load(std::memory_order_relaxed) &&
+            VR_IsStereoEnabled() && g_reachFpCameraEyeScope.active &&
+            g_reachFpCameraEyeScope.generation == cameraGeneration;
     }
 
-    // This complete unwind range is scanned during teardown. The emitted relay
-    // is scanned separately, closing both its pre-counter call window and the
-    // post-counter register-restore/tail-jump window.
-    __declspec(noinline) int __fastcall ReachFpProjectileOriginPredicate(
-        uint32_t weaponDatum, void* firingFrame)
+    void RejectReachChudParityForCurrentEye() noexcept
     {
-        int useWeaponOrigin = 0;
+        g_reachFpCameraEyeScope.chudParityFailed = true;
+        g_reachChudParityFailedGeneration.store(
+            g_reachCamera.generation, std::memory_order_release);
+        g_reachCamera.armed.store(false, std::memory_order_release);
+        g_reachCamera.teardownRequested.store(
+            true, std::memory_order_release);
+    }
+
+    // Official HREK exposes the scripting-class byte directly to Reach's
+    // five-argument chud_draw_widget transaction. Select only class 2 and
+    // reuse Halo 3/ODST's authored-widget capture. No procedural reticle,
+    // widget-name fallback, or mixed flat-crosshair mode exists.
+    __declspec(noinline) void __fastcall ReachHudDrawWidgetDetour(
+        int userIndex, void* descriptor, unsigned short widgetIndex,
+        unsigned char useAlternatePath, void* drawState)
+    {
+        bool captureStarted = false;
         g_reachCamera.activeCallbacks.fetch_add(
             1, std::memory_order_acq_rel);
         __try
         {
-            __try
+            ReachHudDrawWidgetFn original = g_reachOrigHudDrawWidget;
+            if (!original)
+                return;
+
+            const bool ownsStereo = ReachOwnsHudStereoTransaction();
+            const bool matchingEyeScope =
+                g_reachFpCameraEyeScope.active &&
+                g_reachFpCameraEyeScope.generation ==
+                    g_reachCamera.generation;
+            if (matchingEyeScope && !ownsStereo)
             {
-                useWeaponOrigin =
-                    ReachFpProjectileOriginPredicateBody(weaponDatum) ? 1 : 0;
-                if (useWeaponOrigin && firingFrame &&
-                    g_reachFpPrimaryTriggerWorld.generation.load(
-                        std::memory_order_acquire)==g_reachCamera.generation &&
-                    g_reachFpPrimaryTriggerWorld.weaponDatum.load(
-                        std::memory_order_relaxed)==weaponDatum)
+                // Ownership can be revoked by teardown or an explicit VR
+                // disable while this stock draw call is already in flight.
+                // Invalidate the eye before it can be copied and suppress this
+                // abandoned CHUD pass; never let it turn into a flat class-2
+                // draw inside a formerly owned eye transaction.
+                g_reachFpCameraEyeScope.chudParityFailed = true;
+                return;
+            }
+            if (ownsStereo &&
+                g_scopeRenderActive.load(std::memory_order_acquire))
+            {
+                // Match Halo 3/ODST: the magnified world-only scope picture
+                // must not receive any native CHUD widget.
+                return;
+            }
+
+            uint8_t rawClass = 0xFF;
+            const bool descriptorReadable = descriptor && SafeReadByte(
+                reinterpret_cast<const uint8_t*>(descriptor) + 4,
+                &rawClass);
+            const bool isCrosshairClass = descriptorReadable &&
+                static_cast<int8_t>(rawClass) ==
+                    kReachChudCrosshairScriptingClass;
+            if (ownsStereo && isCrosshairClass)
+                g_reachFpCameraEyeScope.chudClass2Seen = true;
+            const int stereoEye =
+                g_stereoEye.load(std::memory_order_relaxed);
+            if (matchingEyeScope &&
+                g_reachFpCameraEyeScope.chudParityFailed &&
+                isCrosshairClass)
+            {
+                return;
+            }
+            const ReachChudCrosshairAction action =
+                ReachDecideChudCrosshairAction(
+                    ownsStereo, descriptorReadable,
+                    static_cast<int8_t>(rawClass), g_config.crosshair,
+                    g_config.kill_reticle,
+                    stereoEye,
+                    g_config.right_eye_first);
+
+            if (action == ReachChudCrosshairAction::Suppress)
+                return;
+            if (action == ReachChudCrosshairAction::RejectTransaction)
+            {
+                RejectReachChudParityForCurrentEye();
+                return;
+            }
+            if (action == ReachChudCrosshairAction::CaptureAuthored)
+            {
+                if (VR_BeginPreparedAuthoredReticleCapture())
                 {
-                    BoneMatrix markerWorld{};
-                    if (LoadAtomicBoneMatrix(
-                            g_reachFpPrimaryTriggerWorld.matrix,markerWorld) &&
-                        isfinite(markerWorld.translation[0]) &&
-                        isfinite(markerWorld.translation[1]) &&
-                        isfinite(markerWorld.translation[2]) &&
-                        g_reachFpPrimaryTriggerWorld.generation.load(
-                            std::memory_order_acquire)==g_reachCamera.generation)
-                    {
-                        auto* const frame=
-                            static_cast<unsigned char*>(firingFrame);
-                        uint64_t barrelOffset=0;
-                        memcpy(&barrelOffset,frame+0x08,sizeof(barrelOffset));
-                        if (barrelOffset<0x2000)
-                        {
-                            memcpy(frame+barrelOffset+0x9F0,
-                                   markerWorld.translation,
-                                   sizeof(markerWorld.translation));
-                            g_reachFpPrimaryTriggerProjectileApplied.fetch_add(
-                                1,std::memory_order_relaxed);
-                        }
-                    }
+                    captureStarted = true;
+                    original(userIndex, descriptor, widgetIndex,
+                             useAlternatePath, drawState);
+                    return;
                 }
+                // The parity transaction was proven before arming. If its
+                // authored target becomes unavailable at runtime, reject the
+                // transaction and suppress this class-2 draw while the title
+                // worker performs verified teardown. Never substitute the flat
+                // native crosshair or a procedural texture.
+                RejectReachChudParityForCurrentEye();
+                return;
             }
-            __except (EXCEPTION_EXECUTE_HANDLER)
-            {
-                // The emitted relay intentionally has no unwind metadata. No
-                // engine or gate fault may escape across it; stock is safe.
-                useWeaponOrigin = 0;
-            }
+            original(userIndex, descriptor, widgetIndex,
+                     useAlternatePath, drawState);
         }
         __finally
         {
+            if (captureStarted)
+            {
+                if (VR_EndPreparedAuthoredReticleCapture())
+                    g_reachFpCameraEyeScope.authoredCrosshairCaptured = true;
+                else
+                    RejectReachChudParityForCurrentEye();
+            }
             g_reachCamera.activeCallbacks.fetch_sub(
                 1, std::memory_order_acq_rel);
         }
-        return useWeaponOrigin;
-    }
-
-    constexpr size_t kReachFpProjectileOriginRelayAllocationSize = 0x1000;
-    constexpr size_t kReachFpProjectileOriginRelayPredicateAddressOffset = 0x6D;
-    constexpr size_t kReachFpProjectileOriginRelayTrampolineAddressOffset = 0xFA;
-    // Win64 midhook relay. It preserves every volatile GPR, RFLAGS, and XMM0-5,
-    // maintains call alignment and shadow space, reads the pinned current
-    // projectile-frame weapon datum at original RSP+0x64, and only ORs AL bit 0
-    // before tail-jumping MinHook's relocated stock AND/JNE transaction.
-    constexpr std::array<uint8_t, 0x102> kReachFpProjectileOriginRelayTemplate{{
-        0x48,0x81,0xEC,0xD0,0x00,0x00,0x00,
-        0x48,0x89,0x44,0x24,0x20,0x48,0x89,0x4C,0x24,0x28,
-        0x48,0x89,0x54,0x24,0x30,0x4C,0x89,0x44,0x24,0x38,
-        0x4C,0x89,0x4C,0x24,0x40,0x4C,0x89,0x54,0x24,0x48,
-        0x4C,0x89,0x5C,0x24,0x50,0x9C,0x58,0x48,0x89,0x44,0x24,0x58,
-        0xF3,0x0F,0x7F,0x44,0x24,0x60,0xF3,0x0F,0x7F,0x4C,0x24,0x70,
-        0xF3,0x0F,0x7F,0x94,0x24,0x80,0x00,0x00,0x00,
-        0xF3,0x0F,0x7F,0x9C,0x24,0x90,0x00,0x00,0x00,
-        0xF3,0x0F,0x7F,0xA4,0x24,0xA0,0x00,0x00,0x00,
-        0xF3,0x0F,0x7F,0xAC,0x24,0xB0,0x00,0x00,0x00,
-        0x8B,0x8C,0x24,0x34,0x01,0x00,0x00,0x48,0x89,0xEA,0x48,0xB8,
-        0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0xFF,0xD0,
-        0x88,0x84,0x24,0xC0,0x00,0x00,0x00,
-        0xF3,0x0F,0x6F,0x44,0x24,0x60,0xF3,0x0F,0x6F,0x4C,0x24,0x70,
-        0xF3,0x0F,0x6F,0x94,0x24,0x80,0x00,0x00,0x00,
-        0xF3,0x0F,0x6F,0x9C,0x24,0x90,0x00,0x00,0x00,
-        0xF3,0x0F,0x6F,0xA4,0x24,0xA0,0x00,0x00,0x00,
-        0xF3,0x0F,0x6F,0xAC,0x24,0xB0,0x00,0x00,0x00,
-        0x48,0x8B,0x4C,0x24,0x28,0x48,0x8B,0x54,0x24,0x30,
-        0x4C,0x8B,0x44,0x24,0x38,0x4C,0x8B,0x4C,0x24,0x40,
-        0x4C,0x8B,0x54,0x24,0x48,0x80,0xBC,0x24,0xC0,0x00,0x00,0x00,0x00,
-        0x74,0x09,0x48,0x8B,0x44,0x24,0x20,0x0C,0x01,0xEB,0x05,
-        0x48,0x8B,0x44,0x24,0x20,0x4C,0x8B,0x5C,0x24,0x58,
-        0x41,0x53,0x9D,0x4C,0x8B,0x5C,0x24,0x50,
-        0x48,0x8D,0xA4,0x24,0xD0,0x00,0x00,0x00,
-        0xFF,0x25,0x00,0x00,0x00,0x00,
-        0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
-    }};
-    static_assert(sizeof(uintptr_t) == 8);
-    static_assert(
-        kReachFpProjectileOriginRelayPredicateAddressOffset +
-            sizeof(uintptr_t) <=
-        kReachFpProjectileOriginRelayTemplate.size());
-    static_assert(
-        kReachFpProjectileOriginRelayTrampolineAddressOffset +
-            sizeof(uintptr_t) ==
-        kReachFpProjectileOriginRelayTemplate.size());
-
-    bool ReachFpProjectileOriginRelayMatches(
-        const uint8_t* relay, size_t relaySize,
-        uintptr_t predicate, uintptr_t trampoline) noexcept
-    {
-        if (!relay || relaySize != kReachFpProjectileOriginRelayTemplate.size() ||
-            !predicate || !trampoline)
-            return false;
-        for (size_t i = 0; i < relaySize; ++i)
-        {
-            const bool predicateFixup =
-                i >= kReachFpProjectileOriginRelayPredicateAddressOffset &&
-                i < kReachFpProjectileOriginRelayPredicateAddressOffset + 8;
-            const bool trampolineFixup =
-                i >= kReachFpProjectileOriginRelayTrampolineAddressOffset &&
-                i < kReachFpProjectileOriginRelayTrampolineAddressOffset + 8;
-            if (!predicateFixup && !trampolineFixup &&
-                relay[i] != kReachFpProjectileOriginRelayTemplate[i])
-                return false;
-        }
-        uintptr_t embeddedPredicate = 0;
-        uintptr_t embeddedTrampoline = 0;
-        memcpy(&embeddedPredicate,
-               relay + kReachFpProjectileOriginRelayPredicateAddressOffset, 8);
-        memcpy(&embeddedTrampoline,
-               relay + kReachFpProjectileOriginRelayTrampolineAddressOffset, 8);
-        return embeddedPredicate == predicate &&
-            embeddedTrampoline == trampoline;
-    }
-
-    bool ReachWriteFpProjectileOriginRelay(
-        void* allocation, size_t allocationSize, uintptr_t trampoline)
-    {
-        if (!allocation ||
-            allocationSize < kReachFpProjectileOriginRelayTemplate.size() ||
-            !trampoline)
-            return false;
-        auto* const relay = static_cast<uint8_t*>(allocation);
-        DWORD oldProtection = 0;
-        if (!VirtualProtect(
-                relay, allocationSize, PAGE_READWRITE, &oldProtection))
-            return false;
-
-        memcpy(relay, kReachFpProjectileOriginRelayTemplate.data(),
-               kReachFpProjectileOriginRelayTemplate.size());
-        const uintptr_t predicate = reinterpret_cast<uintptr_t>(
-            &ReachFpProjectileOriginPredicate);
-        memcpy(relay + kReachFpProjectileOriginRelayPredicateAddressOffset,
-               &predicate, 8);
-        memcpy(relay + kReachFpProjectileOriginRelayTrampolineAddressOffset,
-               &trampoline, 8);
-        const bool exact = ReachFpProjectileOriginRelayMatches(
-            relay, kReachFpProjectileOriginRelayTemplate.size(),
-            predicate, trampoline);
-
-        DWORD ignored = 0;
-        const bool executable = VirtualProtect(
-            relay, allocationSize, PAGE_EXECUTE_READ, &ignored) != FALSE;
-        const bool flushed = executable && FlushInstructionCache(
-            GetCurrentProcess(), relay,
-            kReachFpProjectileOriginRelayTemplate.size()) != FALSE;
-        return exact && executable && flushed;
     }
 
     constexpr size_t kReachFpLayoutCacheCapacity = 4;
@@ -10118,23 +10026,6 @@ namespace
     thread_local ReachFpInterpolationContext
         g_reachFpInterpolations[kReachFpTransactionCapacity];
     thread_local uint64_t g_reachFpCaptureSerial = 0;
-    thread_local uint64_t g_reachFpMarkerSourceSerial = 0;
-    thread_local uint64_t g_reachFpMarkerQueryCorrectedSerial = 0;
-
-    // The stock marker query calls the hooked interpolator and therefore
-    // already receives the once-corrected live marker graph. Never transform
-    // its returned matrix a second time. Publish only the matching world basis
-    // so the later final marker composer can convert its stock result after the
-    // bounded outer render scope has ended.
-    struct ReachFpMarkerSharedTransform
-    {
-        AtomicBoneMatrix recordDelta{};
-        AtomicBoneMatrix centerRoot{};
-        std::atomic<uint32_t> generation{0};
-    } g_reachFpMarkerSharedTransform;
-    std::atomic<uint64_t> g_reachFpMarkerQueryCalls{0};
-    std::atomic<uint64_t> g_reachFpMarkerQueryNestedOwned{0};
-    std::atomic<uint64_t> g_reachFpMarkerQueryFallbackApplied{0};
 
     struct ReachFpStatus
     {
@@ -10226,8 +10117,8 @@ namespace
     // world fog and geometry are correct. Suppress only that helper for one
     // admitted eye render, then restore only its bit so any unrelated stock
     // flag updates survive. The per-eye __finally executes even if the stock
-    // renderer faults; normal stock, nested, screenshot, and fallback renders
-    // never enter this scope.
+    // renderer faults; unclaimed, nested, and screenshot renders never enter
+    // this scope.
     bool ReachCallPlayerViewWithoutPatchyFog(uintptr_t playerView)
     {
         uint8_t original = 0;
@@ -10608,8 +10499,9 @@ namespace
     // Build the single head-centre camera consumed by Reach's outer CPU
     // visibility pass. The frustum/projection helpers are the exact stock
     // pre-scope pair. The caller commits this same centre to the bounded
-    // player-view state as a coherent one-render fallback, while the inner
-    // transaction replaces it with each exact eye and rolls it back afterward.
+    // player-view state before the inner owner is acquired. The claimed inner
+    // transaction replaces it with each exact eye and rolls it back afterward;
+    // a claimed failure is suppressed rather than rerendered.
     bool ReachBuildHeadCullCamera(
         const unsigned char* stockCompact,
         const ReachSymmetricFovCover& cullCover,
@@ -10698,8 +10590,9 @@ namespace
             finalByte;
     }
 
-    // Returns true only if it fully owned the render (both eyes rendered and
-    // captured); false means the caller must perform one stock render.
+    // Returns true only if the already-claimed transaction rendered and
+    // captured both eyes. False is terminal for this title generation: the
+    // caller must revoke ownership and must not invoke the flat renderer.
     bool ReachStereoTransaction(uintptr_t playerView, ReachVrRenderAccess& access)
     {
         const uintptr_t workspace = g_reachOwnerScope.workspace;
@@ -10738,7 +10631,7 @@ namespace
         // violation at haloreach.dll RVA 0x26E02F. Require the engine's admitted
         // owner (player_view + 0x3B0), re-arm the global to it before each eye's
         // call, and never restore it afterward so the final eye's stock zero
-        // persists. Fail open if the owner is anything unexpected.
+        // persists. An unexpected owner rejects the claimed transaction.
         const uintptr_t reachOwnerGlobal =
             g_reachCamera.base + kReachRenderCameraOwnerRva;
         const uintptr_t entryOwner =
@@ -10747,10 +10640,12 @@ namespace
             return false;
 
         // A prepared serial can encounter more than one qualifying outer call.
-        // Invalidate the whole pair before each admitted attempt so a partial
-        // retry cannot combine one newly rendered eye with its prior pair.
+        // Invalidate the whole eye and authored-CHUD pair before each admitted
+        // attempt so a partial retry cannot combine one newly rendered eye, or
+        // a no-widget state, with the prior attempt from the same frame serial.
         g_reachRenderFovSerial[0].store(0, std::memory_order_release);
         g_reachRenderFovSerial[1].store(0, std::memory_order_release);
+        VR_InvalidatePreparedReachAuthoredReticleCapture();
 
         alignas(16) unsigned char savedWorkspace[kReachRenderScopeSnapshotSize];
         alignas(16) unsigned char savedPv[kReachPvSnapshotBytes];
@@ -10773,6 +10668,10 @@ namespace
         const bool rightFirst = g_config.right_eye_first;
         bool completed = false;
         bool transactionValid = true;
+        const bool authoredCrosshairRequired =
+            g_config.crosshair && g_config.kill_reticle;
+        bool authoredClass2Seen = false;
+        bool authoredCaptureCompleted = false;
         uint32_t capturedEyes = 0;
         __try
         {
@@ -10880,6 +10779,9 @@ namespace
                 fpCameraScope.preparedSerial = access.preparedSerial;
                 fpCameraScope.workspace = workspace;
                 fpCameraScope.playerView = playerView;
+                fpCameraScope.chudParityFailed = false;
+                fpCameraScope.chudClass2Seen = false;
+                fpCameraScope.authoredCrosshairCaptured = false;
                 memcpy(fpCameraScope.compact, compact,
                        sizeof(fpCameraScope.compact));
                 memcpy(fpCameraScope.derived, primaryDerived,
@@ -10895,8 +10797,20 @@ namespace
                 {
                     fpCameraScope.active = false;
                 }
-                if (!renderReturned)
+                if (!renderReturned || fpCameraScope.chudParityFailed)
                 {
+                    transactionValid = false;
+                    break;
+                }
+                authoredClass2Seen =
+                    authoredClass2Seen || fpCameraScope.chudClass2Seen;
+                authoredCaptureCompleted = authoredCaptureCompleted ||
+                    fpCameraScope.authoredCrosshairCaptured;
+                if (pass == 1 && !ReachAuthoredCrosshairPairComplete(
+                        authoredCrosshairRequired, authoredClass2Seen,
+                        authoredCaptureCompleted))
+                {
+                    RejectReachChudParityForCurrentEye();
                     transactionValid = false;
                     break;
                 }
@@ -10974,30 +10888,32 @@ namespace
                 base + kReachSelectedSpecializationRva) == 0;
     }
 
-    // Only an exact admitted inner call may repair the render-owner global.
-    // The stock renderer dereferences this owner and clears it on every call;
-    // a failed partial eye transaction or an asynchronous disarm can therefore
-    // leave zero here. Re-arm the proven player-view owner before the coherent
-    // head-centre fallback, then let stock clear it normally.
-    void ReachScopedStockFallback(uintptr_t playerView)
-    {
-        *reinterpret_cast<uintptr_t*>(
-            g_reachCamera.base + kReachRenderCameraOwnerRva) =
-                playerView + kReachPlayerViewCameraStateOffset;
-        g_reachOrigPlayerViewRender(playerView);
-    }
-
     void ReachPlayerViewRenderBody(
         uintptr_t playerView, uintptr_t returnAddress)
     {
         if (!ReachInnerScopeMatchesLive(playerView, returnAddress))
         {
+            if (g_reachOwnerScope.active &&
+                !g_reachNestedOuterSuppressed)
+            {
+                // The outer transaction has already claimed this call tree.
+                // Any caller/stack/player-view drift is terminal; invoking the
+                // original here could redraw flat class-2 CHUD after ownership.
+                Game_RejectReachAuthoredReticle(
+                    g_reachCamera.generation.load(
+                        std::memory_order_acquire));
+                return;
+            }
             g_reachOrigPlayerViewRender(playerView);
             return;
         }
         if (!g_reachCamera.armed.load(std::memory_order_acquire))
         {
-            ReachScopedStockFallback(playerView);
+            // An exact inner scope exists only after the armed outer transaction
+            // claimed this call tree. Mid-call revocation is terminal and may
+            // never invoke the flat renderer, regardless of teardown-store order.
+            Game_RejectReachAuthoredReticle(
+                g_reachCamera.generation.load(std::memory_order_acquire));
             return;
         }
 
@@ -11014,7 +10930,7 @@ namespace
             g_reachOwnerScope.renderAccess->preparedSerial !=
                 prepared.Serial())
         {
-            ReachScopedStockFallback(playerView);
+            Game_RejectReachAuthoredReticle(epoch.generation);
             return;
         }
 
@@ -11029,7 +10945,7 @@ namespace
             handled = false;
         }
         if (!handled)
-            ReachScopedStockFallback(playerView);
+            Game_RejectReachAuthoredReticle(epoch.generation);
     }
 
     // Keep the counter wrapper separate from the SEH-heavy body. The wrapper's
@@ -11371,83 +11287,6 @@ namespace
         return ReachBoneMatrixFinite(alignedTarget);
     }
 
-    bool ReachBuildMarkerQueryRecordDelta(
-        const BoneMatrix& centerRoot, const BoneMatrix& authoredWrist,
-        const BoneMatrix& controllerWrist, float meshScale,
-        BoneMatrix& recordDelta)
-    {
-        if (!isfinite(meshScale) || meshScale<=0.0f) return false;
-        BoneMatrix authoredWorld{},inverseAuthoredWorld{},worldDelta{};
-        BoneMatrix inverseRoot{},deltaRoot{},rigidRecord{};
-        if (!ComposeBoneMatrices(centerRoot,authoredWrist,authoredWorld) ||
-            !InvertBoneMatrix(authoredWorld,inverseAuthoredWorld) ||
-            !ComposeBoneMatrices(controllerWrist,inverseAuthoredWorld,worldDelta) ||
-            !InvertBoneMatrix(centerRoot,inverseRoot) ||
-            !ComposeBoneMatrices(worldDelta,centerRoot,deltaRoot) ||
-            !ComposeBoneMatrices(inverseRoot,deltaRoot,rigidRecord))
-        {
-            return false;
-        }
-        if (meshScale==1.0f)
-        {
-            recordDelta=rigidRecord;
-            return ReachBoneMatrixFinite(recordDelta);
-        }
-        BoneMatrix solvedWrist{};
-        if (!ComposeBoneMatrices(rigidRecord,authoredWrist,solvedWrist))
-            return false;
-        BoneMatrix scaleAboutWrist{};
-        scaleAboutWrist.scale=meshScale;
-        scaleAboutWrist.rotation[0]=1.0f;
-        scaleAboutWrist.rotation[4]=1.0f;
-        scaleAboutWrist.rotation[8]=1.0f;
-        for (int axis=0;axis<3;++axis)
-            scaleAboutWrist.translation[axis]=
-                solvedWrist.translation[axis]*(1.0f-meshScale);
-        return ComposeBoneMatrices(scaleAboutWrist,rigidRecord,recordDelta) &&
-            ReachBoneMatrixFinite(recordDelta);
-    }
-
-    void ReachPublishMarkerSharedTransform(
-        uint32_t generation, const BoneMatrix& centerRoot,
-        const BoneMatrix& authoredWrist, const BoneMatrix& controllerWrist,
-        float meshScale)
-    {
-        BoneMatrix recordDelta{};
-        if (!ReachBoneMatrixFinite(centerRoot) ||
-            !ReachBuildMarkerQueryRecordDelta(
-                centerRoot,authoredWrist,controllerWrist,meshScale,recordDelta))
-            return;
-        g_reachFpMarkerSharedTransform.generation.store(
-            0,std::memory_order_release);
-        StoreAtomicBoneMatrix(
-            g_reachFpMarkerSharedTransform.recordDelta,recordDelta);
-        StoreAtomicBoneMatrix(
-            g_reachFpMarkerSharedTransform.centerRoot,centerRoot);
-        g_reachFpMarkerSharedTransform.generation.store(
-            generation,std::memory_order_release);
-        ++g_reachFpMarkerSourceSerial;
-    }
-
-    bool ReachApplyPublishedMarkerQueryTransform(BoneMatrix* output)
-    {
-        if (!output ||
-            g_reachFpMarkerSharedTransform.generation.load(
-                std::memory_order_acquire)!=g_reachCamera.generation)
-            return false;
-        BoneMatrix recordDelta{},source{},transformed{};
-        if (!LoadAtomicBoneMatrix(
-                g_reachFpMarkerSharedTransform.recordDelta,recordDelta) ||
-            !SafeReadBytes(output,&source,sizeof(source)) ||
-            !ReachBoneMatrixFinite(source) ||
-            !ComposeBoneMatrices(recordDelta,source,transformed) ||
-            !ReachBoneMatrixFinite(transformed) ||
-            g_reachFpMarkerSharedTransform.generation.load(
-                std::memory_order_acquire)!=g_reachCamera.generation)
-            return false;
-        return SafeWriteBytes(output,&transformed,sizeof(transformed));
-    }
-
     // Reach's official Spartan/Elite body maps resolve the left wrist to source
     // node 11 and publish the complete source-space left-hand descendant mask.
     // The shared rigid (arm_ik=0) reconstruction intentionally carries the
@@ -11617,10 +11456,6 @@ namespace
                 return;
             }
         }
-        ReachPublishMarkerSharedTransform(
-            context.generation,markerTargets.centerRoot,
-            context.untouchedLive[context.layout.rightWristSource],
-            alignedRight,markerTargets.rightScale);
         context.transformed=true;
     }
     __declspec(noinline) bool __fastcall ReachFpInterpolate(
@@ -11634,183 +11469,6 @@ namespace
             if (original)
                 result=original(view,id,slot,outBones,outCount);
             ReachCaptureFpInterpolation(view,id,slot,result,outBones,outCount);
-        }
-        __finally
-        {
-            g_reachCamera.activeCallbacks.fetch_sub(1,std::memory_order_acq_rel);
-        }
-        return result;
-    }
-
-    __declspec(noinline) void __fastcall ReachFpMarkerQuery(
-        void* firstPersonWeapon, uint16_t markerIndex, BoneMatrix* output,
-        bool firstPerson)
-    {
-        g_reachCamera.activeCallbacks.fetch_add(1,std::memory_order_acq_rel);
-        const uint64_t sourceSerialBefore=g_reachFpMarkerSourceSerial;
-        __try
-        {
-            __try
-            {
-                ReachFpMarkerQueryFn original=g_reachOrigFpMarkerQuery;
-                if (original)
-                {
-                    original(firstPersonWeapon,markerIndex,output,firstPerson);
-                    g_reachFpMarkerQueryCalls.fetch_add(
-                        1,std::memory_order_relaxed);
-                    if (firstPerson && firstPersonWeapon && output &&
-                        TitleAdapter_GetActiveTitle()==GameTitle::HaloReach &&
-                        g_reachCamera.armed.load(std::memory_order_acquire) &&
-                        !g_reachCamera.teardownRequested.load(
-                            std::memory_order_acquire) &&
-                        g_enabled.load(std::memory_order_acquire) &&
-                        g_vrAim.load(std::memory_order_acquire) &&
-                        VR_IsStereoEnabled())
-                    {
-                        uint32_t weaponDatum=0xFFFFFFFFu;
-                        ReachFpWeaponSlotForDatumFn const slotForDatum=
-                            g_reachFpWeaponSlotForDatum;
-                        if (slotForDatum &&
-                            SafeReadBytes(
-                                static_cast<unsigned char*>(firstPersonWeapon)+0x3C,
-                                &weaponDatum,sizeof(weaponDatum)) &&
-                            slotForDatum(0,weaponDatum)==0)
-                        {
-                            if (g_reachFpMarkerSourceSerial!=sourceSerialBefore)
-                            {
-                                ++g_reachFpMarkerQueryCorrectedSerial;
-                                g_reachFpMarkerQueryNestedOwned.fetch_add(
-                                    1,std::memory_order_relaxed);
-                            }
-                            else if (ReachApplyPublishedMarkerQueryTransform(output))
-                            {
-                                ++g_reachFpMarkerQueryCorrectedSerial;
-                                g_reachFpMarkerQueryFallbackApplied.fetch_add(
-                                    1,std::memory_order_relaxed);
-                            }
-                        }
-                    }
-                }
-            }
-            __except (EXCEPTION_EXECUTE_HANDLER)
-            {
-                // The original query remains intact when the exact once-only
-                // ownership proof or generation-matched fallback is unavailable.
-            }
-        }
-        __finally
-        {
-            g_reachCamera.activeCallbacks.fetch_sub(1,std::memory_order_acq_rel);
-        }
-    }
-
-    bool ReachIsHrekAssaultRiflePrimaryTrigger(
-        const unsigned char* markerRecord)
-    {
-        if (!markerRecord) return false;
-        uint16_t nodeIndex=0xFFFF;
-        BoneMatrix authored{};
-        float direction[3]{};
-        if (!SafeReadBytes(markerRecord+0x02,&nodeIndex,sizeof(nodeIndex)) ||
-            !SafeReadBytes(markerRecord+0x0C,&authored,sizeof(authored)) ||
-            !SafeReadBytes(markerRecord+0x40,direction,sizeof(direction)) ||
-            !ReachBoneMatrixFinite(authored))
-        {
-            return false;
-        }
-        constexpr float kTranslation[3]={
-            0.233427f,1.90735e-08f,0.0512855f};
-        constexpr float kIdentity[9]={
-            1.0f,0.0f,0.0f,0.0f,1.0f,0.0f,0.0f,0.0f,1.0f};
-        if (nodeIndex!=0 || fabsf(authored.scale-0.01f)>0.00001f)
-            return false;
-        for (int axis=0;axis<3;++axis)
-            if (fabsf(authored.translation[axis]-kTranslation[axis])>
-                    0.00001f)
-                return false;
-        for (int element=0;element<9;++element)
-            if (fabsf(authored.rotation[element]-kIdentity[element])>
-                    0.00001f)
-                return false;
-        return fabsf(direction[0]-1.0f)<=0.00001f &&
-            fabsf(direction[1])<=0.00001f &&
-            fabsf(direction[2])<=0.00001f;
-    }
-
-    __declspec(noinline) BoneMatrix* __fastcall ReachFpMarkerCompose(
-        void* firstPersonWeapon, const unsigned char* markerRecord,
-        BoneMatrix* output, bool firstPerson)
-    {
-        g_reachCamera.activeCallbacks.fetch_add(1,std::memory_order_acq_rel);
-        BoneMatrix* result=nullptr;
-        const uint64_t correctedSerialBefore=
-            g_reachFpMarkerQueryCorrectedSerial;
-        __try
-        {
-            __try
-            {
-                ReachFpMarkerComposeFn original=g_reachOrigFpMarkerCompose;
-                if (original)
-                    result=original(firstPersonWeapon,markerRecord,output,
-                                    firstPerson);
-                if (result)
-                    g_reachFpMarkerComposeCalls.fetch_add(
-                        1,std::memory_order_relaxed);
-                if (result && firstPerson && firstPersonWeapon &&
-                    TitleAdapter_GetActiveTitle()==GameTitle::HaloReach &&
-                    g_reachCamera.armed.load(std::memory_order_acquire) &&
-                    !g_reachCamera.teardownRequested.load(
-                        std::memory_order_acquire) &&
-                    g_enabled.load(std::memory_order_acquire) &&
-                    g_vrAim.load(std::memory_order_acquire) &&
-                    VR_IsStereoEnabled() &&
-                    ReachIsHrekAssaultRiflePrimaryTrigger(markerRecord) &&
-                    g_reachFpMarkerQueryCorrectedSerial!=correctedSerialBefore &&
-                    g_reachFpMarkerSharedTransform.generation.load(
-                        std::memory_order_acquire)==g_reachCamera.generation)
-                {
-                    g_reachFpPrimaryTriggerMatched.fetch_add(
-                        1,std::memory_order_relaxed);
-                    uint32_t weaponDatum=0xFFFFFFFFu;
-                    BoneMatrix centerRoot{},markerRecordSpace{},markerWorld{};
-                    ReachFpWeaponSlotForDatumFn const slotForDatum=
-                        g_reachFpWeaponSlotForDatum;
-                    if (slotForDatum &&
-                        SafeReadBytes(
-                            static_cast<unsigned char*>(firstPersonWeapon)+0x3C,
-                            &weaponDatum,sizeof(weaponDatum)) &&
-                        slotForDatum(0,weaponDatum)==0 &&
-                        LoadAtomicBoneMatrix(
-                            g_reachFpMarkerSharedTransform.centerRoot,centerRoot) &&
-                        ReachBoneMatrixFinite(centerRoot) &&
-                        SafeReadBytes(result,&markerRecordSpace,
-                                      sizeof(markerRecordSpace)) &&
-                        ReachBoneMatrixFinite(markerRecordSpace) &&
-                        ComposeBoneMatrices(
-                            centerRoot,markerRecordSpace,markerWorld) &&
-                        ReachBoneMatrixFinite(markerWorld) &&
-                        g_reachFpMarkerSharedTransform.generation.load(
-                            std::memory_order_acquire)==g_reachCamera.generation)
-                    {
-                        g_reachFpPrimaryTriggerWorld.generation.store(
-                            0,std::memory_order_release);
-                        g_reachFpPrimaryTriggerWorld.weaponDatum.store(
-                            weaponDatum,std::memory_order_relaxed);
-                        StoreAtomicBoneMatrix(
-                            g_reachFpPrimaryTriggerWorld.matrix,markerWorld);
-                        g_reachFpPrimaryTriggerWorld.generation.store(
-                            g_reachCamera.generation,
-                            std::memory_order_release);
-                        g_reachFpPrimaryTriggerPublished.fetch_add(
-                            1,std::memory_order_relaxed);
-                    }
-                }
-            }
-            __except (EXCEPTION_EXECUTE_HANDLER)
-            {
-                // The stock composer already produced result when possible.
-                // Any VR-side recognition/publication failure remains stock.
-            }
         }
         __finally
         {
@@ -12261,12 +11919,11 @@ namespace
                    playerView + kReachPvSnapshotBegin),
                kReachPvSnapshotBytes);
 
-        // Commit one coherent head-centre fallback before the outer function's
-        // visibility work. Visibility reads the secondary workspace pair before
-        // player_view_render; stock fallback reads player-view camera state and
-        // matrices. Updating both with the exact proven setup helpers prevents
-        // a failed/withheld stereo transaction from mixing head-owned culling
-        // with the old gun/aim-owned raster matrices.
+        // Commit coherent head-centre pre-ownership state before the outer
+        // function's visibility work. Visibility reads the secondary workspace
+        // pair before player_view_render. Updating both with the exact proven
+        // setup helpers prevents a claimed transaction from mixing head-owned
+        // culling with old gun/aim-owned raster matrices before terminal rejection.
         bool headCommitReady = false;
         __try
         {
@@ -12556,19 +12213,16 @@ namespace
     bool ScanForReachDetourIngress(bool& busy)
     {
         static bool rangesResolved = false;
-        static ReachDetourCodeRange ranges[8]{};
+        static ReachDetourCodeRange ranges[6]{};
         if (!rangesResolved)
         {
             const void* functions[] = {
                 reinterpret_cast<const void*>(&ReachMainRenderViewDetour),
                 reinterpret_cast<const void*>(&ReachPlayerViewRenderDetour),
                 reinterpret_cast<const void*>(&ReachFpInterpolate),
-                reinterpret_cast<const void*>(&ReachFpMarkerQuery),
-                reinterpret_cast<const void*>(&ReachFpMarkerCompose),
                 reinterpret_cast<const void*>(&ReachFpPalette),
                 reinterpret_cast<const void*>(&ReachFpCameraRebuildDetour),
-                reinterpret_cast<const void*>(
-                    &ReachFpProjectileOriginPredicate),
+                reinterpret_cast<const void*>(&ReachHudDrawWidgetDetour),
             };
             static_assert(_countof(functions) == _countof(ranges));
             bool resolved = true;
@@ -12585,35 +12239,20 @@ namespace
             g_reachCamera.outerTarget,
             g_reachCamera.innerTarget,
             g_reachCamera.fpInterpolateTarget,
-            g_reachCamera.fpMarkerQueryTarget,
-            g_reachCamera.fpMarkerComposeTarget,
             g_reachCamera.fpPaletteTarget,
             g_reachCamera.fpCameraTarget,
-            g_reachCamera.fpProjectileOriginTarget,
+            g_reachCamera.hudDrawWidgetTarget,
         };
         void* const trampolines[] = {
             reinterpret_cast<void*>(g_reachOrigMainRenderView),
             reinterpret_cast<void*>(g_reachOrigPlayerViewRender),
             reinterpret_cast<void*>(g_reachOrigFpInterpolate),
-            reinterpret_cast<void*>(g_reachOrigFpMarkerQuery),
-            reinterpret_cast<void*>(g_reachOrigFpMarkerCompose),
             reinterpret_cast<void*>(g_reachOrigFpPalette),
             reinterpret_cast<void*>(g_reachOrigFpCameraRebuild),
-            g_reachOrigFpProjectileOriginDecision,
+            reinterpret_cast<void*>(g_reachOrigHudDrawWidget),
         };
         static_assert(_countof(targets) == _countof(ranges));
         static_assert(_countof(trampolines) == _countof(ranges));
-
-        const DWORD64 projectileRelay = reinterpret_cast<DWORD64>(
-            g_reachCamera.fpProjectileOriginRelay);
-        const size_t projectileRelaySize =
-            g_reachCamera.fpProjectileOriginRelaySize;
-        if ((projectileRelay == 0) != (projectileRelaySize == 0) ||
-            (projectileRelay &&
-             projectileRelay + projectileRelaySize <= projectileRelay))
-            return false;
-        const DWORD64 projectileRelayEnd =
-            projectileRelay + projectileRelaySize;
 
         ReachThreadFreeze frozenThreads;
         if (!frozenThreads.Capture())
@@ -12661,11 +12300,6 @@ namespace
                     busy = true;
                 }
             }
-            if (projectileRelay && instruction >= projectileRelay &&
-                instruction < projectileRelayEnd)
-            {
-                busy = true;
-            }
         }
         if (g_reachCamera.activeCallbacks.load(std::memory_order_acquire) != 0)
             busy = true;
@@ -12710,14 +12344,12 @@ namespace
     {
         bool disabledAll = true;
         void* const targets[] = {
+            g_reachCamera.hudDrawWidgetTarget,
             g_reachCamera.outerTarget,
             g_reachCamera.innerTarget,
             g_reachCamera.fpInterpolateTarget,
-            g_reachCamera.fpMarkerQueryTarget,
-            g_reachCamera.fpMarkerComposeTarget,
             g_reachCamera.fpPaletteTarget,
             g_reachCamera.fpCameraTarget,
-            g_reachCamera.fpProjectileOriginTarget,
         };
         for (void* target : targets)
         {
@@ -12735,42 +12367,21 @@ namespace
             return false;
 
         bool removedAll = true;
-        bool projectileOriginRemoved =
-            g_reachCamera.fpProjectileOriginTarget == nullptr;
-        if (g_reachCamera.fpProjectileOriginTarget)
+        if (g_reachCamera.hudDrawWidgetTarget)
         {
-            const MH_STATUS status = MH_RemoveHook(
-                g_reachCamera.fpProjectileOriginTarget);
+            const MH_STATUS status =
+                MH_RemoveHook(g_reachCamera.hudDrawWidgetTarget);
             if (status == MH_OK || status == MH_ERROR_NOT_CREATED)
             {
-                g_reachCamera.fpProjectileOriginTarget = nullptr;
-                g_reachOrigFpProjectileOriginDecision = nullptr;
-                g_reachFpWeaponSlotForDatum = nullptr;
-                projectileOriginRemoved = true;
+                g_reachCamera.hudDrawWidgetTarget = nullptr;
+                g_reachOrigHudDrawWidget = nullptr;
             }
             else
             {
                 removedAll = false;
-                LOG("Reach FP projectile-origin cleanup: remove failed for "
-                    "%p (%d)",
-                    g_reachCamera.fpProjectileOriginTarget,
+                LOG("Reach crosshair cleanup: remove failed for %p (%d)",
+                    g_reachCamera.hudDrawWidgetTarget,
                     static_cast<int>(status));
-            }
-        }
-        if (projectileOriginRemoved &&
-            g_reachCamera.fpProjectileOriginRelay)
-        {
-            if (VirtualFree(
-                    g_reachCamera.fpProjectileOriginRelay, 0, MEM_RELEASE))
-            {
-                g_reachCamera.fpProjectileOriginRelay = nullptr;
-                g_reachCamera.fpProjectileOriginRelaySize = 0;
-                g_reachCamera.fpProjectileOriginRelayAllocationSize = 0;
-            }
-            else
-            {
-                removedAll = false;
-                LOG("Reach FP projectile-origin cleanup: relay free failed");
             }
         }
         if (g_reachCamera.fpCameraTarget)
@@ -12805,44 +12416,6 @@ namespace
                 removedAll = false;
                 LOG("Reach FP palette cleanup: remove failed for %p (%d)",
                     g_reachCamera.fpPaletteTarget,
-                    static_cast<int>(status));
-            }
-        }
-        if (g_reachCamera.fpMarkerComposeTarget)
-        {
-            const MH_STATUS status =
-                MH_RemoveHook(g_reachCamera.fpMarkerComposeTarget);
-            if (status == MH_OK || status == MH_ERROR_NOT_CREATED)
-            {
-                g_reachCamera.fpMarkerComposeTarget = nullptr;
-                g_reachOrigFpMarkerCompose = nullptr;
-                g_reachFpPrimaryTriggerWorld.generation.store(
-                    0,std::memory_order_release);
-            }
-            else
-            {
-                removedAll = false;
-                LOG("Reach FP marker-compose cleanup: remove failed for %p (%d)",
-                    g_reachCamera.fpMarkerComposeTarget,
-                    static_cast<int>(status));
-            }
-        }
-        if (g_reachCamera.fpMarkerQueryTarget)
-        {
-            const MH_STATUS status =
-                MH_RemoveHook(g_reachCamera.fpMarkerQueryTarget);
-            if (status == MH_OK || status == MH_ERROR_NOT_CREATED)
-            {
-                g_reachCamera.fpMarkerQueryTarget = nullptr;
-                g_reachOrigFpMarkerQuery = nullptr;
-                g_reachFpMarkerSharedTransform.generation.store(
-                    0, std::memory_order_release);
-            }
-            else
-            {
-                removedAll = false;
-                LOG("Reach FP marker-query cleanup: remove failed for %p (%d)",
-                    g_reachCamera.fpMarkerQueryTarget,
                     static_cast<int>(status));
             }
         }
@@ -12957,14 +12530,9 @@ namespace
         g_reachCamera.innerTarget = nullptr;
         g_reachCamera.outerTarget = nullptr;
         g_reachCamera.fpInterpolateTarget = nullptr;
-        g_reachCamera.fpMarkerQueryTarget = nullptr;
-        g_reachCamera.fpMarkerComposeTarget = nullptr;
         g_reachCamera.fpPaletteTarget = nullptr;
         g_reachCamera.fpCameraTarget = nullptr;
-        g_reachCamera.fpProjectileOriginTarget = nullptr;
-        g_reachCamera.fpProjectileOriginRelay = nullptr;
-        g_reachCamera.fpProjectileOriginRelaySize = 0;
-        g_reachCamera.fpProjectileOriginRelayAllocationSize = 0;
+        g_reachCamera.hudDrawWidgetTarget = nullptr;
         g_reachCamera.moduleReference = nullptr;
         g_reachCamera.base = 0;
         g_reachCamera.size = 0;
@@ -12981,34 +12549,10 @@ namespace
         g_reachOrigPlayerViewRender = nullptr;
         g_reachOrigMainRenderView = nullptr;
         g_reachOrigFpInterpolate = nullptr;
-        g_reachOrigFpMarkerQuery = nullptr;
-        g_reachOrigFpMarkerCompose = nullptr;
         g_reachOrigFpPalette = nullptr;
         g_reachOrigFpCameraRebuild = nullptr;
         g_reachFpCameraUpload = nullptr;
-        g_reachFpWeaponSlotForDatum = nullptr;
-        g_reachOrigFpProjectileOriginDecision = nullptr;
-        g_reachFpMarkerSharedTransform.generation.store(
-            0, std::memory_order_release);
-        g_reachFpPrimaryTriggerWorld.generation.store(
-            0,std::memory_order_release);
-        g_reachFpPrimaryTriggerWorld.weaponDatum.store(
-            0xFFFFFFFFu,std::memory_order_relaxed);
-        g_reachFpPrimaryTriggerPublished.store(0,std::memory_order_relaxed);
-        g_reachFpPrimaryTriggerProjectileApplied.store(
-            0,std::memory_order_relaxed);
-        g_reachFpPrimaryTriggerPublishLogged.store(
-            false,std::memory_order_relaxed);
-        g_reachFpPrimaryTriggerApplyLogged.store(
-            false,std::memory_order_relaxed);
-        g_reachFpMarkerComposeCalls.store(0,std::memory_order_relaxed);
-        g_reachFpPrimaryTriggerMatched.store(0,std::memory_order_relaxed);
-        g_reachFpMarkerQueryCalls.store(0,std::memory_order_relaxed);
-        g_reachFpMarkerQueryNestedOwned.store(0,std::memory_order_relaxed);
-        g_reachFpMarkerQueryFallbackApplied.store(
-            0,std::memory_order_relaxed);
-        g_reachFpMarkerComposeDiagnosticLogged.store(
-            false,std::memory_order_relaxed);
+        g_reachOrigHudDrawWidget = nullptr;
         g_reachFpStatus.key.store(0,std::memory_order_release);
         g_reachFpLoggedStatusKey.store(0,std::memory_order_release);
         g_reachFpCameraUploadStatus.preparedSerial.store(
@@ -13052,40 +12596,6 @@ namespace
         const uintptr_t next=first+1;
         const uintptr_t end=base+size;
         return next>=end || sig::Find(next,static_cast<size_t>(end-next),pattern)==0;
-    }
-
-    // MinHook 1.3.4 must relocate exactly the three-byte `and al,r13b` and the
-    // following two-byte external JNE. Validate its disabled trampoline before
-    // publishing or enabling anything: native true still reaches 0x4C30D4,
-    // native false still reaches 0x4C30CA, and MinHook's relay reaches only our
-    // separately verified RX shim.
-    bool ReachColdVerifyFpProjectileOriginTrampoline(
-        uintptr_t base, const void* trampoline, const void* relay)
-    {
-        if (!base || !trampoline || !relay ||
-            !ReachColdExecutableAddress(
-                reinterpret_cast<uintptr_t>(trampoline)) ||
-            !ReachColdExecutableAddress(reinterpret_cast<uintptr_t>(relay)))
-            return false;
-        const auto* const code = static_cast<const uint8_t*>(trampoline);
-        constexpr uint8_t kAndAndExternalJne[] = {
-            0x41,0x22,0xC5,0x74,0x0E,0xFF,0x25,0x00,0x00,0x00,0x00};
-        constexpr uint8_t kAbsoluteJump[] = {
-            0xFF,0x25,0x00,0x00,0x00,0x00};
-        if (memcmp(code, kAndAndExternalJne,
-                   sizeof(kAndAndExternalJne)) != 0 ||
-            memcmp(code + 19, kAbsoluteJump, sizeof(kAbsoluteJump)) != 0 ||
-            memcmp(code + 33, kAbsoluteJump, sizeof(kAbsoluteJump)) != 0)
-            return false;
-        uintptr_t nativeTrue = 0;
-        uintptr_t nativeFalse = 0;
-        uintptr_t emittedRelay = 0;
-        memcpy(&nativeTrue, code + 11, 8);
-        memcpy(&nativeFalse, code + 25, 8);
-        memcpy(&emittedRelay, code + 39, 8);
-        return nativeTrue == base + kReachProjectileOriginNativeTrueRva &&
-            nativeFalse == base + kReachProjectileOriginStockFalseRva &&
-            emittedRelay == reinterpret_cast<uintptr_t>(relay);
     }
 
     bool ResolveReachNativeWeaponIkControl(
@@ -13190,12 +12700,67 @@ namespace
         return true;
     }
 
+    bool ResolveReachHrekChudDrawWidget(
+        uintptr_t base, size_t size, void*& target)
+    {
+        target = nullptr;
+        const uintptr_t hit = sig::Find(
+            base, size, kReachHrekChudDrawWidgetAob);
+        if (!hit || !ReachColdExecutableAddress(hit))
+        {
+            LOG("Reach crosshair: optimized HREK draw-widget signature missing; "
+                "mandatory parity transaction rejected");
+            return false;
+        }
+        const uintptr_t end = base + size;
+        if (hit + 1 >= end || sig::Find(
+                hit + 1, static_cast<size_t>(end - hit - 1),
+                kReachHrekChudDrawWidgetAob))
+        {
+            LOG("Reach crosshair: optimized HREK draw-widget signature is "
+                "ambiguous; mandatory parity transaction rejected");
+            return false;
+        }
+
+        DWORD64 imageBase = 0;
+        const PRUNTIME_FUNCTION runtimeFunction = RtlLookupFunctionEntry(
+            static_cast<DWORD64>(hit), &imageBase, nullptr);
+        if (!runtimeFunction || imageBase != base ||
+            runtimeFunction->EndAddress <= runtimeFunction->BeginAddress)
+        {
+            LOG("Reach crosshair: HREK draw-widget function boundary missing; "
+                "mandatory parity transaction rejected");
+            return false;
+        }
+        const uintptr_t functionBegin =
+            static_cast<uintptr_t>(imageBase) + runtimeFunction->BeginAddress;
+        const uintptr_t functionEnd =
+            static_cast<uintptr_t>(imageBase) + runtimeFunction->EndAddress;
+        if (functionBegin != hit || functionEnd > end ||
+            !ReachHrekChudDrawWidgetLayoutMatches(std::span<const uint8_t>(
+                reinterpret_cast<const uint8_t*>(functionBegin),
+                static_cast<size_t>(functionEnd - functionBegin))))
+        {
+            LOG("Reach crosshair: HREK draw-widget ABI/class layout mismatch; "
+                "mandatory parity transaction rejected");
+            return false;
+        }
+
+        target = reinterpret_cast<void*>(hit);
+        return true;
+    }
+
     bool InstallReachCameraCore(uintptr_t base, size_t size, uint32_t generation)
     {
         if (g_reachCamera.installed.load(std::memory_order_acquire))
             return true;
         if (!base || !generation || size != kReachRetailImageSize)
             return false;
+        if (g_reachChudParityFailedGeneration.load(
+                std::memory_order_acquire) == generation)
+        {
+            return false;
+        }
         if (kReachPlayerViewRenderRva >= size || kReachMainRenderViewRva >= size)
             return false;
 
@@ -13208,68 +12773,19 @@ namespace
 
         static constexpr char kFpInterpolateAob[] =
             "48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 57 41 54 41 55 41 56 41 57 48 83 EC 20 33 DB 49 63 F8 38 1D ?? ?? ?? ?? 4D 8B E1 8B EA 4C 63 D9";
-        static constexpr char kFpMarkerQueryAob[] =
-            "48 89 5C 24 08 48 89 74 24 10 57 48 83 EC 40 49 8B F0 0F B7 FA 45 84 C9 0F 84 C1 00 00 00 66 83 FA FE 0F 8F B7 00 00 00 F6 41 50 0F 0F 84 AD 00 00 00 0F BE 59 50";
-        static constexpr char kFpMarkerComposeAob[] =
-            "48 89 5C 24 08 57 48 83 EC 60 48 8B DA 45 33 D2 0F B7 52 02 45 32 DB 83 C8 FF 49 8B F8 66 3B C2 74 26 39 41 3C 74 21 4C 8D 44 24 20 E8 ?? ?? ?? ?? 48 8D 53 0C 4C 8B C7 48 8D 4C 24 20 E8 ?? ?? ?? ??";
         static constexpr char kFpPaletteAob[] =
             "48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 57 41 56 41 57 48 83 EC 20 48 8B 05 ?? ?? ?? ?? 49 8B F0 0F B7 C9 4C 8B F2";
         static constexpr char kFpCameraAob[] =
             "48 89 5C 24 08 48 89 74 24 10 57 48 83 EC 40 4C 8B 41 08 48 8D 05 ?? ?? ?? ?? 48 8B D9 0F 29 74 24 30";
-        static constexpr char kProjectileFireAob[] =
-            "48 89 5C 24 20 55 56 57 41 54 41 55 41 56 41 57 48 8D AC 24 C0 D9 FF FF B8 40 27 00 00 E8 ?? ?? ?? ?? 48 2B E0";
-        static constexpr char kProjectileOriginBlockAob[] =
-            "42 8B 04 A6 F3 41 0F 59 C8 C1 E8 02 F3 0F 58 D0 F3 0F 58 D1 F3 44 0F 5F F2 41 22 C5 75 0A 41 83 BE CC 01 00 00 FF 74 7A 84 C0 74 1C";
-        static constexpr char kFpWeaponSlotForDatumAob[] =
-            "41 83 CA FF 44 8B DA 41 3B CA 74 ?? 65 48 8B 04 25 58 00 00 00 44 8B 05 ?? ?? ?? ?? BA A0 06 00 00 4E 8B 0C C0 48 63 C1 48 69 C8 A8 53 00 00 33 C0";
-        static constexpr char kFpWeaponSlotConsumerAob[] =
-            "8B 51 3C C1 FB 04 8B CB E8 ?? ?? ?? ?? 8B 15 ?? ?? ?? ?? 65 48 8B 0C 25 58 00 00 00 83 64 24 68 00 41 BB A0 06 00 00";
         if (!ReachColdExactSignatureAt(
                 base,size,kReachFpInterpolateRva,kFpInterpolateAob) ||
-            !ReachColdExactSignatureAt(
-                base,size,kReachFpMarkerQueryRva,kFpMarkerQueryAob) ||
-            !ReachColdExactSignatureAt(
-                base,size,kReachFpMarkerComposeRva,kFpMarkerComposeAob) ||
             !ReachColdExactSignatureAt(
                 base,size,kReachFpVisiblePaletteRva,kFpPaletteAob) ||
             !ReachColdExactSignatureAt(
                 base,size,kReachFpCameraRebuildRva,kFpCameraAob) ||
-            !ReachColdExecutableAddress(base + kReachFpCameraUploadRva) ||
-            !ReachColdExactSignatureAt(
-                base,size,kReachProjectileFireRva,kProjectileFireAob) ||
-            !ReachColdExactSignatureAt(
-                base,size,kReachProjectileOriginBlockRva,
-                kProjectileOriginBlockAob) ||
-            !ReachColdExactSignatureAt(
-                base,size,kReachFpWeaponSlotForDatumRva,
-                kFpWeaponSlotForDatumAob) ||
-            !ReachColdExactSignatureAt(
-                base,size,kReachFpWeaponSlotConsumerRva,
-                kFpWeaponSlotConsumerAob) ||
-            !ReachVerifyRel32Call(
-                base,kReachProjectileFireCallerRva,kReachProjectileFireRva) ||
-            !ReachVerifyRel32Call(
-                base,kReachFpWeaponSlotConsumerCallRva,
-                kReachFpWeaponSlotForDatumRva) ||
-            !ReachVerifyRel32Call(
-                base,kReachFpMarkerQueryInterpolationCallRva,
-                kReachFpInterpolateRva) ||
-            !ReachVerifyRel32Call(
-                base,kReachFpMarkerComposeQueryCallRva,
-                kReachFpMarkerQueryRva) ||
-            !ReachVerifyRel32Call(
-                base,kReachFpMarkerComposeMatrixCallRva,
-                kReachFpMarkerMatrixComposeRva) ||
-            kReachFpMarkerQueryEndRvaExclusive > size ||
-            kReachFpMarkerComposeEndRvaExclusive > size ||
-            kReachProjectileOriginDecisionRva + 5 > size ||
-            kReachProjectileOriginStockFalseRva !=
-                kReachProjectileOriginDecisionRva + 5 ||
-            kReachProjectileOriginNativeTrueRva !=
-                kReachProjectileOriginDecisionRva + 15)
+            !ReachColdExecutableAddress(base + kReachFpCameraUploadRva))
         {
-            LOG("Reach FP install: exact interpolation/palette/camera/"
-                "projectile-origin "
+            LOG("Reach FP install: exact interpolation/palette/camera "
                 "signatures failed; stock Reach remains active");
             return false;
         }
@@ -13341,61 +12857,46 @@ namespace
             return false;
         }
 
+        // Mandatory HREK-only authored-crosshair parity gate. Reach VR must not
+        // arm as a mixed transaction with a flat native crosshair. A missing,
+        // ambiguous, or layout-mismatched function rejects the complete Reach
+        // transaction before hook installation or VR ownership.
+        void* hudDrawWidget = nullptr;
+        if (!ResolveReachHrekChudDrawWidget(base, size, hudDrawWidget))
+        {
+            g_reachChudParityFailedGeneration.store(
+                generation, std::memory_order_release);
+            LOG("Reach camera install: HREK authored-crosshair parity gate "
+                "rejected the complete VR transaction");
+            FreeLibrary(moduleReference);
+            return false;
+        }
+        const AuthoredReticlePreparationResult reticlePreparation =
+            VR_PrepareAuthoredReticleResources();
+        if (reticlePreparation ==
+            AuthoredReticlePreparationResult::NotReady)
+        {
+            FreeLibrary(moduleReference);
+            return false;
+        }
+        if (reticlePreparation != AuthoredReticlePreparationResult::Ready)
+        {
+            g_reachChudParityFailedGeneration.store(
+                generation, std::memory_order_release);
+            LOG("Reach camera install: authored-reticle resources failed cold "
+                "preparation; mandatory VR transaction rejected");
+            FreeLibrary(moduleReference);
+            return false;
+        }
+
         void* inner = reinterpret_cast<void*>(base + kReachPlayerViewRenderRva);
         void* outer = reinterpret_cast<void*>(base + kReachMainRenderViewRva);
         void* fpInterpolate =
             reinterpret_cast<void*>(base + kReachFpInterpolateRva);
-        void* fpMarkerQuery =
-            reinterpret_cast<void*>(base + kReachFpMarkerQueryRva);
-        void* fpMarkerCompose =
-            reinterpret_cast<void*>(base + kReachFpMarkerComposeRva);
         void* fpPalette =
             reinterpret_cast<void*>(base + kReachFpVisiblePaletteRva);
         void* fpCamera =
             reinterpret_cast<void*>(base + kReachFpCameraRebuildRva);
-        void* fpProjectileOrigin = reinterpret_cast<void*>(
-            base + kReachProjectileOriginDecisionRva);
-        void* fpProjectileOriginRelay = VirtualAlloc(
-            nullptr, kReachFpProjectileOriginRelayAllocationSize,
-            MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
-        if (!fpProjectileOriginRelay ||
-            !ReachWriteFpProjectileOriginRelay(
-                fpProjectileOriginRelay,
-                kReachFpProjectileOriginRelayAllocationSize,
-                base + kReachProjectileOriginStockFalseRva))
-        {
-            const bool relayReleased = !fpProjectileOriginRelay ||
-                VirtualFree(fpProjectileOriginRelay, 0, MEM_RELEASE) != FALSE;
-            if (relayReleased)
-            {
-                FreeLibrary(moduleReference);
-            }
-            else
-            {
-                // Keep the unreachable allocation and exact title reference in
-                // worker-owned teardown state so a transient VirtualFree
-                // failure cannot leak one page on every install poll.
-                g_reachCamera.base = base;
-                g_reachCamera.size = size;
-                g_reachCamera.generation = generation;
-                g_reachCamera.moduleReference = moduleReference;
-                g_reachCamera.fpProjectileOriginRelay =
-                    fpProjectileOriginRelay;
-                g_reachCamera.fpProjectileOriginRelaySize =
-                    kReachFpProjectileOriginRelayTemplate.size();
-                g_reachCamera.fpProjectileOriginRelayAllocationSize =
-                    kReachFpProjectileOriginRelayAllocationSize;
-                g_reachCamera.armed.store(false, std::memory_order_release);
-                g_reachCamera.teardownRequested.store(
-                    true, std::memory_order_release);
-                g_reachCamera.installed.store(true, std::memory_order_release);
-            }
-            LOG("Reach FP install: projectile-origin relay setup failed; "
-                "%s",
-                relayReleased ? "stock Reach remains active" :
-                    "cleanup state retained for worker retry");
-            return false;
-        }
         const bool innerCreated = MH_CreateHook(inner,
                 reinterpret_cast<void*>(&ReachPlayerViewRenderDetour),
                 reinterpret_cast<void**>(&g_reachOrigPlayerViewRender)) == MH_OK;
@@ -13405,46 +12906,28 @@ namespace
         const bool fpInterpolateCreated = outerCreated && MH_CreateHook(
                 fpInterpolate,reinterpret_cast<void*>(&ReachFpInterpolate),
                 reinterpret_cast<void**>(&g_reachOrigFpInterpolate)) == MH_OK;
-        const bool fpMarkerQueryCreated = fpInterpolateCreated && MH_CreateHook(
-                fpMarkerQuery,reinterpret_cast<void*>(&ReachFpMarkerQuery),
-                reinterpret_cast<void**>(&g_reachOrigFpMarkerQuery)) == MH_OK;
-        const bool fpMarkerComposeCreated = fpMarkerQueryCreated && MH_CreateHook(
-                fpMarkerCompose,reinterpret_cast<void*>(&ReachFpMarkerCompose),
-                reinterpret_cast<void**>(&g_reachOrigFpMarkerCompose)) == MH_OK;
-        const bool fpPaletteCreated = fpMarkerComposeCreated && MH_CreateHook(
+        const bool fpPaletteCreated = fpInterpolateCreated && MH_CreateHook(
                 fpPalette,reinterpret_cast<void*>(&ReachFpPalette),
                 reinterpret_cast<void**>(&g_reachOrigFpPalette)) == MH_OK;
         const bool fpCameraCreated = fpPaletteCreated && MH_CreateHook(
                 fpCamera,
                 reinterpret_cast<void*>(&ReachFpCameraRebuildDetour),
                 reinterpret_cast<void**>(&g_reachOrigFpCameraRebuild)) == MH_OK;
-        const bool fpProjectileOriginCreated = fpCameraCreated && MH_CreateHook(
-                fpProjectileOrigin,fpProjectileOriginRelay,
-                &g_reachOrigFpProjectileOriginDecision) == MH_OK;
-        const bool fpProjectileOriginReady = fpProjectileOriginCreated &&
-            ReachWriteFpProjectileOriginRelay(
-                fpProjectileOriginRelay,
-                kReachFpProjectileOriginRelayAllocationSize,
-                reinterpret_cast<uintptr_t>(
-                    g_reachOrigFpProjectileOriginDecision)) &&
-            ReachColdVerifyFpProjectileOriginTrampoline(
-                base,g_reachOrigFpProjectileOriginDecision,
-                fpProjectileOriginRelay);
+        const bool hudDrawWidgetCreated = fpCameraCreated && MH_CreateHook(
+                hudDrawWidget,
+                reinterpret_cast<void*>(&ReachHudDrawWidgetDetour),
+                reinterpret_cast<void**>(&g_reachOrigHudDrawWidget)) == MH_OK;
         if (!innerCreated || !outerCreated ||
-            !fpInterpolateCreated || !fpMarkerQueryCreated ||
-            !fpMarkerComposeCreated ||
-            !fpPaletteCreated || !fpCameraCreated ||
-            !fpProjectileOriginReady)
+            !fpInterpolateCreated || !fpPaletteCreated || !fpCameraCreated ||
+            !hudDrawWidgetCreated)
         {
             bool cleanupOk=true;
             bool innerRetained=innerCreated;
             bool outerRetained=outerCreated;
             bool fpInterpolateRetained=fpInterpolateCreated;
-            bool fpMarkerQueryRetained=fpMarkerQueryCreated;
-            bool fpMarkerComposeRetained=fpMarkerComposeCreated;
             bool fpPaletteRetained=fpPaletteCreated;
             bool fpCameraRetained=fpCameraCreated;
-            bool fpProjectileOriginRetained=fpProjectileOriginCreated;
+            bool hudDrawWidgetRetained=hudDrawWidgetCreated;
             auto removeCreated=[&](bool created,void* target,bool& retained) {
                 if (!created) return;
                 const MH_STATUS status=MH_RemoveHook(target);
@@ -13453,37 +12936,21 @@ namespace
                 else
                     cleanupOk=false;
             };
-            removeCreated(fpProjectileOriginCreated,fpProjectileOrigin,
-                          fpProjectileOriginRetained);
+            removeCreated(hudDrawWidgetCreated,hudDrawWidget,
+                          hudDrawWidgetRetained);
             removeCreated(fpCameraCreated,fpCamera,fpCameraRetained);
             removeCreated(fpPaletteCreated,fpPalette,fpPaletteRetained);
-            removeCreated(fpMarkerComposeCreated,fpMarkerCompose,
-                          fpMarkerComposeRetained);
-            removeCreated(fpMarkerQueryCreated,fpMarkerQuery,
-                          fpMarkerQueryRetained);
             removeCreated(fpInterpolateCreated,fpInterpolate,
                           fpInterpolateRetained);
             removeCreated(outerCreated,outer,outerRetained);
             removeCreated(innerCreated,inner,innerRetained);
 
-            bool fpProjectileOriginRelayRetained=true;
-            if (!fpProjectileOriginRetained)
-            {
-                if (VirtualFree(
-                        fpProjectileOriginRelay, 0, MEM_RELEASE))
-                    fpProjectileOriginRelayRetained=false;
-                else
-                    cleanupOk=false;
-            }
             if (!innerRetained) g_reachOrigPlayerViewRender=nullptr;
             if (!outerRetained) g_reachOrigMainRenderView=nullptr;
             if (!fpInterpolateRetained) g_reachOrigFpInterpolate=nullptr;
-            if (!fpMarkerQueryRetained) g_reachOrigFpMarkerQuery=nullptr;
-            if (!fpMarkerComposeRetained) g_reachOrigFpMarkerCompose=nullptr;
             if (!fpPaletteRetained) g_reachOrigFpPalette=nullptr;
             if (!fpCameraRetained) g_reachOrigFpCameraRebuild=nullptr;
-            if (!fpProjectileOriginRetained)
-                g_reachOrigFpProjectileOriginDecision=nullptr;
+            if (!hudDrawWidgetRetained) g_reachOrigHudDrawWidget=nullptr;
             if (cleanupOk)
             {
                 FreeLibrary(moduleReference);
@@ -13498,34 +12965,19 @@ namespace
                 g_reachCamera.outerTarget=outerRetained?outer:nullptr;
                 g_reachCamera.fpInterpolateTarget=
                     fpInterpolateRetained?fpInterpolate:nullptr;
-                g_reachCamera.fpMarkerQueryTarget=
-                    fpMarkerQueryRetained?fpMarkerQuery:nullptr;
-                g_reachCamera.fpMarkerComposeTarget=
-                    fpMarkerComposeRetained?fpMarkerCompose:nullptr;
                 g_reachCamera.fpPaletteTarget=
                     fpPaletteRetained?fpPalette:nullptr;
                 g_reachCamera.fpCameraTarget=
                     fpCameraRetained?fpCamera:nullptr;
-                g_reachCamera.fpProjectileOriginTarget=
-                    fpProjectileOriginRetained?fpProjectileOrigin:nullptr;
-                g_reachCamera.fpProjectileOriginRelay=
-                    fpProjectileOriginRelayRetained?
-                        fpProjectileOriginRelay:nullptr;
-                g_reachCamera.fpProjectileOriginRelaySize=
-                    fpProjectileOriginRelayRetained?
-                        kReachFpProjectileOriginRelayTemplate.size():0;
-                g_reachCamera.fpProjectileOriginRelayAllocationSize=
-                    fpProjectileOriginRelayRetained?
-                        kReachFpProjectileOriginRelayAllocationSize:0;
-                g_reachFpWeaponSlotForDatum=fpProjectileOriginRetained?
-                    reinterpret_cast<ReachFpWeaponSlotForDatumFn>(
-                        base+kReachFpWeaponSlotForDatumRva):nullptr;
+                g_reachCamera.hudDrawWidgetTarget=
+                    hudDrawWidgetRetained?hudDrawWidget:nullptr;
                 g_reachCamera.armed.store(false,std::memory_order_release);
                 g_reachCamera.teardownRequested.store(
                     true,std::memory_order_release);
                 g_reachCamera.installed.store(true,std::memory_order_release);
             }
-            LOG("Reach camera install: MinHook failed; stock Reach remains active");
+            LOG("Reach camera install: mandatory parity hook creation failed; "
+                "the complete Reach VR transaction was rejected");
             return false;
         }
 
@@ -13544,21 +12996,11 @@ namespace
         g_reachCamera.innerTarget = inner;
         g_reachCamera.outerTarget = outer;
         g_reachCamera.fpInterpolateTarget = fpInterpolate;
-        g_reachCamera.fpMarkerQueryTarget = fpMarkerQuery;
-        g_reachCamera.fpMarkerComposeTarget = fpMarkerCompose;
         g_reachCamera.fpPaletteTarget = fpPalette;
         g_reachCamera.fpCameraTarget = fpCamera;
-        g_reachCamera.fpProjectileOriginTarget = fpProjectileOrigin;
-        g_reachCamera.fpProjectileOriginRelay = fpProjectileOriginRelay;
-        g_reachCamera.fpProjectileOriginRelaySize =
-            kReachFpProjectileOriginRelayTemplate.size();
-        g_reachCamera.fpProjectileOriginRelayAllocationSize =
-            kReachFpProjectileOriginRelayAllocationSize;
+        g_reachCamera.hudDrawWidgetTarget = hudDrawWidget;
         g_reachFpCameraUpload = reinterpret_cast<ReachFpCameraUploadFn>(
             base + kReachFpCameraUploadRva);
-        g_reachFpWeaponSlotForDatum =
-            reinterpret_cast<ReachFpWeaponSlotForDatumFn>(
-                base + kReachFpWeaponSlotForDatumRva);
         g_reachCamera.installedAtMs = GetTickCount64();
         g_reachCamera.motionBlurVars[0] = {
             reachMotionBlurScale, reachMotionBlurScaleOriginal};
@@ -13585,8 +13027,6 @@ namespace
             0, std::memory_order_relaxed);
         g_reachFpCameraLoggedGeneration.store(
             0, std::memory_order_release);
-        g_reachFpMarkerSharedTransform.generation.store(
-            0, std::memory_order_release);
         g_aimSeen.store(false, std::memory_order_release);
         g_camValid.store(false, std::memory_order_release);
         g_baseCamValid.store(false, std::memory_order_release);
@@ -13598,11 +13038,9 @@ namespace
         if (MH_EnableHook(inner) != MH_OK ||
             MH_EnableHook(outer) != MH_OK ||
             MH_EnableHook(fpInterpolate) != MH_OK ||
-            MH_EnableHook(fpMarkerQuery) != MH_OK ||
-            MH_EnableHook(fpMarkerCompose) != MH_OK ||
             MH_EnableHook(fpPalette) != MH_OK ||
             MH_EnableHook(fpCamera) != MH_OK ||
-            MH_EnableHook(fpProjectileOrigin) != MH_OK)
+            MH_EnableHook(hudDrawWidget) != MH_OK)
         {
             // State was published before the first enable, so even a partial
             // MinHook failure can use the same disable/quiesce/remove proof as
@@ -13621,20 +13059,15 @@ namespace
             return false;
         }
         LOG("Reach camera core installed: outer/inner stereo + FP "
-            "interpolation/marker-query/marker-compose/palette + per-eye "
-            "world-projection camera "
+            "interpolation/palette + per-eye world-projection camera "
             "transactions hooked; waiting one-second fresh-camera interval "
             "before arming");
         LOG("Reach FP camera hook installed for the exact HREK-homologous "
             "nested workspace; per-eye execution pending");
-        LOG("Reach FP projectile origin installed: output-user 0 slot 0 alone "
-            "takes the title-native projectiles-use-weapon-origin branch; "
-            "direction and all shared weapon tags remain stock");
-        LOG("Reach FP marker query installed: nested interpolation ownership "
-            "prevents double transforms; generation-matched fallback applies once");
-        LOG("Reach FP marker composer installed: HREK-exact assault-rifle "
-            "primary_trigger world matrix is shared with the local slot-0 "
-            "projectile-origin transaction");
+        LOG("Reach crosshair: mandatory HREK class-2 authored-widget redirect "
+            "hooked at haloreach.dll+0x%llX; activation waits for stereo arm",
+            static_cast<unsigned long long>(
+                reinterpret_cast<uintptr_t>(hudDrawWidget) - base));
         LOG("Reach comfort evidence: blurScale=%llX blurMax=%llX "
             "(authored %.4f/%.4f); VR default keeps scale finite and zeros max",
             static_cast<unsigned long long>(
@@ -13684,50 +13117,6 @@ namespace
 
     void LogReachFpStatusIfNew()
     {
-        const uint64_t primaryTriggerPublished=
-            g_reachFpPrimaryTriggerPublished.load(std::memory_order_relaxed);
-        if (primaryTriggerPublished &&
-            !g_reachFpPrimaryTriggerPublishLogged.exchange(
-                true,std::memory_order_relaxed))
-        {
-            LOG("Reach FP primary_trigger proof: HREK-authored final marker "
-                "composer published world matrix (count=%llu)",
-                static_cast<unsigned long long>(primaryTriggerPublished));
-        }
-        const uint64_t projectileApplied=
-            g_reachFpPrimaryTriggerProjectileApplied.load(
-                std::memory_order_relaxed);
-        if (projectileApplied &&
-            !g_reachFpPrimaryTriggerApplyLogged.exchange(
-                true,std::memory_order_relaxed))
-        {
-            LOG("Reach FP primary_trigger proof: composed world origin copied "
-                "into local slot-0 firing transaction (count=%llu)",
-                static_cast<unsigned long long>(projectileApplied));
-        }
-        const uint64_t markerComposeCalls=g_reachFpMarkerComposeCalls.load(
-            std::memory_order_relaxed);
-        if (markerComposeCalls &&
-            !g_reachFpMarkerComposeDiagnosticLogged.exchange(
-                true,std::memory_order_relaxed))
-        {
-            LOG("Reach FP marker composer diagnostics: calls=%llu "
-                "HREK-primary-trigger-matches=%llu query-calls=%llu "
-                "nested-owned=%llu fallback-applied=%llu",
-                static_cast<unsigned long long>(markerComposeCalls),
-                static_cast<unsigned long long>(
-                    g_reachFpPrimaryTriggerMatched.load(
-                        std::memory_order_relaxed)),
-                static_cast<unsigned long long>(
-                    g_reachFpMarkerQueryCalls.load(
-                        std::memory_order_relaxed)),
-                static_cast<unsigned long long>(
-                    g_reachFpMarkerQueryNestedOwned.load(
-                        std::memory_order_relaxed)),
-                static_cast<unsigned long long>(
-                    g_reachFpMarkerQueryFallbackApplied.load(
-                        std::memory_order_relaxed)));
-        }
         const uint64_t key=g_reachFpStatus.key.load(std::memory_order_acquire);
         if (!key || key==g_reachFpLoggedStatusKey.load(
                 std::memory_order_relaxed)) return;
@@ -13791,7 +13180,8 @@ namespace
             ReachRenderCandidate_GetPreflight(epoch);
         const bool ready = preflight.Complete() &&
             ReachRenderCandidate_IsPreflightCurrent(preflight) &&
-            VR_ReachDisplayReady(epoch);
+            VR_ReachDisplayReady(epoch) &&
+            VR_CanPrepareAuthoredReticleResources();
 
         if (!installed)
         {
@@ -13804,8 +13194,9 @@ namespace
                 kReachRenderSafetyIntervalMs)
         {
             g_reachCamera.armed.store(true, std::memory_order_release);
-            LOG("Reach camera core armed: per-eye stereo transaction is live "
-                "(fail-open to stock on any unmet precondition)");
+            LOG("Reach camera core armed: complete six-hook per-eye stereo + "
+                "authored-crosshair transaction is live; failed owned eyes "
+                "are revoked and never published");
         }
     }
 #endif
@@ -13870,8 +13261,8 @@ namespace
                     haveReachRange);
                 VR_ReachRenderCandidate_ColdPoll();
                 // Install/arm/remove the permanent Reach per-eye camera core.
-                // Fail-open: it never installs until the loaded-image preflight
-                // and VR eye-capture proof pass, and never touches Halo 3/ODST.
+                // It never installs until loaded-image preflight and VR
+                // eye-capture proof pass, and never touches Halo 3/ODST.
                 ReachCameraCore_Poll(
                     reachBase, reachSize, reachGeneration, haveReachRange);
             }
@@ -14238,6 +13629,45 @@ bool Game_IsCameraOnlyBringup()
     return OdstCameraOnlyContext();
 #else
     return false;
+#endif
+}
+
+bool Game_OwnsReachAuthoredReticle()
+{
+#if HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE
+    if (TitleAdapter_GetActiveTitle() != GameTitle::HaloReach)
+        return false;
+    const uint32_t cameraGeneration =
+        g_reachCamera.generation.load(std::memory_order_acquire);
+    return cameraGeneration != 0 &&
+        TitleAdapter_GetGeneration(GameTitle::HaloReach) ==
+            cameraGeneration &&
+        g_reachCamera.installed.load(std::memory_order_acquire) &&
+        g_reachCamera.armed.load(std::memory_order_acquire) &&
+        !g_reachCamera.teardownRequested.load(std::memory_order_acquire) &&
+        g_enabled.load(std::memory_order_acquire) && VR_IsStereoEnabled();
+#else
+    return false;
+#endif
+}
+
+void Game_RejectReachAuthoredReticle(uint32_t expectedGeneration)
+{
+#if HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE
+    if (!expectedGeneration ||
+        TitleAdapter_GetActiveTitle() != GameTitle::HaloReach ||
+        TitleAdapter_GetGeneration(GameTitle::HaloReach) !=
+            expectedGeneration ||
+        !g_reachCamera.installed.load(std::memory_order_acquire))
+    {
+        return;
+    }
+    g_reachChudParityFailedGeneration.store(
+        expectedGeneration, std::memory_order_release);
+    g_reachCamera.armed.store(false, std::memory_order_release);
+    g_reachCamera.teardownRequested.store(true, std::memory_order_release);
+#else
+    (void)expectedGeneration;
 #endif
 }
 

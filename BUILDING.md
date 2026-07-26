@@ -1,9 +1,11 @@
 # Building Halo MCC VR
 
 This builds one cumulative Halo 3 + ODST + Halo: Reach runtime. Every title is a
-permanent, fail-open part of the single Release build -- there is no experimental
-Reach flag to toggle. Every generated file stays under ignored `out/`; nothing
-writes to an MCC installation.
+permanent part of the single Release build -- there is no experimental Reach flag
+to toggle. An unproven or mismatched adapter does not acquire VR ownership; once
+a transaction is claimed, failure rejects it instead of rerendering a flat path.
+Every generated file stays under ignored `out/`; nothing writes to an MCC
+installation.
 
 ## Requirements
 
@@ -34,20 +36,26 @@ it is never linked into `halo3xr.dll`. The build identity line reports
 
 ## How the permanent Reach camera core behaves
 
-Reach is fail-open: it renders exactly as stock until its runtime proof passes.
+Reach ownership is all-or-nothing: no Reach VR hook is enabled until its full
+runtime proof passes.
 The 50 ms title worker verifies the exact loaded Reach PE/file identity, every
 manifest-pinned executable signature and function-body hash, the required caller
 and first-person-camera flow edges, and fixed ranges once per sole-title admission
 epoch, and the Present path validates
 the exact swapchain buffer 0 and builds two private per-eye caches. Only after
 that proof and a one-second fresh-camera safety interval does the worker install
-five hooks -- inner/outer stereo, interpolation, visible palette, and the exact
-first-person camera rebuild -- and arm the per-eye transaction. Any unmet
-precondition, an invalid camera,
-or a fault falls open to one original renderer call, and Halo 3 and ODST are
-never touched. If visibility ownership was already committed, that fallback
-uses the same bounded head-centre camera/matrices rather than mixing head culling
-with stock aim matrices. When Reach is armed the log reports `Reach camera core armed` and
+six mandatory hooks -- inner/outer stereo, interpolation, visible palette, the
+exact first-person camera rebuild, and the HREK-proven class-2 CHUD widget
+transaction -- and arm the per-eye transaction. A failed cold proof admits no
+Reach VR ownership. After ownership, any mandatory authored-crosshair failure
+invalidates the eye pair, disarms that exact title generation, and enters
+verified teardown; no partial flat, procedural, transparent, or approximate
+Reach VR mode continues. Before ownership arms, an exact inner call may still
+execute the untouched engine renderer with the same bounded head-centre
+camera/matrices. Once an eye transaction is claimed, failure suppresses that
+call and enters teardown; it is never rerun through the flat renderer or
+published as a completed Reach stereo pair.
+Halo 3 and ODST are never touched. When Reach is armed the log reports `Reach camera core armed` and
 `Reach camera bring-up: head tracking, stereo, and 6DOF ON`.
 
 Before Reach computes CPU visibility, the exact normal outer hook reads one
@@ -59,7 +67,7 @@ relative-eye orientations to select a binocular angular-union FOV. The proven st
 frustum/projection helpers rebuild that centre and mirror it to the secondary
 render camera that `player_view_compute_visibility` consumes. The original outer
 function still runs exactly once. Its bounded player-view camera/matrix state is
-rebuilt to the same centre for coherent fallback, then that state and only the
+rebuilt to the same centre for the coherent pre-ownership path, then that state and only the
 proven `0x2A8` workspace camera-pair bytes are restored afterward; the
 engine-owned callback remains untouched.
 
@@ -82,8 +90,8 @@ and `0xC4` derived/projection block in the rebuild's exact nested camera-stack
 workspace for the crushed viewmodel pair and reruns Reach's own two-pointer
 constant uploader. Only after that world-projection upload returns does the hot
 path publish its lock-free execution status for worker-thread logging. This
-mirrors the accepted Halo 3/ODST last-writer transaction; normal stock, fallback,
-nested, screenshot, and teardown paths do not enter the substitution scope.
+mirrors the accepted Halo 3/ODST last-writer transaction; non-owned, nested,
+screenshot, and teardown paths do not enter the substitution scope.
 
 Reach also consumes the universal `motion_blur` comfort setting with the same
 player-visible outcome as the accepted Halo 3/ODST paths. After the pinned
@@ -100,7 +108,29 @@ cannot create a competing look transform under the HMD view. The original
 pre-head camera direction is not reused as culling or claimed as projectile aim.
 The current unaccepted candidate also carries Reach controller aim and guarded
 two-arm IK through the proven interpolation and visible-palette boundaries.
-Native HUD remains withheld. Reach aim/IK are not release-accepted until the
+
+Reach's authored crosshair reuses the Halo 3/ODST native-widget transaction.
+The cold worker accepts only one loaded function with the official optimized
+HREK entry, unwind extent, five-argument ABI, and descriptor-`+4` class read;
+the bridge has no retail-derived RVA or Reclaimer input. It pre-creates the
+OpenXR/D3D capture resources before hook installation, so the hot widget hook
+only redirects exact scripting class `2`. The configured capture eye supplies
+the live authored texture (including friendly-green and hostile-red state), the
+other eye suppresses the flat copy, and the compositor admits Reach only with
+the matching completed eye pair, live owner, and prepared-frame serial. Every
+newly admitted outer attempt first invalidates prior-attempt authored art. If
+either eye emits class 2 while the authored crosshair is required, the configured
+capture must complete before the final eye can publish; an attempt in which Reach
+emits no class 2 intentionally submits no quad. XR acquire/wait, both world-eye
+resolves, world-chain release, authored upload and authored-chain release all
+require exact `XR_SUCCESS` and precede layer admission. Timeout and
+session-loss-pending results abort the complete layer set, enter terminal
+session recovery, and pair any begun frame with an empty `xrEndFrame` without
+referencing a potentially outstanding image. A proof, capture, resolve, release,
+or ownership failure rejects and tears down the complete Reach transaction;
+there is no mixed flat, procedural, transparent, or widget-name substitute.
+
+Native HUD layout remains withheld. Reach aim/IK are not release-accepted until the
 exact packaged DLL passes the headset matrix and Halo 3/ODST regressions.
 
 For the current Reach headset candidate, the user explicitly approved one
@@ -117,7 +147,7 @@ is published with two fixed slots and lock-free pin/claim atomics; a changing or
 stale serial fails immediately. Present performs only the
 bounded identity/field snapshot plus `GetBuffer(0)`, device/descriptor capture,
 and COM retention described above; eye allocation and proof publication remain
-on the worker. Title teardown disables all five Reach hooks, verifies callback and
+on the worker. Title teardown disables all six Reach hooks, verifies callback and
 MinHook relay/wrapper RIP quiescence, then removes trampolines and releases the
 retained title module; a failed proof retains state and retries without rearming.
 

@@ -47,7 +47,10 @@ weapons, comfort, configuration, and lifecycle recovery.
   substitute live-graph parenting,
   body-only admission, inferred ownership masks, probes-as-runtime-behavior, or
   fallback/approximation paths. If exact transaction parity is not yet proven,
-  stop at stock behavior and continue static evidence work.
+  do not install or arm the affected VR ownership path; continue static evidence
+  work while the unclaimed engine transaction remains untouched. Once a VR
+  transaction is claimed, any mandatory-path failure rejects that transaction
+  and enters teardown; it must never rerender through a flat or stock path.
 - `tools/check-reach-fp-parity.ps1` is a mandatory candidate-packaging gate.
   Do not bypass, weaken, or remove it to make a candidate package.
 - Reuse shared behavior. Put only verified engine-specific signatures,
@@ -70,10 +73,24 @@ equivalent engine stages with title-specific evidence, but must not add latency,
 replace native CHUD with a panel/copy path, or reorder the transaction without
 explicit approval.
 
+## Reach evidence sources
+
+- New Halo: Reach feature evidence must come from the official HREK/mod tools.
+  Do not derive a new hook, layout, marker, class, constant, or behavior from
+  Reclaimer or an archived retail/console binary analysis.
+- Existing cumulative accepted behavior is preserved unless a scoped candidate
+  replaces it. The loaded MCC Reach module may be used only as the runtime
+  match target for an HREK-derived unique signature, executable boundary, ABI,
+  and layout proof; it is not a source for inventing a new binding.
+- If the HREK identity does not match exactly, reject the complete affected
+  transaction. Do not install a mixed partial feature or substitute a copied
+  cross-title offset, widget-name heuristic, procedural path, or approximation.
+
 ## Safety
 
-- Use unique AOB signatures and fail open to the stock game on zero or multiple
-  matches.
+- Use unique AOB signatures. Zero or multiple matches must prevent hook
+  installation and VR ownership before anything is claimed. This hook-safety
+  rule never authorizes a claimed transaction to rerender through stock output.
 - Never hook `halo3+0x120DF8`.
 - Never patch game files on disk or interact with Easy Anti-Cheat.
 - Keep logging, file I/O, locks, COM, allocation, and signature scanning out of

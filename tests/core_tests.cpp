@@ -18,6 +18,7 @@
 #include "input_logic.h"
 #include "odst_bringup_logic.h"
 #include "reach_adapter.h"
+#include "reach_chud_logic.h"
 #include "reach_observer_logic.h"
 #include "reach_render_candidate.h"
 #if HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE
@@ -240,6 +241,163 @@ int main()
                   !transactionGate.Observe(0) &&
                   transactionGate.Observe(playerArray + playerStride),
             "Reach continuity reset requires a new witnessed clear");
+    }
+
+    {
+        // Independent HREK literals: the validator must accept both optimized
+        // official chud_draw_widget bodies and reject any ownership-bearing
+        // byte drift. The rel32 itself is link-layout data and is intentionally
+        // allowed to differ.
+        constexpr std::array<uint8_t, 33> officialEntry{
+            0x48, 0x8B, 0xC4, 0x44, 0x89, 0x48, 0x20, 0x48, 0x89, 0x50, 0x10,
+            0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57,
+            0x48, 0x8D, 0x68, 0xA9, 0x48, 0x81, 0xEC, 0xC0, 0x00, 0x00, 0x00};
+        constexpr std::array<uint8_t, 3> tagDescriptorMove{
+            0x4C, 0x8B, 0xF2};
+        constexpr std::array<uint8_t, 3> sapienDescriptorMove{
+            0x4C, 0x8B, 0xFA};
+        constexpr std::array<uint8_t, 4> fifthArgumentLoad{
+            0x4C, 0x8B, 0x4D, 0x7F};
+        constexpr std::array<uint8_t, 6> tagClassRead{
+            0x41, 0x0F, 0xBE, 0x56, 0x04, 0xE8};
+        constexpr std::array<uint8_t, 6> sapienClassRead{
+            0x41, 0x0F, 0xBE, 0x57, 0x04, 0xE8};
+        constexpr std::array<uint8_t, 3> postClassCall{
+            0x48, 0x8B, 0xD0};
+        Check(kReachHrekChudDrawWidgetEntryBytes == officialEntry,
+            "Reach CHUD entry bytes remain the independently recorded official HREK signature");
+
+        std::array<uint8_t, kReachTagPlayChudDrawWidgetBodySize> tagPlay{};
+        std::memcpy(tagPlay.data(), officialEntry.data(), officialEntry.size());
+        std::memcpy(
+            tagPlay.data() + kReachTagPlayChudDescriptorMoveOffset,
+            tagDescriptorMove.data(), tagDescriptorMove.size());
+        std::memcpy(
+            tagPlay.data() + kReachTagPlayChudFifthArgumentLoadOffset,
+            fifthArgumentLoad.data(), fifthArgumentLoad.size());
+        std::memcpy(
+            tagPlay.data() + kReachTagPlayChudClassReadOffset,
+            tagClassRead.data(), tagClassRead.size());
+        tagPlay[kReachTagPlayChudClassReadOffset + 6] = 0x12;
+        tagPlay[kReachTagPlayChudClassReadOffset + 7] = 0x34;
+        tagPlay[kReachTagPlayChudClassReadOffset + 8] = 0x56;
+        tagPlay[kReachTagPlayChudClassReadOffset + 9] = 0x78;
+        std::memcpy(
+            tagPlay.data() + kReachTagPlayChudClassReadOffset + 10,
+            postClassCall.data(), postClassCall.size());
+        Check(ReachHrekChudDrawWidgetLayoutMatches(tagPlay),
+            "Reach CHUD validator accepts the exact official reach_tag_play layout");
+        Check(!ReachHrekChudDrawWidgetLayoutMatches(
+                  std::span<const uint8_t>(
+                      tagPlay.data(), tagPlay.size() - 1)),
+            "Reach CHUD validator rejects a non-official tag-play body size");
+        tagPlay[0] = 0x49;
+        Check(!ReachHrekChudDrawWidgetLayoutMatches(tagPlay),
+            "Reach CHUD validator rejects official-entry signature drift");
+        tagPlay[0] = officialEntry[0];
+        tagPlay[kReachTagPlayChudFifthArgumentLoadOffset + 3] = 0x7E;
+        Check(!ReachHrekChudDrawWidgetLayoutMatches(tagPlay),
+            "Reach CHUD validator rejects fifth-argument ABI drift in tag-play");
+        tagPlay[kReachTagPlayChudFifthArgumentLoadOffset + 3] = 0x7F;
+        tagPlay[kReachTagPlayChudClassReadOffset + 4] = 0x05;
+        Check(!ReachHrekChudDrawWidgetLayoutMatches(tagPlay),
+            "Reach CHUD validator rejects descriptor-class offset drift in tag-play");
+        tagPlay[kReachTagPlayChudClassReadOffset + 4] = 0x04;
+
+        std::array<uint8_t, kReachSapienPlayChudDrawWidgetBodySize> sapienPlay{};
+        std::memcpy(
+            sapienPlay.data(), officialEntry.data(), officialEntry.size());
+        std::memcpy(
+            sapienPlay.data() + kReachSapienPlayChudDescriptorMoveOffset,
+            sapienDescriptorMove.data(), sapienDescriptorMove.size());
+        std::memcpy(
+            sapienPlay.data() + kReachSapienPlayChudFifthArgumentLoadOffset,
+            fifthArgumentLoad.data(), fifthArgumentLoad.size());
+        std::memcpy(
+            sapienPlay.data() + kReachSapienPlayChudClassReadOffset,
+            sapienClassRead.data(), sapienClassRead.size());
+        sapienPlay[kReachSapienPlayChudClassReadOffset + 6] = 0xDE;
+        sapienPlay[kReachSapienPlayChudClassReadOffset + 7] = 0xAD;
+        sapienPlay[kReachSapienPlayChudClassReadOffset + 8] = 0xBE;
+        sapienPlay[kReachSapienPlayChudClassReadOffset + 9] = 0xEF;
+        std::memcpy(
+            sapienPlay.data() + kReachSapienPlayChudClassReadOffset + 10,
+            postClassCall.data(), postClassCall.size());
+        Check(ReachHrekChudDrawWidgetLayoutMatches(sapienPlay),
+            "Reach CHUD validator accepts the exact official sapien_play layout");
+        sapienPlay[kReachSapienPlayChudDescriptorMoveOffset + 2] = 0xF2;
+        Check(!ReachHrekChudDrawWidgetLayoutMatches(sapienPlay),
+            "Reach CHUD validator rejects descriptor-register drift in sapien-play");
+        sapienPlay[kReachSapienPlayChudDescriptorMoveOffset + 2] = 0xFA;
+        sapienPlay[kReachSapienPlayChudClassReadOffset + 10] = 0x49;
+        Check(!ReachHrekChudDrawWidgetLayoutMatches(sapienPlay),
+            "Reach CHUD validator rejects post-class-call flow drift in sapien-play");
+
+        using Action = ReachChudCrosshairAction;
+        Check(ReachDecideChudCrosshairAction(
+                  false, true, kReachChudCrosshairScriptingClass,
+                  true, true, 0, false) == Action::DrawStock &&
+              ReachDecideChudCrosshairAction(
+                  false, false, kReachChudCrosshairScriptingClass,
+                  true, true, -1, true) == Action::DrawStock,
+            "Reach CHUD stays stock outside its owned stereo transaction");
+        Check(ReachDecideChudCrosshairAction(
+                  true, false, kReachChudCrosshairScriptingClass,
+                  false, true, 0, false) == Action::RejectTransaction,
+            "Owned Reach CHUD rejects the transaction when its scripting-class descriptor is unreadable");
+        Check(ReachDecideChudCrosshairAction(
+                  true, true, 1, false, true, 0, false) ==
+                  Action::DrawStock,
+            "Reach CHUD never suppresses a non-crosshair scripting class");
+        Check(ReachDecideChudCrosshairAction(
+                  true, true, kReachChudCrosshairScriptingClass,
+                  false, true, 0, false) == Action::Suppress,
+            "The universal crosshair switch suppresses only the native class-2 widget");
+        Check(ReachDecideChudCrosshairAction(
+                  true, true, kReachChudCrosshairScriptingClass,
+                  true, false, 0, false) == Action::DrawStock,
+            "The universal kill-reticle switch deliberately restores the stock widget");
+        Check(ReachDecideChudCrosshairAction(
+                  true, true, kReachChudCrosshairScriptingClass,
+                  true, true, 0, false) == Action::CaptureAuthored &&
+              ReachDecideChudCrosshairAction(
+                  true, true, kReachChudCrosshairScriptingClass,
+                  true, true, 1, false) == Action::Suppress,
+            "Left-eye-first captures the authored widget once and suppresses its opposite-eye duplicate");
+        Check(ReachDecideChudCrosshairAction(
+                  true, true, kReachChudCrosshairScriptingClass,
+                  true, true, 1, true) == Action::CaptureAuthored &&
+              ReachDecideChudCrosshairAction(
+                  true, true, kReachChudCrosshairScriptingClass,
+                  true, true, 0, true) == Action::Suppress,
+            "Right-eye-first captures the authored widget once and suppresses its opposite-eye duplicate");
+        Check(ReachDecideChudCrosshairAction(
+                  true, true, kReachChudCrosshairScriptingClass,
+                  true, true, -1, true) == Action::RejectTransaction &&
+              ReachDecideChudCrosshairAction(
+                  true, true, kReachChudCrosshairScriptingClass,
+                  true, true, 2, false) == Action::RejectTransaction,
+            "Owned Reach CHUD rejects invalid eyes and never captures them as an authored fallback");
+
+        Check(ReachAuthoredCrosshairPairComplete(false, true, false) &&
+              ReachAuthoredCrosshairPairComplete(true, false, false) &&
+              ReachAuthoredCrosshairPairComplete(true, true, true) &&
+              !ReachAuthoredCrosshairPairComplete(true, true, false),
+            "A required Reach authored crosshair rejects a pair only when class 2 was emitted without a completed capture");
+
+        Check(ReachCanSubmitCompleteProjection(
+                  false, false, true, false) &&
+              ReachCanSubmitCompleteProjection(
+                  false, true, false, false) &&
+              ReachCanSubmitCompleteProjection(
+                  true, true, false, true) &&
+              !ReachCanSubmitCompleteProjection(
+                  true, false, false, true) &&
+              !ReachCanSubmitCompleteProjection(
+                  true, true, true, true) &&
+              !ReachCanSubmitCompleteProjection(
+                  true, true, false, false),
+            "Reach queues its world projection only after both eye uploads, authored upload success, and a live post-upload owner proof");
     }
 
     {
@@ -744,42 +902,6 @@ int main()
               kReachFpWeaponIkDisableValueRva == 0x04E38B61 &&
               kReachDebugBooleanType == 5,
             "Reach native weapon-IK bypass pins the exact named control and stock no-IK edge");
-
-        bool projectileOriginGateExact = true;
-        for (int active = 0; active <= 1; ++active)
-        {
-            for (int slot = -2; slot <= 3; ++slot)
-            {
-                projectileOriginGateExact = projectileOriginGateExact &&
-                    ReachShouldUseNativeWeaponProjectileOrigin(
-                        active != 0, slot) == (active != 0 && slot == 0);
-            }
-        }
-        Check(projectileOriginGateExact &&
-              kReachProjectileFireRva == 0x004C2710 &&
-              kReachProjectileFireEndRvaExclusive == 0x004C4923 &&
-              kReachProjectileFireBodySize == 0x2213 &&
-              kReachProjectileFireCallerRva == 0x004B63BE &&
-              kReachProjectileOriginBlockRva == 0x004C30AC &&
-              kReachProjectileOriginDecisionRva == 0x004C30C5 &&
-              kReachProjectileOriginStockFalseRva ==
-                  kReachProjectileOriginDecisionRva + 5 &&
-              kReachProjectileOriginNativeTrueRva ==
-                  kReachProjectileOriginDecisionRva + 15 &&
-              kReachFpWeaponSlotForDatumRva == 0x002B1218 &&
-              kReachFpWeaponSlotForDatumEndRvaExclusive == 0x002B1273 &&
-              kReachFpWeaponSlotForDatumBodySize == 0x5B &&
-              kReachFpWeaponSlotConsumerRva == 0x00121012 &&
-              kReachFpWeaponSlotConsumerCallRva == 0x0012101A &&
-              kReachFpMarkerQueryRva == 0x00120FDC &&
-              kReachFpMarkerQueryEndRvaExclusive == 0x001210D3 &&
-              kReachFpMarkerQueryInterpolationCallRva == 0x00121083 &&
-              kReachFpMarkerQueryInterpolationReturnRva == 0x00121088 &&
-              kReachBarrelProjectilesUseWeaponOriginMask == 0x0004 &&
-              kReachBarrelProjectileFiresInMarkerDirectionMask == 0x8000 &&
-              (kReachBarrelProjectilesUseWeaponOriginMask &
-               kReachBarrelProjectileFiresInMarkerDirectionMask) == 0,
-            "Reach projectile and primary-trigger marker paths pin their exact retail consumers and preserve the separate marker-direction policy");
 
         std::array<uint8_t, kReachMainRenderViewAob.size()> exactMask{};
         exactMask.fill(0xFF);

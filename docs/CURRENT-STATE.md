@@ -1,6 +1,6 @@
 # Current state
 
-Authoritative as of 2026-07-25. This file is the only active accepted-build
+Authoritative as of 2026-07-26. This file is the only active accepted-build
 pointer. Detailed pre-cleanup experiments remain available in Git history; they
 are evidence, not instructions.
 
@@ -231,17 +231,151 @@ This is a narrow Reach Spartan wrist/head-pose acceptance only. Halo 3, ODST,
 Elite, broader weapons, lifecycle transitions, HUD, and crosshair were not
 regression-tested, so the cumulative accepted pointer above remains unchanged.
 
-Pinned HREK now identifies the isolated muzzle correction without another
-camera, IK, or aim approximation. `weapon_barrel_flags` bit 2 is exactly
-`projectiles use weapon origin`; the separate bit 15 is marker-direction policy
-and must remain stock. Pinned retail repeats the native origin decision at
-`0x4C30C5` inside projectile routine `0x4C2710`, and its exact output-user
-first-person slot helper at `0x2B1218` proves whether the incoming full weapon
-datum is output-user 0 slot 0. The forward candidate detours only that five-byte
-decision, preserves the stock direction transaction, and forces the existing
-native weapon-origin branch only for that exact local primary FP datum. AI,
-remote, vehicle, alternate-slot, inactive, and exceptional paths remain stock;
-no shared tag or game file is mutated. Headset acceptance is pending.
+The follow-up projectile/marker lineage is rejected. Candidate
+`354327bb0d033e081fb95e46cb74010c36c2e083` packaged as
+`out/candidates/354327b-reach-fp-parity-20260725-172635238Z` with DLL SHA-256
+`9131E8337D26204ADE9E3B71AB08354BE975073D28C2614B093259201C4CEFAB`.
+The same unaccepted runtime remained in
+`f9f4fecee70bccb2d91c77319c438c237d13fb85`, packaged as
+`out/candidates/f9f4fec-reach-fp-parity-20260726-144300646Z` with DLL SHA-256
+`9BC56CC275F374542752941506BE141FA78C22E06417B632F8AC6DF21D3745A8`.
+The current headset observation is that the projectile origin is too far right
+and rearward instead of centered in front of the visible barrel. Neither
+candidate advances an accepted pointer; the installed hash for that observation
+still needs separate confirmation before it can be attributed to one exact DLL.
+
+The failed projectile-origin relay, first-person marker-query/composer detours,
+published-marker path, firing-frame write, and every runtime fallback belonging
+to that experiment have now
+been surgically removed. Reach bullets and muzzle markers remain wholly stock
+while the accepted camera, hands, display, image-quality, and frame-pacing work
+is preserved. Future bullet-alignment work requires fresh proof from official
+HREK/Reach mod tools only. Archived retail-binary or Reclaimer-derived facts are
+historical context, not admissible evidence for another runtime implementation.
+
+### UNTESTED Reach HREK-only authored-crosshair bridge - 2026-07-26
+
+The forward candidate adds only the Halo 3/ODST authored-crosshair transaction
+to the preserved Reach camera/hands/display/image-quality/frame-pacing line.
+Its new proof uses official HREK build `2023.07.17.176677.1-QFE1` and official
+mod-tool tag exports only. No retail-binary or Reclaimer-derived fact selected
+the hook, descriptor layout, scripting class, or widget.
+
+The pinned official executable hashes are `reach_tag_test.exe`
+`CBDD8448A87A433B0DFFC0DE47D06DB7A18B4BF868B96B057135DAA86790ABA8`,
+`reach_tag_play.exe`
+`450DFFE824DDE4C9866E4448491B8B41D82995DC93159260A4DEF07D059E732E`,
+and `sapien_play.exe`
+`1FDA21569B38C189EC88124C1A682DCCED8FBEE11ACFD4D2605F46663B26175B`.
+HREK's nine-value CHUD scripting enum identifies exact class `2` as
+`crosshair`. Official XML export of all 63 top-level CHUD definitions found 283
+top-level collections, including 85 class-2 collections across 55 definitions.
+The assault-rifle widget exposes authored normal/enemy/friendly color outputs,
+so the bridge captures Reach's live reticle art and hostile-red/friendly-green
+state rather than drawing a procedural approximation.
+
+The mandatory cold proof locates the common exact 33-byte HREK
+`chud_draw_widget` entry in the loaded title and accepts only one complete
+optimized official layout: `reach_tag_play.exe` RVA `0x0056B15C`, body `0x424`,
+SHA-256
+`81EBDE1BB1CF9337C01BA861B0CAF70980EBF6871DE079334B5BFB77ABA8978E`,
+or `sapien_play.exe` RVA `0x008265F4`, body `0x483`, SHA-256
+`C0EA71FA6BD0D26CA2EBAAED58FA182FE0CD8288274D3459271AD62CA2B9099E`.
+It also verifies argument retention, the fifth argument, descriptor-`+0x04`
+class read, unwind start, and complete body boundary/size. The hashes pin the
+official HREK evidence bodies; they are not loaded-title hash requirements
+because the explicitly wildcarded rel32 operands differ by official link
+layout. Full disassembly of both pinned bodies has no call or tail-jump edge to
+its own entry, so the hook's one original-trampoline call is non-recursive.
+
+Zero matches, multiple matches, or any boundary/body-size/fixed-layout mismatch
+rejects installation before the Reach camera/VR core owns anything. No Reach VR
+feature claims that frame and no alternate Reach VR mode is armed. The crosshair
+bridge is mandatory, and no VR-with-flat-stock-crosshair, widget-name,
+procedural, or approximation implementation exists. Explicit shared
+configuration remains authoritative: `crosshair=0` suppresses the widget,
+while `kill_reticle=0` requests stock drawing by user choice.
+
+Before creating any hook, cold admission preallocates the authored-reticle
+swapchain, every swapchain RTV, and the private authored texture/RTV under the
+Reach display resource lock. The Reach CHUD hot hook then uses only the prepared
+capture entry: it validates existing resources and the prepared frame, saves
+fixed D3D state, and performs no allocation, signature scan, logging, or lazy
+resource creation.
+OpenXR session/device readiness is release-published only after `xrBeginSession`
+and the exclusive frame-wait worker both succeed, and is revoked before stopping
+or fatal drain. It is a retryable install precondition. A title generation is latched rejected
+only after that readiness proof and a real swapchain/RTV/texture failure; merely
+winning the Reach Present proof before session creation cannot poison it.
+
+During owned stereo, an unreadable HREK descriptor or eye index outside `0..1`
+is an explicit transaction rejection, not permission to draw a possibly flat
+class-2 widget. Both conditions use the same eye invalidation, exact-generation
+latch, disarm, and teardown path as capture loss. Only draws outside Reach
+ownership and readable non-class-2 widgets select automatic stock drawing;
+`kill_reticle=0` remains the separate intentional user configuration.
+If teardown or an explicit VR disable revokes ownership after an eye has already
+entered the hook, that matching eye is marked failed and its entire CHUD pass is
+suppressed. The same rule applies as soon as the title adapter stops naming
+Reach active or publishes a different Reach module generation, even before the
+worker finishes hook teardown. The abandoned eye cannot fall through to a flat
+draw, capture shared art, or publish an eye copy.
+
+HREK's source-named `player_view_render` order places
+`chud_draw_screen_LDR` and `chud_draw_screen` after first-person work and before
+return, so class-2 capture remains inside the same per-eye world, weapon, native
+CHUD, and capture transaction as Halo 3/ODST. The configured capture eye feeds
+the authored VR quad while the other eye suppresses the flat copy.
+Every newly admitted outer attempt invalidates authored readiness left by an
+earlier attempt in the same prepared frame. If either eye emits class 2 while
+`crosshair=1` and `kill_reticle=1`, that exact pair cannot publish until the
+configured-eye capture completes. When Reach itself emits no class-2 widget in
+either eye, no quad is submitted; that is the current authored gameplay state,
+not reuse of earlier art or selection of another reticle implementation.
+
+If that prevalidated capture target is lost, the hook suppresses class 2,
+immediately invalidates the current eye pair, disarms the core, latches failure
+for that exact title-module generation, and requests the existing verified
+six-hook teardown. Callback plus frozen-thread detour/trampoline quiescence is
+required before removal and module release, and the latch prevents reinstall
+until a fresh generation. Upload failure takes the same path only after
+rechecking the compositor's captured generation against the active Reach title,
+live adapter generation, and installed owner; stale failures cannot disarm a
+new generation.
+An already claimed transaction is never rerun through Reach's flat renderer.
+While teardown is pending, disarmed matching inner calls are suppressed; only
+the pre-ownership safety interval may execute the untouched engine call.
+
+The compositor admits Reach's projection only when Reach is active, both Reach
+eye copies completed the exact current prepared serial, live installed/armed
+stereo ownership remains valid, the XR world swapchain acquire and wait both
+returned exact `XR_SUCCESS`, both eyes resolved successfully, and the world
+image release returned exact `XR_SUCCESS`. If
+class 2 was captured for that exact attempt, its authored texture must be ready
+for the same serial and its acquire, wait, upload, and release must each complete
+with exact `XR_SUCCESS` before the quad is eligible. A timeout or
+session-loss-pending result aborts the whole layer set and enters terminal
+session recovery. If `xrBeginFrame` already succeeded, an empty `xrEndFrame`
+closes that frame without referencing a potentially outstanding swapchain image.
+Reach never enters this path through
+`TitleCapability_ControllerAim` alone. A Reach upload failure does not enter the
+legacy transparent/procedural swapchain-maintenance path, and live exact
+ownership is rechecked after upload before any Reach layer can be queued. The
+failure clears both copied-eye serials and ages out authored readiness, so the
+current world projection, authored quad, and scope layer all disappear together.
+
+This candidate does **not** enable Reach HUD layout. HREK exposes three skins
+with five curvature records each, so Halo 3/ODST anchors, counts, and destination
+offsets cannot be copied. HUD sizing, aspect, curvature, and height remain
+withheld for a separate official-HREK candidate. Bullets and muzzle markers also
+remain wholly stock after the rejected projectile lineage was removed.
+
+The candidate is **UNTESTED**: it has no accepted artifact identity or headset
+result and does not advance the accepted pointer. Acceptance requires the exact
+clean commit/DLL hash to show no flat center reticle, authored VR reticle art,
+friendly-green and hostile-red changes, shared crosshair configuration parity,
+safe title transitions/teardown, and a Halo 3 regression for the touched shared
+authored-reticle composition path.
 
 ### Failed Reach final-palette-only candidate - 2026-07-24
 
@@ -433,7 +567,7 @@ before the inner `player_view_render` hook installs either HMD eye. The next
 forward candidate builds and mirrors one head-centred binocular-union camera at
 the exact normal outer boundary before visibility. Its union covers the actual
 widened symmetric image each canted eye rasterizes, and the bounded player-view
-state receives the same centre for coherent fallback. Both eyes then derive from
+state receives the same centre as coherent pre-ownership state. Both eyes then derive from
 that centre without applying turn, head pose, or lean twice. Head/pad/eye data is
 one lock-free exact-frame snapshot, and title teardown proves callback/relay
 quiescence before releasing hooks or the retained Reach module.
@@ -544,8 +678,8 @@ at `0x0026CC59`; when clear it calls the patchy helper at
 resources `_surface_patchy_fog_buffer0/1` and `Patchy Fog Global Parameters`.
 Source `b0710dc` sets only that proven skip bit immediately around each admitted
 VR eye render and restores only that bit in `__finally`, preserving atmospheric
-fog, distortion, camera/culling, eye order, capture, and all stock or fallback
-renders. Its exact headset result is recorded below.
+fog, distortion, camera/culling, eye order, capture, and all unclaimed or
+non-owned renders. Its exact headset result is recorded below.
 
 ### Unaccepted Reach patchy-fog headset pass / scale-performance follow-up - 2026-07-24
 
@@ -772,7 +906,9 @@ ODST on the accepted build:
   lifecycle transaction after the one-second fresh-camera safety interval.
 - Never hook `halo3+0x120DF8`.
 - Never write guessed camera, animation, model-root, or CHUD offsets.
-- Unique signatures only; fail open to stock rendering.
+- Unique signatures only. Zero or multiple matches install no hook and acquire
+  no VR ownership. Once claimed, a transaction failure is terminal for that
+  transaction and never rerenders through a flat or stock path.
 - Never patch game files or interact with Easy Anti-Cheat.
 - A successful candidate package automatically installs only its exact
   manifest-verified DLL/launcher through `tools/install-candidate.ps1`, with MCC

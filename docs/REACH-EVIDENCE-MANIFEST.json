@@ -7,6 +7,18 @@
     "release": "MCC_VR_ALPHA_0.2.2",
     "runtime_source_commit": "3a2a11bfc66b36e70f60282e91c9d5436f2e18d1"
   },
+  "new_work_evidence_policy": {
+    "effective_date": "2026-07-26",
+    "allowed_sources": [
+      "official HREK",
+      "official Reach mod tools"
+    ],
+    "forbidden_sources": [
+      "retail binary analysis",
+      "Reclaimer"
+    ],
+    "archived_retail_fields": "historical context only; not admissible proof for new runtime work"
+  },
   "retail_module": {
     "name": "haloreach.dll",
     "sha256": "738DD2D24EA3AEA12E1EE9AA4A61094BF116027D42004C35A19E5048608B0894",
@@ -26,6 +38,301 @@
       "tags",
       "data"
     ]
+  },
+  "hrek_authored_crosshair_candidate": {
+    "status": "UNTESTED",
+    "headset_accepted": false,
+    "accepted_pointer_advanced": false,
+    "evidence_scope": "OFFICIAL_HREK_AND_OFFICIAL_REACH_MOD_TOOLS_ONLY",
+    "hrek_build": "2023.07.17.176677.1-QFE1",
+    "retail_binary_evidence_used": false,
+    "reclaimer_evidence_used": false,
+    "official_binaries": {
+      "reach_tag_test": {
+        "name": "reach_tag_test.exe",
+        "sha256": "CBDD8448A87A433B0DFFC0DE47D06DB7A18B4BF868B96B057135DAA86790ABA8",
+        "role": "source-rich CHUD enum, ordering, and chud_draw_widget semantics"
+      },
+      "reach_tag_play": {
+        "name": "reach_tag_play.exe",
+        "sha256": "450DFFE824DDE4C9866E4448491B8B41D82995DC93159260A4DEF07D059E732E",
+        "role": "optimized chud_draw_widget production-layout variant"
+      },
+      "sapien_play": {
+        "name": "sapien_play.exe",
+        "sha256": "1FDA21569B38C189EC88124C1A682DCCED8FBEE11ACFD4D2605F46663B26175B",
+        "role": "independent optimized chud_draw_widget production-layout variant"
+      }
+    },
+    "chud_scripting_class_enum": {
+      "binary": "reach_tag_test.exe",
+      "pointer_array_rva": "0x0207F340",
+      "definition_and_count_rva": "0x0207F388",
+      "count": 9,
+      "values": {
+        "0": "undefined/use parent",
+        "1": "weapon stats",
+        "2": "crosshair",
+        "3": "shield",
+        "4": "grenades",
+        "5": "messages",
+        "6": "motion sensor",
+        "7": "chapter title",
+        "8": "cinematics"
+      },
+      "runtime_selector": {
+        "descriptor_signed_class_byte_offset": "0x04",
+        "required_value": 2,
+        "widget_name_selection_forbidden": true
+      }
+    },
+    "official_chud_tag_exports": {
+      "tool": "official HREK tool.exe export-tag-to-xml",
+      "source_glob": "tags\\ui\\chud\\*.chud_definition",
+      "ignored_evidence_root": "out\\hrek-evidence\\chud",
+      "exported_definition_count": 63,
+      "top_level_widget_collection_count": 283,
+      "crosshair_class_collection_count": 85,
+      "definition_count_with_crosshair_class": 55,
+      "exports_committed": false,
+      "assault_rifle": {
+        "collection_artist_name": "crosshair",
+        "scripting_class": "crosshair",
+        "widget": "ar_reticule",
+        "external_input_a": "weapon autoaim target",
+        "authored_color_outputs": [
+          "normal",
+          "enemy",
+          "friendly"
+        ],
+        "runtime_semantics": "preserve authored normal, hostile-red, and friendly-green state"
+      }
+    },
+    "chud_draw_widget": {
+      "abi": "five arguments: output user, descriptor, widget index, alternate path, draw state",
+      "development_semantics": {
+        "binary": "reach_tag_test.exe",
+        "rva": "0x00922AF0",
+        "descriptor_argument": 2,
+        "descriptor_incoming_register": "RDX",
+        "descriptor_retained_register": "R13",
+        "signed_class_byte_offset": "0x04"
+      },
+      "unique_entry_aob": "48 8B C4 44 89 48 20 48 89 50 10 55 56 57 41 54 41 55 41 56 41 57 48 8D 68 A9 48 81 EC C0 00 00 00",
+      "unique_entry_length": 33,
+      "optimized_variants": {
+        "reach_tag_play": {
+          "rva": "0x0056B15C",
+          "aob_match_count": 1,
+          "body_size": "0x424",
+          "body_sha256": "81EBDE1BB1CF9337C01BA861B0CAF70980EBF6871DE079334B5BFB77ABA8978E",
+          "descriptor_move": {
+            "offset": "0x45",
+            "bytes": "4C 8B F2",
+            "meaning": "RDX to R14"
+          },
+          "fifth_argument_load": {
+            "offset": "0x4A",
+            "bytes": "4C 8B 4D 7F"
+          },
+          "class_read": {
+            "offset": "0x2E1",
+            "prefix_bytes": "41 0F BE 56 04 E8",
+            "rel32_wildcard_length": 4,
+            "suffix_offset": "0x2EB",
+            "suffix_bytes": "48 8B D0"
+          }
+        },
+        "sapien_play": {
+          "rva": "0x008265F4",
+          "aob_match_count": 1,
+          "body_size": "0x483",
+          "body_sha256": "C0EA71FA6BD0D26CA2EBAAED58FA182FE0CD8288274D3459271AD62CA2B9099E",
+          "descriptor_move": {
+            "offset": "0x45",
+            "bytes": "4C 8B FA",
+            "meaning": "RDX to R15"
+          },
+          "fifth_argument_load": {
+            "offset": "0x4B",
+            "bytes": "4C 8B 4D 7F"
+          },
+          "class_read": {
+            "offset": "0x33C",
+            "prefix_bytes": "41 0F BE 57 04 E8",
+            "rel32_wildcard_length": 4,
+            "suffix_offset": "0x346",
+            "suffix_bytes": "48 8B D0"
+          }
+        }
+      },
+      "non_recursion_proof": {
+        "complete_hashed_bodies_disassembled": true,
+        "decoded_call_or_tail_jump_to_own_entry_count": 0,
+        "local_backward_branch_reaches_entry": false,
+        "sapien_indirect_call": "stack-local receiver +0x10 dispatch; not the five-argument CHUD entry",
+        "detour_original_trampoline_call_count": 1
+      },
+      "runtime_admission": {
+        "bridge_is_mandatory_for_reach_vr_transaction": true,
+        "loaded_entry_match_count_must_equal": 1,
+        "match_must_be_executable": true,
+        "unwind_function_begin_must_equal_match": true,
+        "complete_body_size_and_fixed_layout_must_match_one_exact_hrek_variant": true,
+        "official_body_sha256_pins_static_evidence_and_non_recursion_proof": true,
+        "official_body_sha256_is_loaded_title_admission_requirement": false,
+        "reason_body_sha256_is_not_runtime_requirement": "official link layouts have deliberately wildcarded rel32 operands",
+        "zero_multiple_boundary_body_size_or_layout_mismatch": "reject installation before the Reach camera/VR core acquires ownership",
+        "pre_ownership_mismatch_outcome": "no Reach VR hook or alternate Reach VR mode is armed",
+        "mixed_vr_with_flat_stock_crosshair_mode_permitted": false,
+        "procedural_or_approximation_fallback": false,
+        "retail_rva_or_layout_consumed": false
+      },
+      "resource_and_hot_capture_contract": {
+        "cold_preparation_function": "VR_PrepareAuthoredReticleResources",
+        "cold_preparation_result_states": ["NotReady", "Ready", "Failed"],
+        "session_device_not_ready_is_retryable_without_generation_latch": true,
+        "worker_install_requires_release_published_running_session_device_readiness": true,
+        "readiness_published_only_after_xr_begin_session_and_frame_wait_worker_start": true,
+        "readiness_revoked_before_stopping_or_fatal_drain": true,
+        "cold_preparation_before_any_hook_creation": true,
+        "cold_preparation_lock": "Reach display resource lock",
+        "cold_required_runtime_objects": [
+          "D3D device",
+          "D3D immediate context",
+          "OpenXR session"
+        ],
+        "cold_preallocated_resources": [
+          "reticle OpenXR swapchain",
+          "every reticle swapchain RTV",
+          "private authored-reticle texture",
+          "private authored-reticle RTV"
+        ],
+        "cold_failure_disposition": "reject installation before hook creation or ownership",
+        "reach_hot_begin_function": "VR_BeginPreparedAuthoredReticleCapture",
+        "reach_hot_end_function": "VR_EndPreparedAuthoredReticleCapture",
+        "reach_hot_end_completion_required": true,
+        "every_admitted_outer_attempt_invalidates_prior_attempt_authored_readiness": true,
+        "reach_hot_path_prebuilt_resources_only": true,
+        "reach_hot_path_allocation_signature_scan_logging_or_lazy_creation": false,
+        "halo3_odst_accepted_lazy_path_unchanged": true,
+        "capture_loss": {
+          "suppress_class_2_draw": true,
+          "invalidate_current_eye_pair_immediately": true,
+          "disarm_immediately": true,
+          "parity_failure_latch_scope": "exact title-module generation",
+          "request_verified_teardown": true,
+          "claimed_transaction_reruns_stock_renderer": false,
+          "matching_inner_calls_suppressed_while_teardown_pending": true,
+          "reinstall_same_generation": false,
+          "next_attempt_requires_fresh_module_generation": true
+        },
+        "verified_teardown": {
+          "reach_hook_count": 6,
+          "disable_before_removal": true,
+          "callback_counter_quiescence_required": true,
+          "frozen_thread_detour_and_trampoline_rip_quiescence_required": true,
+          "remove_hooks_and_release_module_only_after_proof": true
+        }
+      },
+      "owned_draw_decision_contract": {
+        "closed_actions": [
+          "DrawStock",
+          "Suppress",
+          "CaptureAuthored",
+          "RejectTransaction"
+        ],
+        "owned_unreadable_descriptor": "RejectTransaction",
+        "owned_eye_index_outside_0_1": "RejectTransaction",
+        "hot_hook_owner_requires_active_title_halo_reach": true,
+        "hot_hook_and_compositor_owner_require_exact_live_adapter_generation": true,
+        "matching_in_flight_eye_loses_ownership": "mark eye failed, suppress the abandoned CHUD pass, and prohibit eye publication",
+        "reject_transaction_action": "invalidate current eye pair, latch exact generation, disarm, and request verified teardown",
+        "automatic_stock_draw_allowed_for": [
+          "draw outside Reach-owned stereo transaction",
+          "readable scripting class other than 2"
+        ],
+        "explicit_kill_reticle_0_user_choice_remains_stock": true,
+        "required_pair_observes_class_2_without_completed_capture": "RejectTransaction before final eye copy",
+        "pair_observes_no_class_2": "authored no-crosshair state; submit no reticle quad and never reuse prior-attempt art"
+      }
+    },
+    "native_chud_ordering": {
+      "binary": "reach_tag_test.exe",
+      "player_view_render_rva": "0x00834490",
+      "chud_draw_screen_ldr_call": "0x008354AE -> 0x008B67C0",
+      "chud_draw_screen_ldr_source_name": "chud_draw_screen_LDR",
+      "later_path": "0x008354E5 -> 0x008355A0",
+      "chud_draw_screen_call": "0x00835682 -> 0x008B6300",
+      "chud_draw_screen_source_name": "chud_draw_screen",
+      "both_native_chud_phases_precede_player_view_return": true,
+      "capture_scope": "same per-eye world, first-person, native-CHUD transaction"
+    },
+    "shared_configuration_behavior": {
+      "crosshair_1_kill_reticle_1": "capture class-2 authored widget from configured eye and suppress its flat copy in the opposite eye",
+      "crosshair_0": "suppress class-2 widget",
+      "kill_reticle_0": "explicit user-configured stock drawing, not an automatic fallback",
+      "right_eye_first": "selects the one authored-capture eye",
+      "evidence_or_capture_failure": "invalidate Reach ownership and run verified teardown; do not select another reticle mode",
+      "no_class_2_emitted_in_exact_pair": "submit no reticle quad as Reach's authored state"
+    },
+    "reach_compositor_admission": {
+      "active_title_must_equal": "HaloReach",
+      "exact_completed_eye_pair_required": true,
+      "both_eye_copy_serials_must_equal_current_prepared_serial": true,
+      "live_ownership_required": [
+        "camera core installed",
+        "camera core armed",
+        "teardown not requested",
+        "VR enabled",
+        "stereo enabled"
+      ],
+      "world_swapchain_acquire_result_required": "XR_SUCCESS",
+      "world_swapchain_wait_result_required": "XR_SUCCESS",
+      "both_world_eye_resolves_must_succeed": true,
+      "world_swapchain_release_result_required": "XR_SUCCESS",
+      "class_2_emitted_when_authored_crosshair_required_must_have_completed_capture": true,
+      "captured_authored_texture_ready_and_serial_must_equal_current_prepared_serial": true,
+      "authored_swapchain_acquire_result_required": "XR_SUCCESS",
+      "authored_swapchain_wait_result_required": "XR_SUCCESS",
+      "authored_upload_must_succeed_before_layer_submission": true,
+      "reach_authored_swapchain_release_result_required": "XR_SUCCESS",
+      "timeout_or_session_loss_pending_policy": "abort complete Reach layer set and enter terminal session recovery",
+      "begun_frame_failure_policy": "submit empty xrEndFrame with no layers and no reference to a potentially outstanding image",
+      "fresh_session_policy": "clear the terminal Reach swapchain abort latch only when the exclusive frame-wait worker starts for the new session",
+      "reach_upload_failure_enters_legacy_swapchain_maintenance": false,
+      "live_exact_ownership_rechecked_after_upload": true,
+      "reach_projection_queued_before_upload_result": false,
+      "upload_failure_clears_both_copied_eye_serials": true,
+      "upload_failure_can_submit_world_projection": false,
+      "upload_failure_can_submit_authored_quad": false,
+      "world_upload_or_release_failure_can_submit_scope_layer": false,
+      "controller_aim_capability_alone_can_admit_reach": false,
+      "exact_generation_upload_rejection": {
+        "captured_generation_passed_to_game_owner": true,
+        "active_title_revalidated": true,
+        "adapter_generation_revalidated": true,
+        "installed_owner_revalidated": true,
+        "stale_generation_can_disarm_current_owner": false,
+        "matching_failure_action": "invalidate eye pair, disarm, latch exact generation, and request verified teardown"
+      }
+    },
+    "hud_layout": {
+      "implementation_status": "WITHHELD_FOR_SEPARATE_HREK_PROVEN_CANDIDATE",
+      "title_capability_hud_enabled": false,
+      "skin_count": 3,
+      "curvature_records_per_skin": 5,
+      "total_curvature_records": 15,
+      "default_dervish_pairs": [
+        "0.86/0.87",
+        "0.90/0.90",
+        "0.87/0.91",
+        "0.87/0.85",
+        "0.91/0.93"
+      ],
+      "monitor_values_differ": true,
+      "halo3_or_odst_anchor_record_count_or_destination_offset_reused": false
+    }
   },
   "required_runtime_proof": [
     "loaded_image_uniqueness",
@@ -227,7 +534,7 @@
         "production_resolution": "EXACT_NAME_AFTER_PINNED_IMAGE_PREFLIGHT_THEN_REQUIRE_EXACT_RETAIL_VALUE_RVAS_DISTINCT_POSITIVE_FINITE_SCALE_AND_FINITE_NONNEGATIVE_MAX",
         "render_policy": "PRESERVE_OR_REASSERT_POSITIVE_AUTHORED_SCALE_AND_ZERO_ONLY_MAX_AT_EXACT_NORMAL_ADMITTED_REACH_STEREO_BOUNDARY_WITHOUT_LOGGING_ALLOCATION_LOCKING_OR_SCANNING",
         "config_enabled_policy": "RESTORE_LATEST_AUTHORED_VALUES",
-        "teardown": "DISABLE_BOTH_REACH_HOOKS_PROVE_CALLBACK_AND_RELAY_WRAPPER_RIP_QUIESCENCE_THEN_RESTORE_OR_RETAIN_AND_RETRY",
+        "teardown": "DISABLE_ALL_SIX_REACH_HOOKS_PROVE_CALLBACK_AND_RELAY_WRAPPER_RIP_QUIESCENCE_THEN_RESTORE_OR_RETAIN_AND_RETRY",
         "camera_culling_history_eye_order_projection_capture_depth_controller_changed": false
       },
       "screen_aligned_patchy_fog": {
@@ -311,10 +618,10 @@
         "tracking_snapshot": "TWO_FIXED_SLOTS_WRITER_CLAIM_READER_PIN_EXACT_PREPARED_SERIAL_NO_RENDER_HOOK_LOCKS",
         "outer_workspace_rollback_size": "0x02A8",
         "outer_player_view_rollback": "bounded 0x3B0 through 0xA30 inclusive; preserve final last-window byte",
-        "coherent_inner_fallback": "head-center player-view camera and matrices rebuilt before visibility",
+        "coherent_pre_ownership_player_view_state": "head-center player-view camera and matrices rebuilt before visibility; claimed failure rejects and suppresses",
         "camera_stack_callback_excluded_from_outer_rollback": true,
         "whole_outer_or_visibility_double_call_forbidden": true,
-        "teardown": "disable both hooks; prove callback plus wrapper/trampoline relay RIP quiescence; remove/free only after proof; retained cleanup cannot rearm"
+        "teardown": "disable all six installed Reach hooks; prove callback plus wrapper/trampoline relay RIP quiescence; remove/free only after proof; retained cleanup cannot rearm"
       },
       "late_chud_call_sites": [
         "0x0026CE28",
@@ -412,11 +719,12 @@
       "wait_for_gpu_final_eye_policy_runtime_validated": false
     },
     "armed_render_candidate": {
-      "status": "PERMANENT_FAIL_OPEN_RUNTIME_HOOKS_ON_UNACCEPTED_HEADSET_CANDIDATE",
+      "status": "PERMANENT_ALL_OR_NOTHING_RUNTIME_HOOKS_ON_UNACCEPTED_HEADSET_CANDIDATE",
       "build_option": "HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE",
       "build_option_requires_controller_bringup": false,
       "implementation": [
         "src/common/reach_render_logic.h",
+        "src/common/reach_chud_logic.h",
         "src/dll/reach_render_candidate.h",
         "src/dll/reach_render_candidate.cpp",
         "src/dll/reach_render_preflight.h",
@@ -444,19 +752,19 @@
         "halo3_compatible_configurable_eye_pass_order",
         "checked_first_pass_false_final_pass_original_last_window_policy",
         "bounded_workspace_camera_state_and_matrix_rollback_layout_and_owner_coupled_cleanup_tokens",
-        "outer_main_render_view_inner_player_view_render_fp_interpolation_and_fp_palette_detours",
+        "outer_main_render_view_inner_player_view_render_fp_interpolation_fp_palette_fp_camera_and_HREK_CHUD_detours",
         "exact_prepared_serial_lock_free_head_pad_two_eye_corrected_right_aim_and_raw_left_pose_snapshot",
         "stock_only_exact_spartan_elite_layout_learning_then_later_pair_activation",
         "bounded_120_node_live_graph_rigid_marker_attachment_parenting_and_exact_body_only_articulation",
         "pre_visibility_head_center_binocular_angular_union_camera_commit",
-        "coherent_head_center_player_view_fallback",
+        "coherent_head_center_pre_ownership_player_view_state",
         "reach_native_motion_blur_exact_slot_resolution_positive_scale_max_only_zero_and_quiescent_restore",
         "reach_patchy_fog_exact_gate_call_flag_and_per_eye_bit_only_finally_restore",
         "two_eye_engine_camera_rebuild_copyresource_and_projection_fov_publication",
         "callback_wrapper_and_minhook_relay_rip_quiescent_teardown"
       ],
       "withheld_or_headset_pending": [
-        "reach_native_hud",
+        "reach_native_hud_layout",
         "reach_controller_projectile_reticle_and_two_arm_ik_exact_dll_headset_acceptance",
         "reach_corrected_nested_first_person_camera_swap_exact_dll_headset_acceptance",
         "exact_finite_distance_cull_coverage_for_translated_eye_origins",
@@ -700,6 +1008,8 @@
     "headset_accepted": false
   },
   "native_projectile_origin": {
+    "evidence_status": "HISTORICAL_REJECTED_DO_NOT_USE_FOR_NEW_RUNTIME_WORK",
+    "future_proof_source": "fresh official HREK/Reach mod-tools evidence only",
     "behavior": "for only the local output-user-0 primary first-person weapon transaction, select the stock marker-derived weapon origin while preserving the stock projectile direction",
     "retail": {
       "projectile_fire": {
@@ -806,7 +1116,7 @@
       "firing_frame_world_origin_offset": "0x1070",
       "retail_homolog_firing_frame_world_origin_offset": "0x09F0"
     },
-    "runtime_scope": {
+    "rejected_runtime_scope": {
       "output_user_index": 0,
       "required_slot_index": 0,
       "incoming_full_weapon_datum_must_match": true,
@@ -824,7 +1134,16 @@
       "composer_uses_published_center_root_after_outer_scope": true,
       "serial_gated_once_only_marker_query_write_explicitly_user_approved": true,
       "centimeter_constants_removed": true,
-      "candidate_status": "PENDING_EXACT_DLL_HEADSET_VALIDATION"
+      "candidate_status": "FAILED_HEADSET_REVERTED_TO_STOCK"
+    },
+    "runtime_disposition": {
+      "projectile_origin": "stock",
+      "first_person_marker_query": "stock",
+      "first_person_marker_composer": "stock",
+      "firing_frame_write": false,
+      "projectile_origin_relay": false,
+      "fallback_or_approximation": false,
+      "packaging_gate_forbids_reintroduction": true
     },
     "candidate_results": [
       {
@@ -843,9 +1162,28 @@
         ],
         "static_disposition": "post-query marker delta duplicated the interpolation transform and composer publication incorrectly required the expired outer pair scope",
         "revert_commit": "984aa18"
+      },
+      {
+        "status": "REJECTED_PROJECTILE_MARKER_RUNTIME_LINEAGE_REVERTED_TO_STOCK",
+        "source_commit": "354327bb0d033e081fb95e46cb74010c36c2e083",
+        "package": "out/candidates/354327b-reach-fp-parity-20260725-172635238Z",
+        "package_manifest_status": "UNTESTED_LOCAL_CANDIDATE",
+        "dll_sha256": "9131E8337D26204ADE9E3B71AB08354BE975073D28C2614B093259201C4CEFAB",
+        "headset_result_attribution": "runtime lineage rejected; this exact installed DLL hash was not separately confirmed for the current observation"
+      },
+      {
+        "status": "FAILED_CURRENT_HEADSET_OBSERVATION_DOES_NOT_ADVANCE_ACCEPTED_POINTER",
+        "source_commit": "f9f4fecee70bccb2d91c77319c438c237d13fb85",
+        "package": "out/candidates/f9f4fec-reach-fp-parity-20260726-144300646Z",
+        "package_manifest_status": "UNTESTED_LOCAL_CANDIDATE",
+        "dll_sha256": "9BC56CC275F374542752941506BE141FA78C22E06417B632F8AC6DF21D3745A8",
+        "user_observation": "projectile origin was too far right and rearward instead of centered in front of the visible barrel",
+        "installed_hash_separately_confirmed": false,
+        "runtime_disposition": "projectile-origin relay, marker-query/composer detours, firing-frame write, and fallback removed; stock behavior restored"
       }
     ],
-    "static_proof_complete": true,
+    "historical_static_proof_recorded": true,
+    "fresh_mod_tools_proof_complete": false,
     "headset_accepted": false,
     "accepted_pointer_advanced": false
   },

@@ -2,14 +2,15 @@
 
 Status: **camera/culling and screen-aligned patchy-fog transaction headset-passed;
 physical-scale calibration and cumulative regressions pending**. The proven
-signatures below are wired into a permanent,
-fail-open Reach per-eye camera core
+signatures below are wired into a permanent, all-or-nothing Reach per-eye camera core
 (`InstallReachCameraCore` in `src/dll/game.cpp`; see `BUILDING.md`). The current
 unaccepted candidate installs the inner `player_view_render`, outer
-`main_render_view`, FP interpolation, and visible-palette hooks as one mandatory
-transaction only after the loaded-image preflight and display proof pass, arms after the one-second
-fresh-camera safety interval, and falls open on any unmet precondition, invalid
-camera, or fault. Halo 3 and ODST are not modified. The accepted product pointer
+`main_render_view`, FP interpolation, visible-palette, first-person-camera, and
+HREK CHUD hooks as one mandatory six-hook transaction only after the loaded-image
+preflight and display proof pass. It arms after the one-second fresh-camera safety
+interval. An unmet cold precondition installs no ownership path; after ownership,
+an invalid camera or fault rejects the transaction and enters teardown without a
+flat rerender. Halo 3 and ODST are not modified. The accepted product pointer
 does not move until an exact candidate passes in the headset.
 
 The first armed candidate changed only the compact camera, so the already-built
@@ -101,8 +102,8 @@ The retained headset-passing camera/culling transaction:
   camera, runs only the proven pre-scope frustum/projection helpers, validates
   the built projection, then mirrors that centre into both workspace pairs;
 - lets stock visibility run exactly once from that head-centred secondary camera;
-- rebuilds the bounded player-view camera/matrices to the same centre so any
-  withheld/failed inner stereo transaction has a coherent one-render fallback;
+- rebuilds the bounded player-view camera/matrices to the same centre as coherent
+  pre-ownership state; a claimed inner failure is rejected and suppressed;
 - derives both exact raster eyes from the same saved centre in the inner hook,
   without applying turn, head pose, or room-scale lean twice; and
 - restores the bounded player-view state and only the proven `0x2A8` camera-pair
@@ -179,7 +180,7 @@ boundary, the forward correction preserves/reasserts a positive authored scale
 and writes only the maximum to zero while the shared `motion_blur=0` VR default
 is active. This makes both proven ratios finite zero without logging,
 allocation, scanning, or locking in the render hook. `motion_blur=1` restores
-both latest authored values. Title teardown first disables both Reach hooks and
+both latest authored values. Title teardown first disables all six Reach hooks and
 proves callback plus relay/wrapper RIP quiescence, then restores both authored
 values; a failed restore retains the module/state and retries. No camera,
 culling, history-matrix, eye-order, FOV, render, capture, depth, or controller
@@ -211,9 +212,9 @@ head. This is distinct from the atmosphere-fog helper, which remains enabled.
 The correction sets only skip bit `0x08` immediately around each exact
 admitted VR eye's original `player_view_render` call. A per-eye `__finally`
 re-reads the byte and restores only bit `0x08`, preserving any unrelated engine
-flag changes. Setup or restoration failure rejects the stereo transaction and
-falls open to one unsuppressed stock render. Normal stock, nested, screenshot,
-and fallback calls never enter the suppression scope. Camera/culling, motion
+flag changes. Setup or restoration failure rejects the claimed stereo transaction,
+suppresses that call, and enters teardown without a flat rerender. Unclaimed,
+nested, and screenshot calls never enter the suppression scope. Camera/culling, motion
 blur constants, matrices/history, eye order, projection, CHUD, and capture order
 are unchanged. Source `b0710dc0` and its exact DLL passed this narrow headset
 gate: the opposite-moving translucent layer was gone and the image looked good.
@@ -266,8 +267,8 @@ recorded here. The special composer is a preserved negative result.
 
 No candidate may become a runtime hook until all columns are independently
 proven against HREK and MCC's x64 loaded image. A usable AOB must match exactly
-once in the expected executable range and fail open on zero or multiple
-matches. Every consumed field needs finite-value, bounds, index, and count
+once in the expected executable range; zero or multiple matches install no hook
+and acquire no VR ownership. Every consumed field needs finite-value, bounds, index, and count
 guards plus an understood teardown boundary.
 
 ## First-person interpolation and palette production candidate
@@ -934,8 +935,8 @@ Retail constants used by the centering/scaling math are `0.5f` and `2.0f`.
 
 The exact external stock observer repeated the exactly-one scan and loaded
 range checks successfully in two admitted sessions. Any future production
-runtime must independently repeat that cold preflight and fail open on a
-mismatch. The player-view transaction proof below still does not make this
+runtime must independently repeat that cold preflight and refuse hook installation
+or VR ownership on a mismatch. The player-view transaction proof below still does not make this
 shared helper a safe hook. Caller scope, hook-time camera/workspace lifetime
 and full snapshot/restore, live capture-target lifetime, production
 finite/range guards, teardown, and headset validation remain required.
@@ -1082,7 +1083,8 @@ depth plus one and remain within `0..3`,
 the new top slot to point to the admitted normal workspace, and its callback
 qword to equal `module+0x0026BFD4`. This detects a silently skipped push even
 if a prior top slot happens to alias the workspace. Overflow, nested-owner,
-callback, depth, or top-pointer mismatch remains stock-once.
+callback, depth, or top-pointer mismatch before an owner token remains untouched;
+the same mismatch after ownership rejects and suppresses the claimed transaction.
 
 HREK supplies the semantic proof. Inside `main_render_game`
 `0x1CB8D0`-`0x1CC001`, the retained `main_render_view` profile envelope is
@@ -1172,8 +1174,9 @@ execute exactly once after the hook returns.
 This inner call cannot determine outer ownership by its own immediate return:
 normal `0x0C3730` and screenshot `0x1D3864` both funnel through the same
 `0x0C33C4` call. Production must validate the exact outer normal return and
-propagate a bounded TLS owner token into this inner scope. A screenshot,
-unknown, nested, or token-mismatched call must remain stock-once.
+propagate a bounded TLS owner token into this inner scope. A screenshot, unknown,
+or nested call before ownership remains untouched. A token mismatch after the
+active owner is established rejects and suppresses the claimed transaction.
 
 The stock-observed pre-scope camera rebuild sequence is:
 
@@ -1218,7 +1221,7 @@ The render-camera pointer is not a final rollback byte. Each stock
 persist. Blindly restoring the inner-entry nonzero value would create a stale
 owner, while restoring an arbitrary prior value could clobber a nested owner.
 Any inter-eye re-arm must come from the proven updater under a serialized owner
-token and fail open on an unexpected value.
+token; an unexpected value rejects and suppresses the claimed transaction.
 
 The whole `0xA40` player view must not be snapshotted or blindly restored.
 The owner writes `player_view+0xA30` before rendering. A preceding conditional
@@ -1260,6 +1263,182 @@ The first-person and both late CHUD paths are conditional. CFG branches can
 skip them, but every path that executes the final first-person work reaches it
 before either late CHUD phase. No backward edge after the final first-person
 region reverses that order.
+
+### Official-HREK-only authored-crosshair transaction (UNTESTED)
+
+This candidate is governed by the 2026-07-26 evidence policy. Its new
+crosshair binding uses only the official Halo: Reach Editing Kit (HREK), build
+`2023.07.17.176677.1-QFE1`, and official mod-tool tag exports. No retail-binary
+or Reclaimer-derived fact was used to select the hook, descriptor field, class,
+or authored widget. Older retail material elsewhere in this ledger remains
+historical context and is not proof for this transaction.
+
+The three official HREK executable identities used here are:
+
+| Binary | SHA-256 | Crosshair evidence |
+| --- | --- | --- |
+| `reach_tag_test.exe` | `CBDD8448A87A433B0DFFC0DE47D06DB7A18B4BF868B96B057135DAA86790ABA8` | Source-rich CHUD enum, ordering, and `chud_draw_widget` semantics |
+| `reach_tag_play.exe` | `450DFFE824DDE4C9866E4448491B8B41D82995DC93159260A4DEF07D059E732E` | Optimized production-layout `chud_draw_widget` variant |
+| `sapien_play.exe` | `1FDA21569B38C189EC88124C1A682DCCED8FBEE11ACFD4D2605F46663B26175B` | Independent optimized production-layout `chud_draw_widget` variant |
+
+In `reach_tag_test.exe`, the CHUD scripting-class enum pointer array is RVA
+`0x0207F340`; its nine-entry definition/count is at RVA `0x0207F388`. The
+values are `0` undefined/use parent, `1` weapon stats, `2` crosshair, `3`
+shield, `4` grenades, `5` messages, `6` motion sensor, `7` chapter title, and
+`8` cinematics. Runtime selection is therefore the signed scripting-class byte
+at descriptor `+0x04` with exact value `2`; widget names are not an admissible
+selector.
+
+The closed action set includes an explicit `RejectTransaction`. Once Reach owns
+the stereo transaction, an unreadable HREK descriptor cannot safely be assumed
+non-crosshair, and an eye index outside `0..1` cannot select the one authored
+capture eye. Either condition invokes the same per-eye invalidation,
+generation-latch, disarm, and teardown path as capture loss. Draws outside Reach
+ownership and readable non-class-2 widgets alone take automatic stock drawing;
+the separately proven `kill_reticle=0` case remains an explicit user choice.
+
+The official `tool.exe export-tag-to-xml` command exported all 63 top-level
+`tags\ui\chud\*.chud_definition` files into the ignored
+`out\hrek-evidence\chud` workspace. Those exports contain 283 top-level widget
+collections, including 85 scripting-class-`crosshair` collections across 55
+definitions. The exports are evidence only and are not committed. The assault
+rifle definition independently identifies collection artist name `crosshair`,
+scripting class `crosshair`, widget `ar_reticule`, external input A
+`weapon autoaim target`, and authored normal/enemy/friendly color outputs.
+Capturing the class-2 widget therefore preserves the engine's live normal,
+hostile-red, and friendly-green authored state instead of drawing a procedural
+replacement.
+
+The development `chud_draw_widget` is RVA `0x00922AF0` in
+`reach_tag_test.exe`. It has five arguments; argument 2 arrives in `RDX`, is
+retained in `R13`, and supplies the signed class byte at descriptor `+0x04`.
+Independent function matching found the two optimized official variants below.
+Their common 33-byte entry is unique exactly once in each optimized executable:
+
+```
+48 8B C4 44 89 48 20 48 89 50 10 55 56 57 41 54 41 55 41 56 41 57 48 8D 68 A9 48 81 EC C0 00 00 00
+```
+
+| Binary | RVA | Exact body size and SHA-256 | Descriptor proof | Fifth-argument proof | Class-read proof |
+| --- | --- | --- | --- | --- | --- |
+| `reach_tag_play.exe` | `0x0056B15C` | `0x424`; `81EBDE1BB1CF9337C01BA861B0CAF70980EBF6871DE079334B5BFB77ABA8978E` | `+0x45: 4C 8B F2` (`RDX -> R14`) | `+0x4A: 4C 8B 4D 7F` | `+0x2E1: 41 0F BE 56 04 E8`, rel32 wildcard, then `+0x2EB: 48 8B D0` |
+| `sapien_play.exe` | `0x008265F4` | `0x483`; `C0EA71FA6BD0D26CA2EBAAED58FA182FE0CD8288274D3459271AD62CA2B9099E` | `+0x45: 4C 8B FA` (`RDX -> R15`) | `+0x4B: 4C 8B 4D 7F` | `+0x33C: 41 0F BE 57 04 E8`, rel32 wildcard, then `+0x346: 48 8B D0` |
+
+Complete disassembly of both hashed bodies proves the detoured transaction is
+not recursive. Neither body has a decoded call or tail-jump edge to its own
+entry, and no local backward branch reaches the entry. The one indirect call in
+the Sapien variant is a `+0x10` dispatch through a stack-local receiver, not the
+five-argument CHUD entry. The hook can therefore invoke its original trampoline
+once without re-entering through an HREK `chud_draw_widget` self-edge.
+
+The cold runtime resolver admits only one loaded executable match of that exact
+entry whose unwind function begins at the match and whose complete function has
+one of those two exact HREK body sizes and fixed ownership layouts. The SHA-256
+values pin the complete official evidence bodies and their non-recursion proof;
+they are not a loaded-title hash requirement because the deliberately wildcarded
+rel32 operands differ by official link layout. This bridge is a mandatory part
+of the Reach VR transaction, not an optional CHUD add-on. A zero-match,
+multiple-match, non-executable, missing/misaligned unwind boundary, body-size
+mismatch, or fixed-layout-byte mismatch rejects installation before the Reach
+camera/VR core owns anything. No Reach VR feature claims that frame and no
+alternate Reach VR mode is armed. There is no
+retail RVA, widget-name heuristic, inferred layout, procedural reticle, or
+permitted mixed VR-with-flat-stock-crosshair mode.
+
+Cold admission also prepares every authored-reticle resource before the first
+hook is created. `VR_PrepareAuthoredReticleResources` holds the Reach display
+resource lock, requires the live D3D device/context and OpenXR session, creates
+the reticle swapchain when needed, resolves every swapchain RTV, and creates the
+private authored texture/RTV. Any failure rejects installation before hook
+creation. The Reach hot hook calls only
+`VR_BeginPreparedAuthoredReticleCapture`: it verifies the prepared frame and
+already-created handles/RTVs, saves fixed D3D state, and performs no allocation,
+signature scan, logging, or lazy resource construction. Halo 3/ODST retain
+their accepted lazy entry; Reach cannot select it.
+Session/device readiness is separately release-published only after
+`xrBeginSession` and the exclusive frame-wait worker both succeed, is revoked
+before stopping/fatal drain, and participates in the worker's install gate. `NotReady` releases the
+retained module and retries without setting the generation-failure latch; only a
+post-readiness swapchain/RTV/texture result of `Failed` is terminal for that
+loaded Reach generation.
+
+HREK also proves the transaction order independently of any retail image.
+Source-named `player_view_render` begins at `0x00834490`; its late call
+`0x008354AE -> 0x008B67C0` is source-named `chud_draw_screen_LDR`.
+The later path `0x008354E5 -> 0x008355A0` reaches source-named
+`chud_draw_screen` at `0x00835682 -> 0x008B6300`, before the player-view
+return. The class-2 capture therefore stays inside the already proven per-eye
+world/first-person/native-CHUD transaction. With shared `crosshair=1` and
+`kill_reticle=1`, one configured eye captures the authored widget while the
+opposite eye suppresses its flat copy; `crosshair=0` suppresses it. The shared
+explicit `kill_reticle=0` setting preserves stock drawing by user choice, but
+an evidence or runtime-capture failure may not silently enter that mode: it
+must invalidate Reach ownership and enter verified teardown. No alternate or
+procedural reticle mode is selected.
+If ownership is revoked while a matching eye callback is already in flight, the
+hook marks that eye failed and suppresses the abandoned CHUD pass before policy
+can select stock drawing. Ownership includes the adapter's atomic active-title
+identity, so a title switch closes capture immediately instead of waiting for
+the worker's later teardown poll. It also requires the live adapter generation
+to equal the lock-free camera-core generation, closing a same-title module
+reload. The eye therefore cannot capture shared art, be copied, or be published.
+Every newly admitted outer transaction also invalidates authored readiness from
+an earlier qualifying attempt in the same prepared-frame serial. A pair that
+observes class 2 while authored capture is configured must complete that capture
+before its final eye copy. If Reach emits no class-2 widget in either eye, the
+pair deliberately has no reticle quad; it cannot inherit an earlier attempt's
+texture.
+
+Loss of a prevalidated authored target is terminal for that exact title-module
+generation. A failed prepared capture suppresses the class-2 draw, marks the eye
+transaction invalid so the current eye pair cannot publish, immediately
+disarms the Reach core, records a per-generation parity-failure latch, and
+requests teardown. Teardown disables all six Reach hooks, waits for callback and
+wrapper/trampoline relay quiescence, removes them only after the frozen-thread
+RIP proof, restores title state, and releases the retained module through the
+existing verified path. The latch prevents reinstall churn for that generation;
+only a fresh module generation may attempt the cold proof again.
+The failed claimed transaction is not rerun through the flat renderer. Matching
+inner calls remain suppressed while verified teardown is pending; the untouched
+engine call exists only before Reach VR ownership arms.
+
+Authored upload loss uses the same terminal path but is generation-exact. The
+compositor passes its captured Reach generation to the rejection entry, which
+acts only if the active title, live adapter generation, and installed owner all
+still match. A stale upload failure cannot disarm a later generation.
+The matching Reach failure branch rejects ownership without calling the legacy
+transparent/procedural swapchain-maintenance path. The compositor then rechecks
+live exact ownership after upload and clears both copied-eye serials on failure,
+so a concurrently disarmed or upload-rejected generation cannot submit either
+the world projection or the authored quad.
+
+Reach reticle composition has a closed admission conjunction: Reach must be the
+active title; both eye copies must be complete for the exact prepared serial;
+the installed/armed core must still own live stereo without teardown requested;
+XR acquire/wait and XR world-image release must each return exact `XR_SUCCESS`,
+and both world-eye resolves must succeed. When this attempt captured class 2,
+the authored texture must be ready with that same current serial and its XR
+acquire/wait/upload/release transaction must likewise return exact `XR_SUCCESS`.
+A timeout or session-loss-pending result aborts the whole layer set and enters
+terminal session recovery. Any successful `xrBeginFrame` is paired with an empty
+`xrEndFrame` that references no potentially outstanding image. The
+Reach branch queues no world, reticle, or scope layer until every required
+result and the post-upload owner proof are known. Its owner selector uses
+this conjunction instead of `TitleCapability_ControllerAim`; controller-aim
+capability alone can never admit a Reach reticle layer.
+
+This is not Reach HUD-layout authorization. Official HREK data exposes three
+skins with five curvature records each (15 total), not a Halo 3/ODST layout.
+The five default/dervish pairs are `0.86/0.87`, `0.90/0.90`, `0.87/0.91`,
+`0.87/0.85`, and `0.91/0.93`; monitor values differ. No Halo 3/ODST anchor,
+record count, or destination offset may be copied. Reach HUD capability remains
+off and HUD sizing/aspect/curvature/height is withheld for a separate
+HREK-proven candidate.
+
+The authored-crosshair candidate is **UNTESTED**. It does not advance the
+accepted pointer until its exact clean source and artifact hash pass headset
+testing, including friendly/hostile color changes and a required Halo 3
+regression for the shared authored-reticle composition path.
 
 The exact in-scope post-render continuation therefore begins at `0x0C33C9`:
 after the stock player renderer, including its executed native CHUD, and before
@@ -1355,12 +1534,12 @@ eligible, the remaining runtime-evidence and implementation gates are:
 - pause, cinematic, split-screen, unload/reload, device-loss, and title-module
   transition behavior;
 - callback quiescence and complete detour teardown;
-- finite-value, range, index, count, and failure-to-stock guards;
+- finite-value, range, index, count, pre-ownership refusal, and claimed-transaction rejection guards;
 - exact-DLL headset validation plus Halo 3 regression.
 
 Accordingly, the evidence-manifest `proof_complete` and `hook_eligible` fields
 remain false even though an unaccepted runtime candidate exercises the bounded
-implementation behind fail-open gates.
+implementation behind pre-ownership admission gates and terminal claimed-path rejection.
 
 ## Historical controller-input-only candidate behavior
 

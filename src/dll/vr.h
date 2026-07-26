@@ -160,6 +160,23 @@ bool VR_GetLeftControllerPose(float outQuat[4], float outPos[3]);
 // of being drawn at the center of either VR eye.
 bool VR_BeginAuthoredReticleCapture();
 void VR_EndAuthoredReticleCapture();
+// Reach prepares every allocation and swapchain/RTV object on its cold title
+// worker before installing the mandatory HREK hook. The prepared begin/end
+// pair then performs only the accepted render-state redirect in the hot hook.
+enum class AuthoredReticlePreparationResult : uint8_t
+{
+    NotReady,
+    Ready,
+    Failed,
+};
+bool VR_CanPrepareAuthoredReticleResources();
+AuthoredReticlePreparationResult VR_PrepareAuthoredReticleResources();
+// Reach can issue more than one qualifying outer render in a prepared frame.
+// Invalidate the prior attempt before each newly admitted stereo transaction so
+// an authored no-crosshair state cannot inherit an earlier attempt's texture.
+void VR_InvalidatePreparedReachAuthoredReticleCapture();
+bool VR_BeginPreparedAuthoredReticleCapture();
+bool VR_EndPreparedAuthoredReticleCapture();
 // M3: the game layer sets this when the crosshair is over an enemy (engine
 // target-lock). While true, the floating reticle repaints red like the OG HUD.
 void VR_SetReticleEnemy(bool enemy);
