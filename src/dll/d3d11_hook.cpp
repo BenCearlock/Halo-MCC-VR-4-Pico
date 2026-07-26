@@ -207,13 +207,6 @@ static bool FitClientMetrics(POINT& originScreen, LONG& clientW, LONG& clientH)
     return ClientToScreen(g_gameHwnd, &originScreen) != FALSE;
 }
 
-// The exact point we last handed MCC remapped, so WindowFromPoint can undo it.
-// Thread-local because MCC's GetCursorPos -> WindowFromPoint pair runs back to
-// back on one thread.
-static thread_local bool s_haveRemap = false;
-static thread_local POINT s_lastPhysical{};
-static thread_local POINT s_lastRemapped{};
-
 static BOOL WINAPI GetCursorPosHook(LPPOINT p)
 {
     const void* caller = _ReturnAddress();
@@ -235,12 +228,12 @@ static BOOL WINAPI GetCursorPosHook(LPPOINT p)
                (LONG)llround((double)(phys.x - origin.x) * g_forcedRenderW / cw);
     mapped.y = origin.y +
                (LONG)llround((double)(phys.y - origin.y) * g_forcedRenderH / ch);
-    s_haveRemap = true;
-    s_lastPhysical = phys;
-    s_lastRemapped = mapped;
     *p = mapped;
+    // Only log once the window is actually shrunk (client < render); otherwise
+    // the pre-shrink startup reads (client == render, no-op) burn the budget
+    // and the fitted-menu reads we care about never get recorded.
     static int s_log = 0;
-    if (s_log < 12)
+    if (cw < (LONG)g_forcedRenderW && s_log < 40)
     {
         ++s_log;
         LOG("fit: menu cursor read +0x%llX phys(%ld,%ld) -> render(%ld,%ld) "
@@ -272,7 +265,7 @@ static BOOL WINAPI SetCursorPosHook(int X, int Y)
     const int px = origin.x + (int)llround((double)relX * cw / g_forcedRenderW);
     const int py = origin.y + (int)llround((double)relY * ch / g_forcedRenderH);
     static int s_log = 0;
-    if (s_log < 12)
+    if (cw < (LONG)g_forcedRenderW && s_log < 40)
     {
         ++s_log;
         LOG("fit: menu cursor move +0x%llX render(%d,%d) -> phys(%d,%d)",
@@ -283,9 +276,31 @@ static BOOL WINAPI SetCursorPosHook(int X, int Y)
 
 static HWND WINAPI WindowFromPointHook(POINT pt)
 {
-    if (g_fitActive && s_haveRemap && pt.x == s_lastRemapped.x &&
-        pt.y == s_lastRemapped.y)
-        pt = s_lastPhysical;
+    // MCC hit-tests its menu in full render space, so it asks WindowFromPoint
+    // about points spread across the *believed* 3204x2310 client -- most of
+    // which fall OFF the real, shrunk window (and often off the monitor). Those
+    // resolve to "not my window" and the menu item dies; only points that happen
+    // to still land on the small top-left slice work. Map ANY point inside the
+    // render rectangle back down into the real window client before the OS
+    // answers, so every menu item resolves to the game window like it should.
+    if (g_fitActive && g_forcedRenderW && g_forcedRenderH)
+    {
+        POINT origin{};
+        LONG cw = 0, ch = 0;
+        if (FitClientMetrics(origin, cw, ch))
+        {
+            const LONG rx = pt.x - origin.x;
+            const LONG ry = pt.y - origin.y;
+            if (rx >= 0 && ry >= 0 && rx <= (LONG)g_forcedRenderW &&
+                ry <= (LONG)g_forcedRenderH)
+            {
+                pt.x = origin.x +
+                       (LONG)llround((double)rx * cw / g_forcedRenderW);
+                pt.y = origin.y +
+                       (LONG)llround((double)ry * ch / g_forcedRenderH);
+            }
+        }
+    }
     return g_origWindowFromPoint(pt);
 }
 
