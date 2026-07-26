@@ -768,13 +768,22 @@ float4 ps_pass(VSOut i) : SV_Target
         const bool fastPath = sameSize && sameFamily && srcDesc.SampleDesc.Count <= 1;
         // One-time: confirm the cheap CopyResource path is taken (the slow path
         // makes an intermediate texture + full-screen draw every eye blit).
-        static bool loggedPath=false;
-        if (!loggedPath)
+        // Log every TRANSITION, not just the first blit. Logging once meant the
+        // menu's cheap backbuffer blit reported FAST and the log then went silent
+        // -- so a switch to the slow path on level load (the in-game scene target
+        // is multisampled, the menu backbuffer is not) was invisible. The slow
+        // path builds an intermediate and runs a full-screen draw PER EYE PER
+        // FRAME at full render size, which is exactly the kind of cost that
+        // halves the frame rate the moment a level loads.
+        static int loggedPath = -1;
+        if (loggedPath != (fastPath ? 1 : 0))
         {
-            loggedPath=true;
-            LOG("PERF: eye blit uses %s path (src %ux%u fmt %d -> dst %ux%u xrfmt %d)",
+            loggedPath = fastPath ? 1 : 0;
+            LOG("PERF: eye blit uses %s path (src %ux%u fmt %d samples %u -> "
+                "dst %ux%u xrfmt %d)",
                 fastPath?"FAST CopyResource":"SLOW shader",
                 srcDesc.Width,srcDesc.Height,(int)srcDesc.Format,
+                srcDesc.SampleDesc.Count,
                 dstW,dstH,(int)g_xrFormat);
         }
         if (fastPath)
