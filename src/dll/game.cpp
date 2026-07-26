@@ -12833,11 +12833,11 @@ namespace
         // than requiring the separately linked MCC binary to duplicate an HREK
         // tool executable's complete prologue and frame size.
         static constexpr char kTagTestClassReadAob[] =
-            "41 0F BE 55 04 48 8B C8 E8 ?? ?? ?? ?? 48 8B D0";
+            "41 0F BE 55 04";
         static constexpr char kTagPlayClassReadAob[] =
-            "41 0F BE 56 04 E8 ?? ?? ?? ?? 48 8B D0";
+            "41 0F BE 56 04";
         static constexpr char kSapienPlayClassReadAob[] =
-            "41 0F BE 57 04 E8 ?? ?? ?? ?? 48 8B D0";
+            "41 0F BE 57 04";
         static constexpr std::array<uint8_t, 3> kTagTestDescriptorMove{
             0x4C, 0x8B, 0xEA};
         static constexpr std::array<uint8_t, 3> kTagDescriptorMove{
@@ -12850,10 +12850,10 @@ namespace
             0x4C, 0x8B, 0x4D, 0x7F};
         static constexpr std::array<uint8_t, 5> kTagTestClassRead{
             0x41, 0x0F, 0xBE, 0x55, 0x04};
-        static constexpr std::array<uint8_t, 6> kTagClassRead{
-            0x41, 0x0F, 0xBE, 0x56, 0x04, 0xE8};
-        static constexpr std::array<uint8_t, 6> kSapienClassRead{
-            0x41, 0x0F, 0xBE, 0x57, 0x04, 0xE8};
+        static constexpr std::array<uint8_t, 5> kTagClassRead{
+            0x41, 0x0F, 0xBE, 0x56, 0x04};
+        static constexpr std::array<uint8_t, 5> kSapienClassRead{
+            0x41, 0x0F, 0xBE, 0x57, 0x04};
 
         target = nullptr;
         ReachHrekChudMatchSet matches{};
