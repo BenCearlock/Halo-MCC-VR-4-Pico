@@ -85,6 +85,7 @@ namespace
     std::atomic<float> g_requestedHaptics{0.0f};
     void StopControllerHaptics();
     void LogHeadsetPanelRate();
+    void StartFrameWaitThread();
 
     // M2 stereo: per-eye recommended render size and per-eye pose/FOV.
     std::vector<XrViewConfigurationView> g_viewConfigs;
@@ -416,6 +417,33 @@ namespace
     // Published so the desktop present hook can log the two rates side by side
     // when they disagree (that disagreement is the whole 60 Hz class of bug).
     std::atomic<uint64_t> g_displayPeriodNs{0};
+
+    // --- Frame-wait pipelining ------------------------------------------
+    // xrWaitFrame blocks until the runtime's next display time. Calling it
+    // inline on the game's render thread meant the game sat IDLE inside it:
+    // measured 11.4ms of a 17.6ms frame while the real work (render + present
+    // + blit) was only ~6ms, with prediction error collapsing to 0.03ms -- the
+    // loop was locked onto every other display interval instead of merely being
+    // slow. This thread absorbs that block so the wait overlaps the game's
+    // rendering: by the time the render thread asks for a frame state, the wait
+    // has already happened and it proceeds immediately.
+    //
+    // Pairing stays legal: the wait thread is released only AFTER the render
+    // thread's xrBeginFrame succeeds, so xrWaitFrame and xrBeginFrame stay 1:1
+    // and the overlap covers exactly the game's own render window.
+    //
+    // NO refresh rate is referenced here. Whatever period the runtime reports
+    // is what we use, so 72/80/90/120/144 and anything future behave the same.
+    HANDLE g_waitThread = nullptr;
+    HANDLE g_waitReadyEvent = nullptr;    // wait thread -> render thread
+    HANDLE g_waitConsumedEvent = nullptr; // render thread -> wait thread
+    std::atomic<bool> g_waitThreadStop{false};
+    XrFrameState g_waitedFrameState{XR_TYPE_FRAME_STATE};
+    std::atomic<bool> g_waitedStateValid{false};
+    std::atomic<bool> g_waitedStateFailed{false};
+    XrResult g_waitedStateResult = XR_SUCCESS;
+    uint64_t g_inlineWaitFallbacks = 0;
+
     uint64_t g_missedPredictions = 0;
     uint64_t g_duplicatePredictions = 0;
     uint64_t g_frameOrderFailures = 0;
@@ -4631,6 +4659,7 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
 
         strcpy_s(g_status.sessionState, "starting");
         LogHeadsetPanelRate();
+        StartFrameWaitThread();
         LOG("OpenXR session created");
         return true;
     }
@@ -4775,6 +4804,66 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
     }
 #endif
 
+    // The wait thread: block in xrWaitFrame here instead of on the game's render
+    // thread, then hand the state over. Released only once the render thread has
+    // begun that frame, which keeps wait/begin 1:1 and makes the next wait
+    // overlap the game's render work -- the whole point of the change.
+    DWORD WINAPI FrameWaitThread(LPVOID)
+    {
+        while (!g_waitThreadStop.load(std::memory_order_acquire))
+        {
+            XrFrameWaitInfo waitInfo{XR_TYPE_FRAME_WAIT_INFO};
+            XrFrameState state{XR_TYPE_FRAME_STATE};
+            const XrResult r = xrWaitFrame(g_session, &waitInfo, &state);
+            if (g_waitThreadStop.load(std::memory_order_acquire))
+                break;
+            if (XR_FAILED(r))
+            {
+                // Don't spin on a dead session, and don't block on the render
+                // thread either -- it will fall open to an inline wait and log.
+                g_waitedStateResult = r;
+                g_waitedStateFailed.store(true, std::memory_order_release);
+                SetEvent(g_waitReadyEvent);
+                Sleep(4);
+                continue;
+            }
+            g_waitedFrameState = state;
+            g_waitedStateValid.store(true, std::memory_order_release);
+            SetEvent(g_waitReadyEvent);
+            // Bounded so a stalled render thread can never wedge this one.
+            WaitForSingleObject(g_waitConsumedEvent, 1000);
+        }
+        return 0;
+    }
+
+    void StartFrameWaitThread()
+    {
+        if (g_waitThread)
+            return;
+        g_waitThreadStop.store(false, std::memory_order_release);
+        g_waitedStateValid.store(false, std::memory_order_release);
+        g_waitedStateFailed.store(false, std::memory_order_release);
+        g_waitReadyEvent = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+        g_waitConsumedEvent = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+        if (!g_waitReadyEvent || !g_waitConsumedEvent)
+        {
+            LOG("pacing: could not create frame-wait events (%lu); keeping the "
+                "inline wait on the render thread",
+                static_cast<unsigned long>(GetLastError()));
+            return;
+        }
+        g_waitThread = CreateThread(nullptr, 0, &FrameWaitThread, nullptr, 0, nullptr);
+        if (!g_waitThread)
+        {
+            LOG("pacing: could not start the frame-wait thread (%lu); keeping the "
+                "inline wait on the render thread",
+                static_cast<unsigned long>(GetLastError()));
+            return;
+        }
+        LOG("pacing: frame-wait thread started; the game's render thread no "
+            "longer blocks in xrWaitFrame (whatever rate the runtime reports)");
+    }
+
     void PrepareNextFrame()
     {
         if (g_preparedFrame.begun)
@@ -4782,19 +4871,53 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
 
         ++g_frameNo;
         FLog("xrWaitFrame after DXGI Present");
-        XrFrameWaitInfo waitInfo{XR_TYPE_FRAME_WAIT_INFO};
         XrFrameState frameState{XR_TYPE_FRAME_STATE};
+        bool haveState = false;
         LARGE_INTEGER waitStart{}, waitEnd{};
         QueryPerformanceCounter(&waitStart);
-        const XrResult waitResult = xrWaitFrame(g_session, &waitInfo, &frameState);
+        if (g_waitThread)
+        {
+            // Normally already signalled, so this returns at once and the frame
+            // costs only the game's own work. The timeout exists purely so a
+            // stalled runtime can never hang the game's render thread.
+            if (WaitForSingleObject(g_waitReadyEvent, 1000) == WAIT_OBJECT_0)
+            {
+                if (g_waitedStateFailed.exchange(false, std::memory_order_acq_rel))
+                {
+                    QueryPerformanceCounter(&waitEnd);
+                    g_waitDurationsMs.Add(QpcMs(waitEnd.QuadPart - waitStart.QuadPart));
+                    ++g_frameOrderFailures;
+                    LOG("timing: xrWaitFrame failed: %s", XrStr(g_waitedStateResult));
+                    return;
+                }
+                if (g_waitedStateValid.exchange(false, std::memory_order_acq_rel))
+                {
+                    frameState = g_waitedFrameState;
+                    haveState = true;
+                }
+            }
+        }
+        if (!haveState)
+        {
+            // LOUD fail-open: exactly the old inline behavior, never silent.
+            if ((g_inlineWaitFallbacks++ % 100) == 0)
+                LOG("pacing: frame state was not ready (%llu inline waits so "
+                    "far); waiting on the render thread for this frame",
+                    static_cast<unsigned long long>(g_inlineWaitFallbacks));
+            XrFrameWaitInfo waitInfo{XR_TYPE_FRAME_WAIT_INFO};
+            frameState = XrFrameState{XR_TYPE_FRAME_STATE};
+            const XrResult waitResult = xrWaitFrame(g_session, &waitInfo, &frameState);
+            if (XR_FAILED(waitResult))
+            {
+                QueryPerformanceCounter(&waitEnd);
+                g_waitDurationsMs.Add(QpcMs(waitEnd.QuadPart - waitStart.QuadPart));
+                ++g_frameOrderFailures;
+                LOG("timing: xrWaitFrame failed: %s", XrStr(waitResult));
+                return;
+            }
+        }
         QueryPerformanceCounter(&waitEnd);
         g_waitDurationsMs.Add(QpcMs(waitEnd.QuadPart - waitStart.QuadPart));
-        if (XR_FAILED(waitResult))
-        {
-            ++g_frameOrderFailures;
-            LOG("timing: xrWaitFrame failed: %s", XrStr(waitResult));
-            return;
-        }
 
         FLog("xrBeginFrame before Halo render");
         XrFrameBeginInfo beginInfo{XR_TYPE_FRAME_BEGIN_INFO};
@@ -4805,6 +4928,13 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
             LOG("timing: xrBeginFrame failed: %s", XrStr(beginResult));
             return;
         }
+
+        // Frame begun: release the wait thread NOW so its next xrWaitFrame runs
+        // concurrently with the game's render work below, instead of the game
+        // paying for that block itself. This is the line that returns the idle
+        // time to the game, and it is rate-agnostic by construction.
+        if (g_waitThread)
+            SetEvent(g_waitConsumedEvent);
 
         g_preparedFrame.state = frameState;
         g_preparedFrame.begun = true;
