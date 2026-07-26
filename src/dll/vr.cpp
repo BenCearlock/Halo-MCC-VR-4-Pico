@@ -6243,9 +6243,21 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
                         // and the transaction rejection inside its failure
                         // handler -- stays Halo 3 / ODST only, so a crosshair
                         // problem can never disarm Reach's camera core.
-                        const bool reticleUploadAdmitted =
+                        // ODST does not consult the capability system for its
+                        // reticle either -- it uses a direct ownership check
+                        // (Game_IsCameraOnlyBringup), which is why it worked
+                        // immediately. Reach gets the same treatment: ask the
+                        // Reach core directly whether it owns this frame.
+                        // Game_HasTitleCapability keeps returning false for
+                        // Reach because the shared runtime snapshot spends much
+                        // of its time "pending", which reports zero
+                        // capabilities by design.
+                        const bool reticleTitleAdmitted =
                             Game_HasTitleCapability(
-                                TitleCapability_ControllerAim) &&
+                                TitleCapability_ControllerAim) ||
+                            Game_OwnsReachAuthoredReticle();
+                        const bool reticleUploadAdmitted =
+                            reticleTitleAdmitted &&
                             g_config.crosshair && haveAim &&
                             EnsureReticleChain();
                         const bool shouldUploadAuthoredReticle =
@@ -6306,8 +6318,7 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
                                 authoredUploadFailed,
                                 liveReachOwnerAfterUpload);
                         const bool reticleOwnerAdmitted =
-                            Game_HasTitleCapability(
-                                TitleCapability_ControllerAim) &&
+                            reticleTitleAdmitted &&
                             // Reach shows its crosshair only alongside its own
                             // admitted world projection.
                             (!reachTitle || reachProjectionAdmitted);
