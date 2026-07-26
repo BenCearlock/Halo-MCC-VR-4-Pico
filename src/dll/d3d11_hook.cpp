@@ -58,9 +58,11 @@ typedef HRESULT(STDMETHODCALLTYPE* CreateSwapChainForHwndFn)(IDXGIFactory2*, IUn
 typedef HRESULT(STDMETHODCALLTYPE* CreateSwapChainFn)(IDXGIFactory*, IUnknown*,
     DXGI_SWAP_CHAIN_DESC*, IDXGISwapChain**);
 typedef BOOL(WINAPI* GetClientRectFn)(HWND, LPRECT);
+typedef BOOL(WINAPI* GetWindowRectFn)(HWND, LPRECT);
 static CreateSwapChainForHwndFn g_origCreateSwapChainForHwnd = nullptr;
 static CreateSwapChainFn g_origCreateSwapChain = nullptr;
 static GetClientRectFn g_origGetClientRect = nullptr;
+static GetWindowRectFn g_origGetWindowRect = nullptr;
 static UINT g_forcedRenderW = 0;
 static UINT g_forcedRenderH = 0;
 static bool g_forcedMainSwapchain = false; // only force the game's own (first) swapchain
@@ -150,6 +152,38 @@ static BOOL WINAPI GetClientRectHook(HWND hwnd, LPRECT rc)
             LOG("fit: GetClientRect game-side +0x%llX -> forced %ux%u",
                 (unsigned long long)((const BYTE*)caller - g_exeBase),
                 g_forcedRenderW, g_forcedRenderH);
+        }
+    }
+    return ok;
+}
+
+// UI input/focus layers commonly bound their hittable/navigable region to the
+// window rect. Ours is the true small window (e.g. 141,0..1139,720), so MCC
+// culls every widget below/right of it -> the menu is fully DRAWN but the lower
+// items are dead to mouse, keyboard AND d-pad (the reported symptom). For
+// game-side callers, report a window rect at the real top-left but sized to the
+// full render, so MCC's input region matches its full-size layout and cursor.
+// DXGI/DWM/system callers are untouched, so the physical window and the
+// present-time downscale are unchanged.
+static BOOL WINAPI GetWindowRectHook(HWND hwnd, LPRECT rc)
+{
+    const void* caller = _ReturnAddress();
+    const BOOL ok = g_origGetWindowRect(hwnd, rc);
+    if (ok && rc && hwnd == g_gameHwnd && g_forcedRenderW && g_forcedRenderH &&
+        CallerInExe(caller))
+    {
+        // Keep the true top-left; extend to the full render extent.
+        rc->right = rc->left + (LONG)g_forcedRenderW;
+        rc->bottom = rc->top + (LONG)g_forcedRenderH;
+        static int s_log = 0;
+        static const void* s_lastCaller = nullptr;
+        if (s_log < 16 && caller != s_lastCaller && g_exeBase)
+        {
+            ++s_log;
+            s_lastCaller = caller;
+            LOG("fit: GetWindowRect game-side +0x%llX -> (%ld,%ld,%ld,%ld)",
+                (unsigned long long)((const BYTE*)caller - g_exeBase),
+                rc->left, rc->top, rc->right, rc->bottom);
         }
     }
     return ok;
@@ -718,6 +752,10 @@ bool InstallD3D11Hooks()
         // real, smaller window.
         if (HMODULE user32 = GetModuleHandleW(L"user32.dll"))
         {
+            // Cache the game-EXE image range first: GetClientRect/GetWindowRect
+            // and the cursor hooks all scope their game-side behavior on it.
+            InitExeRange();
+
             if (void* pGetClientRect = (void*)GetProcAddress(user32, "GetClientRect"))
             {
                 if (MH_CreateHook(pGetClientRect, (void*)&GetClientRectHook,
@@ -728,12 +766,23 @@ bool InstallD3D11Hooks()
                         "resize-polling titles");
             }
 
+            // GetWindowRect lie (game-side only): make MCC's input/focus region
+            // match its full-size layout so the fitted menu's lower items stay
+            // navigable. Independent of the render force; warn-only on failure.
+            if (void* pGetWindowRect = (void*)GetProcAddress(user32, "GetWindowRect"))
+            {
+                if (MH_CreateHook(pGetWindowRect, (void*)&GetWindowRectHook,
+                                  (void**)&g_origGetWindowRect) != MH_OK)
+                    LOG("warning: GetWindowRect hook failed; fitted-menu lower "
+                        "items may stay unreachable if MCC bounds input to the "
+                        "window rect");
+            }
+
             // Cursor coordinate remap so MCC's native shell / pause menu is
             // navigable in the fitted window (see the block above the hooks).
             // These are supplementary: if any fails, the display fit still works,
             // the menu is just no more navigable than before -- so they do NOT
-            // gate g_fitActive.
-            InitExeRange();
+            // gate g_fitActive. (g_exeBase is already cached above.)
             void* pGetCursorPos = (void*)GetProcAddress(user32, "GetCursorPos");
             void* pSetCursorPos = (void*)GetProcAddress(user32, "SetCursorPos");
             void* pWindowFromPoint = (void*)GetProcAddress(user32, "WindowFromPoint");
