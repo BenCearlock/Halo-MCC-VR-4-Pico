@@ -95,6 +95,9 @@ namespace
     std::atomic<bool> g_enabled{false};      // F2
     std::atomic<bool> g_autoVrUserVeto{false};
     std::atomic<bool> g_autoVrOwned{false};
+    // Process-lifetime fail-stop latch. Once OpenXR session ownership fails,
+    // no title worker may re-arm a camera transaction behind State::Failed.
+    std::atomic<bool> g_vrRuntimeFailureLatched{false};
     std::atomic<bool> g_needRecenter{true};   // F3 (yaw + position)
     std::atomic<bool> g_needPosRecenter{false}; // enabling leaning: position only, no yaw snap
     std::atomic<float> g_yawSign{-1.0f};       // F4  (default matches PSVR2 mapping)
@@ -13777,6 +13780,11 @@ namespace
             RemoveReachCameraCore();
             return;
         }
+        if (g_vrRuntimeFailureLatched.load(std::memory_order_acquire))
+        {
+            g_reachCamera.armed.store(false, std::memory_order_release);
+            return;
+        }
 
         const ReachModuleEpoch epoch{base, generation};
         const ReachPreflightToken preflight =
@@ -14354,6 +14362,43 @@ bool Game_HasTitleCapability(uint32_t requiredCapabilities)
 bool Game_CanToggleImmersiveView()
 {
     return Game_AllowsSharedGameplayFeatures() || Game_IsCameraOnlyBringup();
+}
+void Game_DetachForVrRuntimeFailure()
+{
+    // This is the same render-thread ownership transition used by normal title
+    // unload/pause paths, reached only after OpenXR can no longer submit. Stop
+    // every title from beginning new camera/stereo transactions before the VR
+    // side releases retained presentation resources.
+    g_vrRuntimeFailureLatched.store(true, std::memory_order_release);
+    const GameTitle activeTitle = TitleAdapter_GetActiveTitle();
+    const TitleAdapterRuntimeSnapshot runtime =
+        RuntimeSnapshot(GetTickCount64());
+    const bool haloOwned = activeTitle == GameTitle::Halo3 ||
+        (activeTitle == GameTitle::Unknown &&
+         runtime.runtime.owner == GameTitle::Halo3);
+#if HALOMCCVR_EXPERIMENTAL_ODST_BRINGUP
+    const bool odstOwned = activeTitle == GameTitle::Halo3ODST ||
+        (activeTitle == GameTitle::Unknown &&
+         runtime.runtime.owner == GameTitle::Halo3ODST);
+    if (odstOwned)
+    {
+        g_odstCamera.armed.store(false, std::memory_order_release);
+        PublishOdstLifecycle();
+    }
+#endif
+#if HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE
+    const bool reachOwned = activeTitle == GameTitle::HaloReach ||
+        (activeTitle == GameTitle::Unknown &&
+         runtime.runtime.owner == GameTitle::HaloReach);
+    if (reachOwned)
+        g_reachCamera.armed.store(false, std::memory_order_release);
+#endif
+    g_enabled.store(false, std::memory_order_release);
+    g_autoVrOwned.store(false, std::memory_order_release);
+    g_autoVrUserVeto.store(true, std::memory_order_release);
+    if (haloOwned)
+        PublishHalo3Lifecycle(true, false, false);
+    VR_DetachGamePresentation();
 }
 bool Game_HasAuthoritativePauseState()
 {

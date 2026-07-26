@@ -37,6 +37,9 @@ bool Game_AllowsSharedControllerInput();
 bool Game_HasTitleCapability(uint32_t requiredCapabilities);
 bool Game_CanToggleImmersiveView();
 bool Game_ProcessPresentationDetachRequest();
+// Render-thread emergency transaction used only after OpenXR session failure.
+// Disarms title ownership before VR releases retained presentation resources.
+void Game_DetachForVrRuntimeFailure();
 
 // HUD layout: hud_size/hud_aspect drive Halo's safe-frame floats, while
 // hud_curvature offsets the adjacent authored destination_offset_z in the

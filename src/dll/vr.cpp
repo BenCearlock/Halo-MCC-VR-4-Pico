@@ -86,7 +86,8 @@ namespace
     std::atomic<float> g_requestedHaptics{0.0f};
     void StopControllerHaptics();
     void LogHeadsetPanelRate();
-    void StartFrameWaitThread();
+    bool StartFrameWaitThread();
+    bool StopFrameWaitThread();
 
     // M2 stereo: per-eye recommended render size and per-eye pose/FOV.
     std::vector<XrViewConfigurationView> g_viewConfigs;
@@ -429,6 +430,7 @@ namespace
         uint64_t serial = 0;
         uint64_t waitSequence = 0;
         uint64_t overlappingWorkerWaitSequence = 0;
+        uint64_t nextWaitDispatchSequence = 0;
         uint32_t sessionEpoch = 0;
         uint32_t layerCount = 0;
         int64_t predictedDisplayTimeNs = 0;
@@ -438,6 +440,8 @@ namespace
         int64_t waitReadyQpc = 0;
         int64_t renderWaitStartQpc = 0;
         int64_t renderWaitEndQpc = 0;
+        int64_t nextWaitDispatchGateStartQpc = 0;
+        int64_t nextWaitDispatchGateEndQpc = 0;
         int64_t beginStartQpc = 0;
         int64_t beginEndQpc = 0;
         int64_t consumedSignalQpc = 0;
@@ -453,9 +457,10 @@ namespace
         int32_t endResult = XR_SUCCESS;
         int32_t presentResult = S_OK;
         uint32_t eventWaitResult = WAIT_OBJECT_0;
+        uint32_t nextWaitEventResult = WAIT_OBJECT_0;
         uint8_t title = static_cast<uint8_t>(GameTitle::None);
-        bool inlineWait = false;
         bool waitPacketCoherent = true;
+        bool nextWaitDispatchObservedBeforeBegin = false;
         bool shouldRender = false;
         bool focused = false;
         bool stereo = false;
@@ -567,8 +572,9 @@ namespace
 
     bool IsExactWaitRecord(const FramePacingRecord& record)
     {
-        return record.waitPacketCoherent && !record.inlineWait &&
-            record.waitSequence != 0;
+        return record.waitPacketCoherent && record.waitSequence != 0 &&
+            record.nextWaitDispatchObservedBeforeBegin &&
+            record.nextWaitEventResult == WAIT_OBJECT_0;
     }
 
     bool IsExactWaitPair(const FramePacingRecord& previous,
@@ -687,11 +693,14 @@ namespace
         text.append(line);
         text.append(
             "PACING F fields: rel serial epoch edge periodNs appHz predDeltaMs "
-            "beginStepMs presentStepMs waitSeq source conflictSeq coherent "
-            "workerWaitMs readyAgeMs eventWaitMs beginMs resumeMs prepareMs "
+            "beginStepMs presentStepMs waitSeq source conflictSeq dispatchSeq "
+            "dispatchSeen coherent workerWaitMs readyAgeMs eventWaitMs "
+            "dispatchAckMs "
+            "beginMs pairExact resumeMs "
+            "waitStartVsPrevBeginMs waitEndVsPrevBeginMs prepareMs "
             "gameMs submitBuildMs renderWindowMs endMs preDxgiMs dxgiMs "
             "afterDxgiMs flags(S/F/T/H/C) layers title xr(wait/begin/end) "
-            "eventWait dxgiHr\n");
+            "eventWait/nextWait dxgiHr\n");
         text.append(
             "PACING C fields: serial views requests[e0/e1/out] "
             "fullSolves[e0/e1/out] hits[e0/e1/out] stores[e0/e1/out] "
@@ -721,10 +730,19 @@ namespace
                 ? PacingQpcMs(record.presentStartQpc,
                               previous->presentStartQpc,
                               frequency.QuadPart) : -1.0;
-            const double resumeMs = contiguous &&
-                IsExactWaitPair(*previous, record)
+            const bool exactPair = contiguous &&
+                IsExactWaitPair(*previous, record);
+            const double resumeMs = exactPair
                 ? PacingQpcMs(record.waitCallStartQpc,
                               previous->consumedSignalQpc,
+                              frequency.QuadPart) : -1.0;
+            const double waitStartVsPreviousBeginMs = exactPair
+                ? PacingQpcMs(record.waitCallStartQpc,
+                              previous->beginStartQpc,
+                              frequency.QuadPart) : -1.0;
+            const double waitEndVsPreviousBeginMs = exactPair
+                ? PacingQpcMs(record.waitCallEndQpc,
+                              previous->beginEndQpc,
                               frequency.QuadPart) : -1.0;
             const long long relative = static_cast<long long>(i) -
                 static_cast<long long>(worker.triggerIndex);
@@ -736,21 +754,25 @@ namespace
                 "PACING F rel=%+lld serial=%llu epoch=%u edge=%d "
                 "periodNs=%lld appHz=%.3f predDeltaMs=%.3f "
                 "beginStepMs=%.3f presentStepMs=%.3f waitSeq=%llu "
-                "source=%c conflictSeq=%llu coherent=%d workerWaitMs=%.3f "
-                "readyAgeMs=%.3f eventWaitMs=%.3f beginMs=%.3f "
-                "resumeMs=%.3f prepareMs=%.3f gameMs=%.3f "
+                "source=W conflictSeq=%llu dispatchSeq=%llu dispatchSeen=%d "
+                "coherent=%d workerWaitMs=%.3f readyAgeMs=%.3f "
+                "eventWaitMs=%.3f dispatchAckMs=%.3f beginMs=%.3f "
+                "pairExact=%d resumeMs=%.3f waitStartVsPrevBeginMs=%.3f "
+                "waitEndVsPrevBeginMs=%.3f prepareMs=%.3f gameMs=%.3f "
                 "submitBuildMs=%.3f renderWindowMs=%.3f endMs=%.3f "
                 "preDxgiMs=%.3f dxgiMs=%.3f afterDxgiMs=%.3f "
                 "flags=%d/%d/%d/%d/%d layers=%u title=%u "
-                "xr=%d/%d/%d event=%lu dxgi=0x%08X\n",
+                "xr=%d/%d/%d event=%lu/%lu dxgi=0x%08X\n",
                 relative, static_cast<unsigned long long>(record.serial),
                 record.sessionEpoch, edge ? 1 : 0,
                 static_cast<long long>(record.predictedDisplayPeriodNs), appHz,
                 predictedDeltaMs, beginStepMs, presentStepMs,
                 static_cast<unsigned long long>(record.waitSequence),
-                record.inlineWait ? 'I' : 'W',
                 static_cast<unsigned long long>(
                     record.overlappingWorkerWaitSequence),
+                static_cast<unsigned long long>(
+                    record.nextWaitDispatchSequence),
+                record.nextWaitDispatchObservedBeforeBegin ? 1 : 0,
                 record.waitPacketCoherent ? 1 : 0,
                 PacingQpcMs(record.waitCallEndQpc,
                             record.waitCallStartQpc, frequency.QuadPart),
@@ -758,9 +780,15 @@ namespace
                             record.waitReadyQpc, frequency.QuadPart),
                 PacingQpcMs(record.renderWaitEndQpc,
                             record.renderWaitStartQpc, frequency.QuadPart),
+                PacingQpcMs(record.nextWaitDispatchGateEndQpc,
+                            record.nextWaitDispatchGateStartQpc,
+                            frequency.QuadPart),
                 PacingQpcMs(record.beginEndQpc,
                             record.beginStartQpc, frequency.QuadPart),
+                exactPair ? 1 : 0,
                 resumeMs,
+                waitStartVsPreviousBeginMs,
+                waitEndVsPreviousBeginMs,
                 PacingQpcMs(record.prepareEndQpc,
                             record.beginEndQpc, frequency.QuadPart),
                 PacingQpcMs(record.beforePresentQpc,
@@ -783,6 +811,7 @@ namespace
                 static_cast<unsigned>(record.title), record.waitResult,
                 record.beginResult, record.endResult,
                 static_cast<unsigned long>(record.eventWaitResult),
+                static_cast<unsigned long>(record.nextWaitEventResult),
                 static_cast<unsigned>(record.presentResult));
             text.append(line);
 
@@ -862,23 +891,29 @@ namespace
     // rendering: by the time the render thread asks for a frame state, the wait
     // has already happened and it proceeds immediately.
     //
-    // Pairing stays legal: the wait thread is released only AFTER the render
-    // thread's xrBeginFrame succeeds, so xrWaitFrame and xrBeginFrame stay 1:1
-    // and the overlap covers exactly the game's own render window.
+    // Pairing stays legal: after the render thread claims Wait(N), it releases
+    // the worker immediately BEFORE Begin(N). OpenXR requires the subsequent
+    // Wait(N+1) to block until Begin(N), so pacing remains on the worker and the
+    // overlap covers exactly the game's own render window.
     //
     // NO refresh rate is referenced here. Whatever period the runtime reports
     // is what we use, so 72/80/90/120/144 and anything future behave the same.
     HANDLE g_waitThread = nullptr;
     HANDLE g_waitReadyEvent = nullptr;    // wait thread -> render thread
     HANDLE g_waitConsumedEvent = nullptr; // render thread -> wait thread
+    HANDLE g_waitStartedEvent = nullptr;  // wait thread -> render thread
     std::atomic<bool> g_waitThreadStop{false};
     XrFrameState g_waitedFrameState{XR_TYPE_FRAME_STATE};
     std::atomic<bool> g_waitedStateValid{false};
     std::atomic<bool> g_waitedStateFailed{false};
-    XrResult g_waitedStateResult = XR_SUCCESS;
-    uint64_t g_inlineWaitFallbacks = 0;
+    std::atomic<XrResult> g_waitedStateResult{XR_SUCCESS};
+    std::atomic<uint64_t> g_waitPacketMisses{0};
+    std::atomic<uint64_t> g_waitFailuresObserved{0};
+    std::atomic<uint64_t> g_waitEventSignalFailures{0};
     std::atomic<uint64_t> g_waitCallSequence{0};
     std::atomic<uint64_t> g_waitCallInFlight{0};
+    std::atomic<uint64_t> g_waitConsumedSequence{0};
+    std::atomic<bool> g_waitPipelineFaulted{false};
     std::atomic<uint64_t> g_waitedPacketSequence{0};
     std::atomic<uint64_t> g_waitedPacketVersion{0};
     std::atomic<uint32_t> g_waitedSessionEpochStart{0};
@@ -886,6 +921,12 @@ namespace
     std::atomic<int64_t> g_waitedCallStartQpc{0};
     std::atomic<int64_t> g_waitedCallEndQpc{0};
     std::atomic<int64_t> g_waitedReadyQpc{0};
+    // Render-thread owned. A fatal frame-loop error requests STOPPING first so
+    // PollEvents can end the running session before Fail switches VR off.
+    const char* g_frameWaitFatalExitReason = nullptr;
+    bool g_frameWaitExitRequestAccepted = false;
+    uint64_t g_frameWaitExitLastRequestMs = 0;
+    uint64_t g_frameWaitExitLastLogMs = 0;
 
     uint64_t g_missedPredictions = 0;
     uint64_t g_duplicatePredictions = 0;
@@ -3633,6 +3674,25 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
         ResetPreparedFrame();
     }
 
+    void EnterFrameWaitFatalDrain(const char* reason)
+    {
+        g_waitPipelineFaulted.store(true, std::memory_order_release);
+        g_waitThreadStop.store(true, std::memory_order_release);
+        if (g_waitConsumedEvent)
+            SetEvent(g_waitConsumedEvent);
+        if (g_waitReadyEvent)
+            SetEvent(g_waitReadyEvent);
+        if (g_waitStartedEvent)
+            SetEvent(g_waitStartedEvent);
+        g_sessionRunning = false;
+        if (!g_frameWaitFatalExitReason)
+            g_frameWaitFatalExitReason = reason;
+        g_frameWaitExitRequestAccepted = false;
+        g_frameWaitExitLastRequestMs = 0;
+        g_frameWaitExitLastLogMs = 0;
+        Game_DetachForVrRuntimeFailure();
+    }
+
     // -------------------------------------------------------------- events
 
     void PollEvents()
@@ -3657,25 +3717,55 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
                     XrResult r = xrBeginSession(g_session, &bi);
                     if (XR_SUCCEEDED(r))
                     {
-                        g_sessionRunning = true;
                         g_framePacingSessionEpoch.fetch_add(
                             1, std::memory_order_release);
+                        if (StartFrameWaitThread())
+                        {
+                            g_sessionRunning = true;
+                        }
+                        else
+                        {
+                            EnterFrameWaitFatalDrain(
+                                "The exclusive OpenXR frame-wait worker could "
+                                "not start");
+                        }
                     }
                     else
                         LOG("xrBeginSession failed: %s", XrStr(r));
                 }
                 else if (sc.state == XR_SESSION_STATE_STOPPING)
                 {
+                    const char* fatalExitReason =
+                        g_frameWaitFatalExitReason;
                     StopControllerHaptics();
                     EndPreparedFrameWithoutLayers("session stopping");
-                    xrEndSession(g_session);
                     g_sessionRunning = false;
+                    if (!StopFrameWaitThread())
+                    {
+                        Game_DetachForVrRuntimeFailure();
+                        Fail("The OpenXR frame-wait worker did not stop; refusing "
+                             "to end the session while a frame call may be active");
+                        break;
+                    }
+                    const XrResult endResult = xrEndSession(g_session);
+                    if (XR_FAILED(endResult))
+                        LOG("xrEndSession failed: %s", XrStr(endResult));
+                    if (fatalExitReason)
+                    {
+                        g_frameWaitFatalExitReason = nullptr;
+                        g_frameWaitExitRequestAccepted = false;
+                        g_frameWaitExitLastRequestMs = 0;
+                        g_frameWaitExitLastLogMs = 0;
+                        Game_DetachForVrRuntimeFailure();
+                        Fail(fatalExitReason);
+                    }
                 }
                 else if (sc.state == XR_SESSION_STATE_EXITING || sc.state == XR_SESSION_STATE_LOSS_PENDING)
                 {
                     StopControllerHaptics();
                     ResetPreparedFrame();
                     g_sessionRunning = false;
+                    StopFrameWaitThread();
                     Fail("The VR runtime ended the session (headset off / SteamVR closed?)");
                 }
                 break;
@@ -3684,6 +3774,7 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
                 StopControllerHaptics();
                 ResetPreparedFrame();
                 g_sessionRunning = false;
+                StopFrameWaitThread();
                 Fail("The OpenXR runtime is shutting down");
                 break;
             case XR_TYPE_EVENT_DATA_INTERACTION_PROFILE_CHANGED:
@@ -3736,6 +3827,35 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
                 break;
             }
             ev = {XR_TYPE_EVENT_DATA_BUFFER};
+        }
+
+        // A structural frame-loop failure disables new frame calls but keeps
+        // event polling alive until the runtime accepts the exit request and
+        // reports STOPPING. Retry a rejected request without flooding the log.
+        if (g_state == State::Ready && g_frameWaitFatalExitReason &&
+            !g_frameWaitExitRequestAccepted &&
+            g_sessionState != XR_SESSION_STATE_STOPPING &&
+            g_sessionState != XR_SESSION_STATE_EXITING &&
+            g_sessionState != XR_SESSION_STATE_LOSS_PENDING)
+        {
+            const uint64_t nowMs = GetTickCount64();
+            if (!g_frameWaitExitLastRequestMs ||
+                nowMs - g_frameWaitExitLastRequestMs >= 250)
+            {
+                g_frameWaitExitLastRequestMs = nowMs;
+                const XrResult exitResult = xrRequestExitSession(g_session);
+                if (XR_SUCCEEDED(exitResult))
+                {
+                    g_frameWaitExitRequestAccepted = true;
+                }
+                else if (!g_frameWaitExitLastLogMs ||
+                         nowMs - g_frameWaitExitLastLogMs >= 2000)
+                {
+                    g_frameWaitExitLastLogMs = nowMs;
+                    LOG("pacing: fatal frame-loop drain is retrying "
+                        "xrRequestExitSession: %s", XrStr(exitResult));
+                }
+            }
         }
     }
 
@@ -5106,7 +5226,6 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
 
         strcpy_s(g_status.sessionState, "starting");
         LogHeadsetPanelRate();
-        StartFrameWaitThread();
         LOG("OpenXR session created");
         return true;
     }
@@ -5252,9 +5371,9 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
 #endif
 
     // The wait thread: block in xrWaitFrame here instead of on the game's render
-    // thread, then hand the state over. Released only once the render thread has
-    // begun that frame, which keeps wait/begin 1:1 and makes the next wait
-    // overlap the game's render work -- the whole point of the change.
+    // thread, then hand the state over. Once the render thread claims Wait(N),
+    // it releases this worker immediately before Begin(N). The next Wait(N+1)
+    // is dispatched at that boundary and then overlaps the game's render work.
     DWORD WINAPI FrameWaitThread(LPVOID)
     {
         while (!g_waitThreadStop.load(std::memory_order_acquire))
@@ -5266,8 +5385,10 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
             const uint32_t waitSessionEpoch =
                 g_framePacingSessionEpoch.load(std::memory_order_acquire);
             LARGE_INTEGER waitStart{}, waitEnd{};
-            g_waitCallInFlight.store(waitSequence, std::memory_order_release);
             QueryPerformanceCounter(&waitStart);
+            g_waitCallInFlight.store(waitSequence, std::memory_order_release);
+            if (!SetEvent(g_waitStartedEvent))
+                g_waitEventSignalFailures.fetch_add(1, std::memory_order_relaxed);
             const XrResult r = xrWaitFrame(g_session, &waitInfo, &state);
             QueryPerformanceCounter(&waitEnd);
             const uint32_t returnSessionEpoch =
@@ -5277,9 +5398,10 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
                 break;
             if (XR_FAILED(r))
             {
-                // Don't spin on a dead session, and don't block on the render
-                // thread either -- it will fall open to an inline wait and log.
-                g_waitedStateResult = r;
+                // Don't spin on a dead session. Report the failed worker wait;
+                // the render thread never substitutes its own xrWaitFrame.
+                g_waitedStateValid.store(false, std::memory_order_release);
+                g_waitedStateResult.store(r, std::memory_order_relaxed);
                 g_waitedStateFailed.store(true, std::memory_order_release);
                 SetEvent(g_waitReadyEvent);
                 Sleep(4);
@@ -5304,40 +5426,130 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
             g_waitedPacketSequence.store(
                 waitSequence, std::memory_order_release);
             g_waitedPacketVersion.fetch_add(1, std::memory_order_release);
+            g_waitedStateFailed.store(false, std::memory_order_release);
             g_waitedStateValid.store(true, std::memory_order_release);
             SetEvent(g_waitReadyEvent);
-            // Bounded so a stalled render thread can never wedge this one.
-            WaitForSingleObject(g_waitConsumedEvent, 1000);
+            // The event is only a wakeup; the exact sequence acknowledgement is
+            // the permit. A timeout or stale event must never authorize another
+            // xrWaitFrame, because concurrent waits are undefined by OpenXR.
+            for (;;)
+            {
+                if (g_waitThreadStop.load(std::memory_order_acquire))
+                    return 0;
+                const FrameWaitPermit permit = ClassifyFrameWaitPermit(
+                    waitSequence,
+                    g_waitConsumedSequence.load(std::memory_order_acquire));
+                if (permit == FrameWaitPermit::StartNextWait)
+                    break;
+                if (permit == FrameWaitPermit::Fault)
+                {
+                    g_waitPipelineFaulted.store(true, std::memory_order_release);
+                    SetEvent(g_waitReadyEvent);
+                    return 0;
+                }
+                const DWORD wake = WaitForSingleObject(g_waitConsumedEvent, 50);
+                if (wake == WAIT_FAILED)
+                {
+                    g_waitPipelineFaulted.store(true, std::memory_order_release);
+                    SetEvent(g_waitReadyEvent);
+                    return 0;
+                }
+            }
         }
         return 0;
     }
 
-    void StartFrameWaitThread()
+    bool StartFrameWaitThread()
     {
         if (g_waitThread)
-            return;
+            return true;
         g_waitThreadStop.store(false, std::memory_order_release);
         g_waitedStateValid.store(false, std::memory_order_release);
         g_waitedStateFailed.store(false, std::memory_order_release);
+        g_waitedStateResult.store(XR_SUCCESS, std::memory_order_release);
+        g_waitPacketMisses.store(0, std::memory_order_release);
+        g_waitFailuresObserved.store(0, std::memory_order_release);
+        g_waitEventSignalFailures.store(0, std::memory_order_release);
+        g_waitCallSequence.store(0, std::memory_order_release);
+        g_waitCallInFlight.store(0, std::memory_order_release);
+        g_waitConsumedSequence.store(0, std::memory_order_release);
+        g_waitPipelineFaulted.store(false, std::memory_order_release);
+        g_waitedPacketSequence.store(0, std::memory_order_release);
+        g_waitedPacketVersion.store(0, std::memory_order_release);
         g_waitReadyEvent = CreateEventW(nullptr, FALSE, FALSE, nullptr);
         g_waitConsumedEvent = CreateEventW(nullptr, FALSE, FALSE, nullptr);
-        if (!g_waitReadyEvent || !g_waitConsumedEvent)
+        g_waitStartedEvent = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+        if (!g_waitReadyEvent || !g_waitConsumedEvent || !g_waitStartedEvent)
         {
-            LOG("pacing: could not create frame-wait events (%lu); keeping the "
-                "inline wait on the render thread",
+            LOG("pacing: could not create frame-wait events (%lu); XR frame "
+                "preparation will remain disabled (no inline wait)",
                 static_cast<unsigned long>(GetLastError()));
-            return;
+            if (g_waitReadyEvent)
+                CloseHandle(g_waitReadyEvent);
+            if (g_waitConsumedEvent)
+                CloseHandle(g_waitConsumedEvent);
+            if (g_waitStartedEvent)
+                CloseHandle(g_waitStartedEvent);
+            g_waitReadyEvent = nullptr;
+            g_waitConsumedEvent = nullptr;
+            g_waitStartedEvent = nullptr;
+            return false;
         }
         g_waitThread = CreateThread(nullptr, 0, &FrameWaitThread, nullptr, 0, nullptr);
         if (!g_waitThread)
         {
-            LOG("pacing: could not start the frame-wait thread (%lu); keeping the "
-                "inline wait on the render thread",
+            LOG("pacing: could not start the frame-wait thread (%lu); XR frame "
+                "preparation will remain disabled (no inline wait)",
                 static_cast<unsigned long>(GetLastError()));
-            return;
+            CloseHandle(g_waitReadyEvent);
+            CloseHandle(g_waitConsumedEvent);
+            CloseHandle(g_waitStartedEvent);
+            g_waitReadyEvent = nullptr;
+            g_waitConsumedEvent = nullptr;
+            g_waitStartedEvent = nullptr;
+            return false;
         }
         LOG("pacing: frame-wait thread started; the game's render thread no "
             "longer blocks in xrWaitFrame (whatever rate the runtime reports)");
+        return true;
+    }
+
+    bool StopFrameWaitThread()
+    {
+        if (!g_waitThread)
+            return true;
+
+        g_waitThreadStop.store(true, std::memory_order_release);
+        if (g_waitConsumedEvent)
+            SetEvent(g_waitConsumedEvent);
+        if (g_waitReadyEvent)
+            SetEvent(g_waitReadyEvent);
+        if (g_waitStartedEvent)
+            SetEvent(g_waitStartedEvent);
+        const DWORD joined = WaitForSingleObject(g_waitThread, 2000);
+        if (joined != WAIT_OBJECT_0)
+        {
+            g_waitPipelineFaulted.store(true, std::memory_order_release);
+            LOG("pacing: frame-wait worker did not stop cleanly (wait=%lu)",
+                static_cast<unsigned long>(joined));
+            return false;
+        }
+
+        CloseHandle(g_waitThread);
+        g_waitThread = nullptr;
+        if (g_waitReadyEvent)
+            CloseHandle(g_waitReadyEvent);
+        if (g_waitConsumedEvent)
+            CloseHandle(g_waitConsumedEvent);
+        if (g_waitStartedEvent)
+            CloseHandle(g_waitStartedEvent);
+        g_waitReadyEvent = nullptr;
+        g_waitConsumedEvent = nullptr;
+        g_waitStartedEvent = nullptr;
+        g_waitedStateValid.store(false, std::memory_order_release);
+        g_waitedStateFailed.store(false, std::memory_order_release);
+        g_waitCallInFlight.store(0, std::memory_order_release);
+        return true;
     }
 
     void PrepareNextFrame()
@@ -5350,7 +5562,7 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
         FLog("xrWaitFrame after DXGI Present");
         XrFrameState frameState{XR_TYPE_FRAME_STATE};
         bool haveState = false;
-        bool inlineWait = false;
+        bool workerPacketClaimed = false;
         bool waitPacketCoherent = true;
         uint64_t waitSequence = 0;
         uint64_t overlappingWorkerWaitSequence = 0;
@@ -5358,94 +5570,174 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
         int64_t waitCallStartQpc = 0;
         int64_t waitCallEndQpc = 0;
         int64_t waitReadyQpc = 0;
+        LARGE_INTEGER consumedSignal{};
+        LARGE_INTEGER nextWaitDispatchGateStart{}, nextWaitDispatchGateEnd{};
         DWORD eventWaitResult = WAIT_OBJECT_0;
+        DWORD nextWaitEventResult = WAIT_OBJECT_0;
+        uint64_t nextWaitDispatchSequence = 0;
+        bool nextWaitDispatchObservedBeforeBegin = false;
+        bool nextWaitDispatchGateFailed = false;
         LARGE_INTEGER waitStart{}, waitEnd{};
         QueryPerformanceCounter(&waitStart);
-        if (g_waitThread)
+        if (g_waitThread &&
+            !g_waitPipelineFaulted.load(std::memory_order_acquire))
         {
-            // Normally already signalled, so this returns at once and the frame
-            // costs only the game's own work. The timeout exists purely so a
-            // stalled runtime can never hang the game's render thread.
-            eventWaitResult = WaitForSingleObject(g_waitReadyEvent, 1000);
-            if (eventWaitResult == WAIT_OBJECT_0)
+            // Events are wakeup hints only. Always inspect packet status before
+            // and after waiting so a coalesced or just-missed signal cannot
+            // strand a valid packet while the exact-sequence worker is parked.
+            if (!g_waitedStateValid.load(std::memory_order_acquire) &&
+                !g_waitedStateFailed.load(std::memory_order_acquire))
             {
-                if (g_waitedStateFailed.exchange(false, std::memory_order_acq_rel))
-                {
-                    QueryPerformanceCounter(&waitEnd);
-                    g_waitDurationsMs.Add(QpcMs(waitEnd.QuadPart - waitStart.QuadPart));
-                    ++g_frameOrderFailures;
-                    LOG("timing: xrWaitFrame failed: %s", XrStr(g_waitedStateResult));
-                    return;
-                }
-                if (g_waitedStateValid.exchange(false, std::memory_order_acq_rel))
-                {
-                    const uint64_t versionBefore =
-                        g_waitedPacketVersion.load(std::memory_order_acquire);
-                    const uint64_t sequenceBefore =
-                        g_waitedPacketSequence.load(std::memory_order_acquire);
-                    frameState = g_waitedFrameState;
-                    waitCallStartQpc = g_waitedCallStartQpc.load(
-                        std::memory_order_relaxed);
-                    waitCallEndQpc = g_waitedCallEndQpc.load(
-                        std::memory_order_relaxed);
-                    waitReadyQpc = g_waitedReadyQpc.load(
-                        std::memory_order_relaxed);
-                    const uint32_t epochAtStart =
-                        g_waitedSessionEpochStart.load(std::memory_order_relaxed);
-                    const uint32_t epochAtEnd =
-                        g_waitedSessionEpochEnd.load(std::memory_order_relaxed);
-                    const uint64_t sequenceAfter =
-                        g_waitedPacketSequence.load(std::memory_order_acquire);
-                    const uint64_t versionAfter =
-                        g_waitedPacketVersion.load(std::memory_order_acquire);
-                    overlappingWorkerWaitSequence =
-                        g_waitCallInFlight.load(std::memory_order_acquire);
-                    waitSequence = sequenceAfter;
-                    waitSessionEpoch = epochAtStart;
-                    waitPacketCoherent = sequenceBefore != 0 &&
-                        sequenceBefore == sequenceAfter &&
-                        versionBefore == versionAfter &&
-                        (versionBefore & 1u) == 0 && epochAtStart != 0 &&
-                        epochAtStart == epochAtEnd &&
-                        overlappingWorkerWaitSequence == 0;
-                    haveState = true;
-                }
+                // Normally already signalled. The timeout is only a bounded
+                // observation point; it never transfers Wait ownership.
+                eventWaitResult = WaitForSingleObject(g_waitReadyEvent, 1000);
             }
-        }
-        if (!haveState)
-        {
-            // LOUD fail-open: exactly the old inline behavior, never silent.
-            inlineWait = true;
-            overlappingWorkerWaitSequence =
-                g_waitCallInFlight.load(std::memory_order_acquire);
-            waitSessionEpoch =
-                g_framePacingSessionEpoch.load(std::memory_order_acquire);
-            waitPacketCoherent = overlappingWorkerWaitSequence == 0 &&
-                waitSessionEpoch != 0;
-            if ((g_inlineWaitFallbacks++ % 100) == 0)
-                LOG("pacing: frame state was not ready (%llu inline waits so "
-                    "far); waiting on the render thread for this frame",
-                    static_cast<unsigned long long>(g_inlineWaitFallbacks));
-            XrFrameWaitInfo waitInfo{XR_TYPE_FRAME_WAIT_INFO};
-            frameState = XrFrameState{XR_TYPE_FRAME_STATE};
-            LARGE_INTEGER inlineWaitStart{}, inlineWaitEnd{};
-            QueryPerformanceCounter(&inlineWaitStart);
-            const XrResult waitResult = xrWaitFrame(g_session, &waitInfo, &frameState);
-            QueryPerformanceCounter(&inlineWaitEnd);
-            waitCallStartQpc = inlineWaitStart.QuadPart;
-            waitCallEndQpc = inlineWaitEnd.QuadPart;
-            waitReadyQpc = 0; // no worker-ready handoff on the inline path
-            if (XR_FAILED(waitResult))
+            // A successful packet supersedes any stale failure notification.
+            if (g_waitedStateValid.exchange(false, std::memory_order_acq_rel))
+            {
+                g_waitedStateFailed.store(false, std::memory_order_release);
+                const uint64_t versionBefore =
+                    g_waitedPacketVersion.load(std::memory_order_acquire);
+                const uint64_t sequenceBefore =
+                    g_waitedPacketSequence.load(std::memory_order_acquire);
+                frameState = g_waitedFrameState;
+                waitCallStartQpc = g_waitedCallStartQpc.load(
+                    std::memory_order_relaxed);
+                waitCallEndQpc = g_waitedCallEndQpc.load(
+                    std::memory_order_relaxed);
+                waitReadyQpc = g_waitedReadyQpc.load(
+                    std::memory_order_relaxed);
+                const uint32_t epochAtStart =
+                    g_waitedSessionEpochStart.load(std::memory_order_relaxed);
+                const uint32_t epochAtEnd =
+                    g_waitedSessionEpochEnd.load(std::memory_order_relaxed);
+                const uint64_t sequenceAfter =
+                    g_waitedPacketSequence.load(std::memory_order_acquire);
+                const uint64_t versionAfter =
+                    g_waitedPacketVersion.load(std::memory_order_acquire);
+                overlappingWorkerWaitSequence =
+                    g_waitCallInFlight.load(std::memory_order_acquire);
+                const uint32_t currentEpoch =
+                    g_framePacingSessionEpoch.load(std::memory_order_acquire);
+                waitSequence = sequenceAfter;
+                waitSessionEpoch = epochAtStart;
+                waitPacketCoherent = sequenceBefore != 0 &&
+                    sequenceBefore == sequenceAfter &&
+                    versionBefore == versionAfter &&
+                    (versionBefore & 1u) == 0 && epochAtStart != 0 &&
+                    epochAtStart == epochAtEnd &&
+                    epochAtStart == currentEpoch &&
+                    overlappingWorkerWaitSequence == 0;
+                haveState = true;
+                workerPacketClaimed = waitPacketCoherent;
+            }
+            else if (g_waitedStateFailed.exchange(
+                        false, std::memory_order_acq_rel))
             {
                 QueryPerformanceCounter(&waitEnd);
                 g_waitDurationsMs.Add(QpcMs(waitEnd.QuadPart - waitStart.QuadPart));
                 ++g_frameOrderFailures;
-                LOG("timing: xrWaitFrame failed: %s", XrStr(waitResult));
+                g_waitFailuresObserved.fetch_add(
+                    1, std::memory_order_relaxed);
                 return;
             }
         }
+        if (haveState && !waitPacketCoherent)
+        {
+            // Do not acknowledge an incoherent or cross-session packet. The
+            // worker remains parked, so drain and reset the running session.
+            ++g_frameOrderFailures;
+            EnterFrameWaitFatalDrain(
+                "The OpenXR wait worker published an incoherent or stale "
+                "frame packet");
+            return;
+        }
+        if (!haveState)
+        {
+            if (g_waitPipelineFaulted.load(std::memory_order_acquire) ||
+                (g_waitThread &&
+                 WaitForSingleObject(g_waitThread, 0) == WAIT_OBJECT_0))
+            {
+                ++g_frameOrderFailures;
+                EnterFrameWaitFatalDrain(
+                    "The exclusive OpenXR wait-worker pipeline stopped");
+                return;
+            }
+            // The worker is the sole xrWaitFrame owner. Never substitute an
+            // inline wait: it can race an in-flight worker wait, and it restores
+            // the exact render-thread pacing stall this pipeline exists to fix.
+            QueryPerformanceCounter(&waitEnd);
+            g_waitDurationsMs.Add(QpcMs(waitEnd.QuadPart - waitStart.QuadPart));
+            g_waitPacketMisses.fetch_add(1, std::memory_order_relaxed);
+            return;
+        }
         QueryPerformanceCounter(&waitEnd);
         g_waitDurationsMs.Add(QpcMs(waitEnd.QuadPart - waitStart.QuadPart));
+
+        // A subsequent xrWaitFrame is explicitly legal before this Begin and
+        // must block until this frame has begun. Dispatch it now so the
+        // runtime applies cadence delay on the worker, not inside xrBeginFrame
+        // on Halo's render thread. Publish the exact claimed sequence before
+        // waking; stale auto-reset event credits cannot advance the worker. Do
+        // not rely on scheduler luck alone: observe the exact Wait(N+1)
+        // dispatch boundary before entering Begin(N), then use cross-frame
+        // timing to verify the runtime-call relationship in the headset.
+        if (ShouldReleaseFrameWaitWorkerBeforeBegin(
+                g_waitThread != nullptr, workerPacketClaimed))
+        {
+            QueryPerformanceCounter(&consumedSignal);
+            g_waitConsumedSequence.store(waitSequence, std::memory_order_release);
+            if (!SetEvent(g_waitConsumedEvent))
+            {
+                ++g_frameOrderFailures;
+                g_waitEventSignalFailures.fetch_add(
+                    1, std::memory_order_relaxed);
+            }
+
+            QueryPerformanceCounter(&nextWaitDispatchGateStart);
+            const uint64_t dispatchDeadlineMs = GetTickCount64() + 1000;
+            for (;;)
+            {
+                nextWaitDispatchSequence =
+                    g_waitCallInFlight.load(std::memory_order_acquire);
+                if (IsExpectedNextFrameWaitDispatch(
+                        waitSequence, nextWaitDispatchSequence))
+                {
+                    nextWaitDispatchObservedBeforeBegin = true;
+                    break;
+                }
+                if (nextWaitDispatchSequence != 0 ||
+                    g_waitPipelineFaulted.load(std::memory_order_acquire) ||
+                    g_waitThreadStop.load(std::memory_order_acquire) ||
+                    g_waitedStateFailed.load(std::memory_order_acquire))
+                {
+                    break;
+                }
+                const uint64_t dispatchNowMs = GetTickCount64();
+                if (dispatchNowMs >= dispatchDeadlineMs)
+                {
+                    nextWaitEventResult = WAIT_TIMEOUT;
+                    break;
+                }
+                nextWaitEventResult =
+                    WaitForSingleObject(
+                        g_waitStartedEvent,
+                        static_cast<DWORD>(dispatchDeadlineMs - dispatchNowMs));
+                if (nextWaitEventResult == WAIT_FAILED)
+                    break;
+            }
+            nextWaitDispatchSequence =
+                g_waitCallInFlight.load(std::memory_order_acquire);
+            nextWaitDispatchObservedBeforeBegin =
+                IsExpectedNextFrameWaitDispatch(
+                    waitSequence, nextWaitDispatchSequence);
+            QueryPerformanceCounter(&nextWaitDispatchGateEnd);
+            if (!nextWaitDispatchObservedBeforeBegin)
+            {
+                ++g_frameOrderFailures;
+                nextWaitDispatchGateFailed = true;
+            }
+        }
 
         FLog("xrBeginFrame before Halo render");
         XrFrameBeginInfo beginInfo{XR_TYPE_FRAME_BEGIN_INFO};
@@ -5457,19 +5749,13 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
         {
             ++g_frameOrderFailures;
             LOG("timing: xrBeginFrame failed: %s", XrStr(beginResult));
+            EnterFrameWaitFatalDrain(
+                "xrBeginFrame failed after the exclusive wait worker was "
+                "released");
             return;
         }
 
         g_beginFrameQpc = beginEnd;
-
-        // Frame begun: release the wait thread NOW so its next xrWaitFrame runs
-        // concurrently with the game's render work below, instead of the game
-        // paying for that block itself. This is the line that returns the idle
-        // time to the game, and it is rate-agnostic by construction.
-        LARGE_INTEGER consumedSignal{};
-        QueryPerformanceCounter(&consumedSignal);
-        if (g_waitThread)
-            SetEvent(g_waitConsumedEvent);
 
         g_preparedFrame.state = frameState;
         g_preparedFrame.begun = true;
@@ -5482,6 +5768,7 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
         pacing.waitSequence = waitSequence;
         pacing.overlappingWorkerWaitSequence =
             overlappingWorkerWaitSequence;
+        pacing.nextWaitDispatchSequence = nextWaitDispatchSequence;
         pacing.sessionEpoch = waitSessionEpoch;
         pacing.predictedDisplayTimeNs = frameState.predictedDisplayTime;
         pacing.predictedDisplayPeriodNs = frameState.predictedDisplayPeriod;
@@ -5490,21 +5777,36 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
         pacing.waitReadyQpc = waitReadyQpc;
         pacing.renderWaitStartQpc = waitStart.QuadPart;
         pacing.renderWaitEndQpc = waitEnd.QuadPart;
+        pacing.nextWaitDispatchGateStartQpc =
+            nextWaitDispatchGateStart.QuadPart;
+        pacing.nextWaitDispatchGateEndQpc =
+            nextWaitDispatchGateEnd.QuadPart;
         pacing.beginStartQpc = beginStart.QuadPart;
         pacing.beginEndQpc = beginEnd.QuadPart;
         pacing.consumedSignalQpc = consumedSignal.QuadPart;
         pacing.waitResult = XR_SUCCESS;
         pacing.beginResult = beginResult;
         pacing.eventWaitResult = eventWaitResult;
+        pacing.nextWaitEventResult = nextWaitEventResult;
         pacing.title = static_cast<uint8_t>(TitleAdapter_GetActiveTitle());
-        pacing.inlineWait = inlineWait;
         pacing.waitPacketCoherent = waitPacketCoherent;
+        pacing.nextWaitDispatchObservedBeforeBegin =
+            nextWaitDispatchObservedBeforeBegin;
         pacing.shouldRender = frameState.shouldRender == XR_TRUE;
         pacing.focused = g_sessionState == XR_SESSION_STATE_FOCUSED;
         pacing.stereo = g_stereoEnabled.load(std::memory_order_relaxed);
         pacing.headTracking = Game_IsHeadTracking();
         pacing.scopeActive = g_scopeActive.load(std::memory_order_relaxed);
         Game_ReadFramePerfCounters(g_framePacingPerfStart);
+
+        if (nextWaitDispatchGateFailed)
+        {
+            EndPreparedFrameWithoutLayers("next wait dispatch gate failed");
+            EnterFrameWaitFatalDrain(
+                "The exclusive OpenXR wait worker did not dispatch the exact "
+                "next wait before xrBeginFrame");
+            return;
+        }
 
         if (g_lastPredictedDisplayTime)
         {
@@ -6348,6 +6650,83 @@ void VR_AfterPresent(IDXGISwapChain* sc, int64_t presentStartQpc,
 
 void VR_FramePacingWorkerPoll()
 {
+    // Keep exceptional pipeline reporting off the game's render path. Packet
+    // misses are counted there with one atomic increment and summarized here.
+    static uint64_t reportedPacketMisses = 0;
+    static uint64_t reportedWaitFailures = 0;
+    static uint64_t reportedSignalFailures = 0;
+    static uint64_t lastPacketMissReportMs = 0;
+    static uint64_t lastWaitFailureReportMs = 0;
+    static uint64_t lastSignalFailureReportMs = 0;
+    static bool pipelineFaultReported = false;
+    const uint64_t workerNowMs = GetTickCount64();
+    const uint64_t packetMisses =
+        g_waitPacketMisses.load(std::memory_order_relaxed);
+    if (!packetMisses)
+    {
+        reportedPacketMisses = 0;
+        lastPacketMissReportMs = 0;
+    }
+    else if (packetMisses != reportedPacketMisses &&
+             (!lastPacketMissReportMs ||
+              workerNowMs - lastPacketMissReportMs >= 1000))
+    {
+        LOG("pacing: wait-worker packet unavailable; skipped XR preparation "
+            "without an inline wait (%llu misses total)",
+            static_cast<unsigned long long>(packetMisses));
+        reportedPacketMisses = packetMisses;
+        lastPacketMissReportMs = workerNowMs;
+    }
+
+    const uint64_t waitFailures =
+        g_waitFailuresObserved.load(std::memory_order_relaxed);
+    if (!waitFailures)
+    {
+        reportedWaitFailures = 0;
+        lastWaitFailureReportMs = 0;
+    }
+    else if (waitFailures != reportedWaitFailures &&
+             (!lastWaitFailureReportMs ||
+              workerNowMs - lastWaitFailureReportMs >= 1000))
+    {
+        LOG("timing: worker xrWaitFrame failure observed (%llu total): %s",
+            static_cast<unsigned long long>(waitFailures),
+            XrStr(g_waitedStateResult.load(std::memory_order_acquire)));
+        reportedWaitFailures = waitFailures;
+        lastWaitFailureReportMs = workerNowMs;
+    }
+
+    const uint64_t signalFailures =
+        g_waitEventSignalFailures.load(std::memory_order_relaxed);
+    if (!signalFailures)
+    {
+        reportedSignalFailures = 0;
+        lastSignalFailureReportMs = 0;
+    }
+    else if (signalFailures != reportedSignalFailures &&
+             (!lastSignalFailureReportMs ||
+              workerNowMs - lastSignalFailureReportMs >= 1000))
+    {
+        LOG("pacing: frame-wait event signalling failed (%llu failures total); "
+            "exact sequence predicates remain authoritative",
+            static_cast<unsigned long long>(signalFailures));
+        reportedSignalFailures = signalFailures;
+        lastSignalFailureReportMs = workerNowMs;
+    }
+
+    const bool pipelineFaulted =
+        g_waitPipelineFaulted.load(std::memory_order_acquire);
+    if (pipelineFaulted && !pipelineFaultReported)
+    {
+        LOG("pacing: exact wait-worker pipeline faulted; no render-thread "
+            "xrWaitFrame will be substituted");
+        pipelineFaultReported = true;
+    }
+    else if (!pipelineFaulted)
+    {
+        pipelineFaultReported = false;
+    }
+
     FramePacingWorkerState& worker = g_framePacingWorker;
     FramePacingRecord record{};
     while (ConsumeFramePacingRecord(record))

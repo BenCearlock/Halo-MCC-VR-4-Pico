@@ -3638,6 +3638,26 @@ int main()
         "A 144-to-72 runtime cadence change triggers a pacing capture");
     Check(!IsMaterialFramePeriodTransition(8333333, 8403361),
         "A small runtime-period adjustment does not masquerade as a cadence flip");
+    Check(ShouldReleaseFrameWaitWorkerBeforeBegin(true, true),
+        "A claimed worker packet releases the next wait before xrBeginFrame");
+    Check(!ShouldReleaseFrameWaitWorkerBeforeBegin(true, false),
+        "A missing worker packet never releases another wait before xrBeginFrame");
+    Check(!ShouldReleaseFrameWaitWorkerBeforeBegin(false, true),
+        "No wait-worker release occurs when the worker is unavailable");
+    Check(ClassifyFrameWaitPermit(7, 6) == FrameWaitPermit::Park,
+        "The worker remains parked until its exact packet sequence is released");
+    Check(ClassifyFrameWaitPermit(7, 7) == FrameWaitPermit::StartNextWait,
+        "An exact sequence acknowledgement permits one subsequent wait");
+    Check(ClassifyFrameWaitPermit(7, 8) == FrameWaitPermit::Fault &&
+          ClassifyFrameWaitPermit(0, 0) == FrameWaitPermit::Fault,
+        "Skipped or invalid wait generations fault instead of issuing a wait");
+    Check(IsExpectedNextFrameWaitDispatch(7, 8),
+        "Begin admission observes the exact subsequent worker dispatch");
+    Check(!IsExpectedNextFrameWaitDispatch(7, 7) &&
+          !IsExpectedNextFrameWaitDispatch(7, 9) &&
+          !IsExpectedNextFrameWaitDispatch(0, 1) &&
+          !IsExpectedNextFrameWaitDispatch(UINT64_MAX, 0),
+        "Begin admission rejects stale, skipped, invalid, or wrapped dispatches");
 
     if (g_failures == 0)
         std::cout << "HaloMCCVR core tests passed\n";
