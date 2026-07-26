@@ -3289,6 +3289,10 @@ int main()
             key + "' assignment";
         Check(CountText(organizedConfig, assignment) == 1, message.c_str());
     }
+    Check(CountText(organizedConfig, "SMAA") == 0,
+        "Generated FXAA config contains no stale SMAA text");
+    Check(CountText(organizedConfig, "RCAS-based 2x overdrive") == 1,
+        "Generated config describes the stronger sharpening range");
     {
         std::ofstream file(primary);
         file << "config_version = 1\n";

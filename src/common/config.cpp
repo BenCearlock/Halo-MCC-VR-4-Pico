@@ -541,8 +541,8 @@ void ConfigSave()
     fprintf(f, "# sharp keeps edges crisp instead of the linear shimmer. Live, no restart.\n");
     fprintf(f, "# (default %d)\n", d.upscale_filter);
     fprintf(f, "upscale_filter = %d\n\n", g_config.upscale_filter);
-    fprintf(f, "# Sharpening strength (contrast-adaptive, AMD RCAS). 0 = off, 1 = max.\n");
-    fprintf(f, "# Adds apparent detail without ringing. Live, no restart.\n");
+    fprintf(f, "# Sharpening strength (RCAS-based 2x overdrive). 0 = off, 1 = max.\n");
+    fprintf(f, "# Twice the prior maximum; lower it if the top rings or clips. Live.\n");
     fprintf(f, "# (default %.2f, range 0 to 1)\n", d.sharpness);
     fprintf(f, "sharpness = %.2f\n\n", g_config.sharpness);
     fprintf(f, "# Anti-aliasing on the finished image: 0 = off, 1 = FXAA (balanced),\n");

@@ -163,8 +163,8 @@ struct Config
     // and the mod upscales the difference.
     int upscale_filter = 1;
 
-    // Sharpening strength (AMD FidelityFX RCAS), 0.00 = off, 1.00 = max. A light
-    // contrast-adaptive sharpen that adds apparent detail without ringing.
+    // Sharpening strength (AMD FidelityFX RCAS), 0.00 = off, 1.00 = a 2x
+    // correction overdrive. The aggressive top may ring or clip; users can lower it.
     float sharpness = 0.30f;
 
     // Anti-aliasing on the finished eye: 0 = off, 1 = FXAA (balanced), 2 = FXAA

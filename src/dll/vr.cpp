@@ -818,7 +818,7 @@ cbuffer IqParams : register(b0)
 {
     float2 srcSize;      // dims of the texture being sampled this pass
     float2 dstSize;      // dims of the render target this pass
-    float  sharpness;    // 0..1 RCAS strength
+    float  sharpness;    // 0..1 UI range; RCAS correction is 2x overdriven
     float  srcIsSrgb;    // 1 = sampling srcTex already returns linear
     float  outPerceptual;// 1 = write perceptual (to UNORM); 0 = write linear (to sRGB RTV)
     float  aaStrength;   // 0 = FXAA, 1 = FXAA Strong
