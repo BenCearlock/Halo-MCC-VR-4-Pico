@@ -225,6 +225,8 @@ void ConfigLoad(const wchar_t* path)
             g_config.resolution_scale = (float)atof(val);
         else if (!strcmp(key, "fit_desktop_window"))
             g_config.fit_desktop_window = atoi(val) != 0;
+        else if (!strcmp(key, "desktop_present_unlocked"))
+            g_config.desktop_present_unlocked = atoi(val) != 0;
         else if (!strcmp(key, "draw_distance"))
             g_config.draw_distance = (float)atof(val);
         else if (!strcmp(key, "upscale_filter"))
@@ -524,6 +526,16 @@ void ConfigSave()
     fprintf(f, "# changing this, the same as resolution_scale.\n");
     fprintf(f, "# (default %d)\n", d.fit_desktop_window ? 1 : 0);
     fprintf(f, "fit_desktop_window = %d\n\n", g_config.fit_desktop_window ? 1 : 0);
+    fprintf(f, "# Let the HEADSET set the frame rate, not your monitor. The VR frame\n");
+    fprintf(f, "# is submitted inside MCC's desktop present, so MCC's V-Sync would\n");
+    fprintf(f, "# pace your headset at your DESKTOP's refresh -- a 60 Hz desktop\n");
+    fprintf(f, "# capping a 120 Hz headset. With this on, the desktop mirror presents\n");
+    fprintf(f, "# unlocked and the VR runtime's own refresh (72, 90, 120, 144 Hz --\n");
+    fprintf(f, "# whatever your headset reports) is the only clock. The desktop window\n");
+    fprintf(f, "# may tear; the headset never does. 1 = on, 0 = stock passthrough.\n");
+    fprintf(f, "# (default %d)\n", d.desktop_present_unlocked ? 1 : 0);
+    fprintf(f, "desktop_present_unlocked = %d\n\n",
+            g_config.desktop_present_unlocked ? 1 : 0);
     fprintf(f, "# Draw distance: how far the game renders the whole scene, as a\n");
     fprintf(f, "# fraction of stock. Applies live to all three games (Halo 3, ODST,\n");
     fprintf(f, "# Reach). 1.00 = full stock draw distance. Lower brings the far plane\n");

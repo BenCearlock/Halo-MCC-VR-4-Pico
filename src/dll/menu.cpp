@@ -75,20 +75,28 @@ namespace
         MONITORINFO mi{sizeof(mi)};
         if (!GetMonitorInfo(mon, &mi))
             return;
-        const int workW = mi.rcWork.right - mi.rcWork.left;
-        const int workH = mi.rcWork.bottom - mi.rcWork.top;
-        if (workW <= 0 || workH <= 0)
+        // COVER the monitor exactly -- do not letterbox inside it, and use the
+        // full monitor rect rather than the work area (a taskbar-sized gap counts
+        // as not covering). A borderless window that covers its whole output can
+        // stay on a hardware overlay plane, so DXGI keeps the present on the
+        // independent-flip path. The instant the window leaves even one strip of
+        // the screen uncovered (the old aspect-preserved letterbox left 422px bars
+        // on a 4K monitor) DWM must composite the window instead, and a composited
+        // flip present is consumed at the compositor's rate -- which caps the
+        // GAME's present rate, and since the VR frame is submitted inside that
+        // present (d3d11_hook.cpp) it caps the HEADSET's frame rate too. That is
+        // the 60 Hz lock: it appeared at 4K (letterboxed) and not at 1080p (where
+        // the letterbox happened to equal the whole monitor). The headset render
+        // and gun alignment are unaffected; only the desktop mirror's aspect is,
+        // since DXGI now stretches the render across the full monitor.
+        const int monW = mi.rcMonitor.right - mi.rcMonitor.left;
+        const int monH = mi.rcMonitor.bottom - mi.rcMonitor.top;
+        if (monW <= 0 || monH <= 0)
             return;
-        const float aspect = (float)kNativeRenderWidth / (float)kNativeRenderHeight;
-        int w = workW;
-        int h = (int)((float)w / aspect + 0.5f);
-        if (h > workH)
-        {
-            h = workH;
-            w = (int)((float)h * aspect + 0.5f);
-        }
-        const int x = mi.rcWork.left + (workW - w) / 2;
-        const int y = mi.rcWork.top + (workH - h) / 2;
+        const int w = monW;
+        const int h = monH;
+        const int x = mi.rcMonitor.left;
+        const int y = mi.rcMonitor.top;
         if (!SetWindowPos(hwnd, nullptr, x, y, w, h,
                           SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED))
         {
@@ -99,8 +107,13 @@ namespace
         RECT client{};
         if (GetClientRect(hwnd, &client))
         {
-            LOG("fit: native MCC window is borderless; client %ldx%ld at (%d,%d)",
-                client.right - client.left, client.bottom - client.top, x, y);
+            const LONG cw = client.right - client.left;
+            const LONG ch = client.bottom - client.top;
+            LOG("fit: native MCC window is borderless; client %ldx%ld at (%d,%d); "
+                "monitor %dx%d; covers=%d (covers=0 forces DWM composition, which "
+                "caps the game present AND the headset)",
+                cw, ch, x, y, monW, monH,
+                (cw == monW && ch == monH) ? 1 : 0);
         }
     }
 
@@ -148,19 +161,17 @@ namespace
                     MONITORINFO mi{sizeof(mi)};
                     if (GetMonitorInfo(mon, &mi))
                     {
-                        const int workW = mi.rcWork.right - mi.rcWork.left;
-                        const int workH = mi.rcWork.bottom - mi.rcWork.top;
-                        if (workW > 0 && workH > 0 && (pos->cx > workW || pos->cy > workH))
+                        // Re-cover the monitor, matching FitGameWindow. Clamping to
+                        // a letterbox here would hand the window back to DWM
+                        // composition mid-session and re-cap the headset.
+                        const int monW = mi.rcMonitor.right - mi.rcMonitor.left;
+                        const int monH = mi.rcMonitor.bottom - mi.rcMonitor.top;
+                        if (monW > 0 && monH > 0 && (pos->cx > monW || pos->cy > monH))
                         {
-                            const float aspect =
-                                (float)kNativeRenderWidth / (float)kNativeRenderHeight;
-                            int w = workW;
-                            int h = (int)((float)w / aspect + 0.5f);
-                            if (h > workH) { h = workH; w = (int)((float)h * aspect + 0.5f); }
-                            pos->cx = w;
-                            pos->cy = h;
-                            pos->x = mi.rcWork.left + (workW - w) / 2;
-                            pos->y = mi.rcWork.top + (workH - h) / 2;
+                            pos->cx = monW;
+                            pos->cy = monH;
+                            pos->x = mi.rcMonitor.left;
+                            pos->y = mi.rcMonitor.top;
                             pos->flags &= ~SWP_NOMOVE;
                         }
                     }
@@ -619,9 +630,13 @@ namespace
             "For monitors SMALLER than your render (e.g. a big headset resolution on\n"
             "a 1080p screen), where MCC's window overflows and you can't click the\n"
             "\"Halo 3\" tile or Quit. The headset keeps the full resolution above; only\n"
-            "the desktop window shrinks to fit and the GPU downscales into it (no\n"
-            "extra render pass, no measurable cost). OFF by default. Takes effect on\n"
-            "the next launch -- close MCC and relaunch.");
+            "the desktop window is refitted and the GPU scales into it (no extra\n"
+            "render pass, no measurable cost). The window now COVERS your monitor\n"
+            "instead of letterboxing inside it -- a partly-covered screen forces\n"
+            "Windows to composite the window, which caps the game's present rate and\n"
+            "your headset with it. So the desktop mirror may look horizontally\n"
+            "stretched; the headset picture is untouched. OFF by default. Takes\n"
+            "effect on the next launch -- close MCC and relaunch.");
         changed |= ImGui::SliderFloat("Game brightness", &g_config.game_brightness, 0.5f, 2.0f, "%.2f");
         ImGui::TextDisabled("Brightens/darkens the whole game. 1.0 = the game's own brightness.");
         changed |= ImGui::Checkbox("Motion blur", &g_config.motion_blur);

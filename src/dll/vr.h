@@ -83,6 +83,13 @@ bool VR_IsStereoEnabled();
 // synchronized/unfocused session commonly publishes false while the headset is
 // idle; game hooks must not treat the resulting absent eye raster as failure.
 bool VR_ShouldRenderPreparedFrame();
+// The headset's refresh as the OpenXR runtime reports it (0 until the first
+// xrWaitFrame). Never assumed or hardcoded anywhere: 72/90/120/144 all arrive
+// through this one number.
+float VR_HeadsetRefreshHz();
+// True once xrWaitFrame is driving our cadence, i.e. the headset owns pacing and
+// the desktop present is free to run unlocked.
+bool VR_IsFramePacingOwned();
 // Called on the render thread when Halo stops driving its level camera. Makes
 // every 3D path inactive immediately and drops references to Halo's scene
 // target before MCC switches to its shell or another resident game engine.

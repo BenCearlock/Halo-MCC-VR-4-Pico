@@ -153,6 +153,15 @@ struct Config
     // this takes effect on the next game start (close MCC and relaunch).
     bool fit_desktop_window = false;
 
+    // The VR frame is submitted inside MCC's desktop Present, so MCC's own
+    // V-Sync would pace the HEADSET at the DESKTOP monitor's refresh -- a 60 Hz
+    // desktop capping a 120 Hz headset. With this on we present the desktop
+    // mirror unlocked and let the OpenXR runtime's reported display period be
+    // the only clock, so 72/90/120/144 Hz headsets each pace themselves. The
+    // desktop mirror may tear; the headset never does (the compositor owns it).
+    // ON by default -- the headset must never inherit the desktop's refresh.
+    bool desktop_present_unlocked = true;
+
     // Image quality (mod-owned, applied live when each eye is expanded into the
     // headset — universal to every title, no restart). These replace/augment the
     // plain linear upscale that made edges shimmer even at high resolution.

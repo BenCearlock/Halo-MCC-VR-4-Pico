@@ -1,6 +1,7 @@
 #include <windows.h>
 #include <d3d11.h>
 #include <dxgi1_2.h>
+#include <dxgi1_5.h>
 #include <cstdlib>
 #include <climits>
 #include <cmath>
@@ -665,6 +666,33 @@ static void LogSwapchainConfigOnce(IDXGISwapChain* sc)
 // we only run the VR frame once per game frame.
 static thread_local int g_presentDepth = 0;
 
+// The VR frame is submitted INSIDE the game's desktop present (below), so
+// whatever throttles that present throttles the headset with it. MCC's V-Sync
+// paces on the DESKTOP monitor's refresh, which has nothing to do with the
+// headset's -- that is how a 60 Hz desktop ends up capping a 120 Hz headset.
+// Once xrWaitFrame is driving our cadence, present the desktop mirror unlocked
+// and let the runtime's reported display period be the only clock. No rate is
+// assumed here: 72, 90, 120 and 144 Hz headsets all pace themselves.
+static UINT PacedSyncInterval(UINT requested)
+{
+    if (!g_config.desktop_present_unlocked || !VR_IsFramePacingOwned())
+        return requested;
+    static UINT s_loggedRequested = UINT_MAX;
+    if (requested != s_loggedRequested)
+    {
+        s_loggedRequested = requested;
+        if (requested == 0)
+            LOG("pacing: MCC already presents unlocked (syncInterval=0); the "
+                "headset paces itself at %.1fHz", VR_HeadsetRefreshHz());
+        else
+            LOG("pacing: MCC asked for syncInterval=%u (its V-Sync would cap the "
+                "headset at the DESKTOP refresh); presenting unlocked so the "
+                "headset paces itself at %.1fHz",
+                requested, VR_HeadsetRefreshHz());
+    }
+    return 0;
+}
+
 static HRESULT STDMETHODCALLTYPE PresentHook(IDXGISwapChain* sc, UINT syncInterval, UINT flags)
 {
     const bool topLevel = (g_presentDepth++ == 0);
@@ -674,7 +702,8 @@ static HRESULT STDMETHODCALLTYPE PresentHook(IDXGISwapChain* sc, UINT syncInterv
         LogSwapchainConfigOnce(sc);
         VR_BeforePresent(sc);
     }
-    HRESULT hr = g_origPresent(sc, syncInterval, flags);
+    HRESULT hr = g_origPresent(
+        sc, runVrFrame ? PacedSyncInterval(syncInterval) : syncInterval, flags);
     if (runVrFrame)
         VR_AfterPresent(sc);
     g_presentDepth--;
@@ -691,7 +720,9 @@ static HRESULT STDMETHODCALLTYPE Present1Hook(IDXGISwapChain1* sc, UINT syncInte
         LogSwapchainConfigOnce(sc);
         VR_BeforePresent(sc);
     }
-    HRESULT hr = g_origPresent1(sc, syncInterval, flags, params);
+    HRESULT hr = g_origPresent1(
+        sc, runVrFrame ? PacedSyncInterval(syncInterval) : syncInterval, flags,
+        params);
     if (runVrFrame)
         VR_AfterPresent(sc);
     g_presentDepth--;

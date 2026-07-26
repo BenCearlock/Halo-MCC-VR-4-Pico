@@ -403,6 +403,12 @@ namespace
     LARGE_INTEGER g_dxgiPresentStartQpc{};
     uint64_t g_timingLogStartMs = 0;
     XrTime g_lastPredictedDisplayTime = 0;
+    // The runtime's own display period for this headset, straight from
+    // xrWaitFrame. This is the ONLY thing allowed to set our frame cadence:
+    // 72, 90, 120, 144 Hz all come out of here with no assumption on our side.
+    // Published so the desktop present hook can log the two rates side by side
+    // when they disagree (that disagreement is the whole 60 Hz class of bug).
+    std::atomic<uint64_t> g_displayPeriodNs{0};
     uint64_t g_missedPredictions = 0;
     uint64_t g_duplicatePredictions = 0;
     uint64_t g_frameOrderFailures = 0;
@@ -4748,6 +4754,9 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
             const XrDuration delta =
                 frameState.predictedDisplayTime - g_lastPredictedDisplayTime;
             const XrDuration period = frameState.predictedDisplayPeriod;
+            if (period > 0)
+                g_displayPeriodNs.store(static_cast<uint64_t>(period),
+                                        std::memory_order_relaxed);
             if (delta <= 0)
                 ++g_duplicatePredictions;
             else if (period > 0)
@@ -5448,8 +5457,13 @@ void VR_BeforePresent(IDXGISwapChain* sc)
         if (--fpsLogCountdown <= 0)
         {
             fpsLogCountdown = 10;
-            LOG("fps %.0f (stereo %s)", g_status.fps,
-                g_stereoEnabled.load() ? "on" : "off");
+            // Log the headset's own refresh next to the delivered rate. If they
+            // match we are pacing off the headset, which is the contract. If fps
+            // sits at a clean fraction of headset Hz (60 of 120, 72 of 144) the
+            // desktop present path is gating us, not the GPU.
+            LOG("fps %.0f (stereo %s); headset %.1fHz (runtime-reported)",
+                g_status.fps, g_stereoEnabled.load() ? "on" : "off",
+                VR_HeadsetRefreshHz());
         }
     }
 
@@ -5653,6 +5667,20 @@ bool VR_IsStereoEnabled()
 bool VR_ShouldRenderPreparedFrame()
 {
     return g_preparedShouldRender.load(std::memory_order_acquire);
+}
+
+float VR_HeadsetRefreshHz()
+{
+    const uint64_t period = g_displayPeriodNs.load(std::memory_order_relaxed);
+    return period ? (float)(1000000000.0 / (double)period) : 0.0f;
+}
+
+bool VR_IsFramePacingOwned()
+{
+    // True once the runtime is driving our cadence through xrWaitFrame. Until
+    // then the desktop present must keep the game's own timing untouched.
+    return g_state == State::Ready && g_sessionRunning &&
+           g_displayPeriodNs.load(std::memory_order_relaxed) != 0;
 }
 
 void VR_DetachGamePresentation()
