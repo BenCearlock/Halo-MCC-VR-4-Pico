@@ -73,11 +73,18 @@ namespace
     XrPath g_leftHandPath = XR_NULL_PATH;
     XrPath g_rightHandPath = XR_NULL_PATH;
     bool g_touchProProfileEnabled = false;
+    // The headset's real panel rate, read once from the runtime (0 = the runtime
+    // does not expose it). Compared against the rate xrWaitFrame targets us at,
+    // which is a FRACTION of this whenever the runtime reprojects. No rate is
+    // ever assumed: 72, 80, 90, 120, 144 all come from these two numbers.
+    bool g_refreshRateExtEnabled = false;
+    std::atomic<float> g_panelRefreshHz{0.0f};
     XrEnvironmentBlendMode g_blendMode = XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
     bool g_sessionRunning = false;
     XrSessionState g_sessionState = XR_SESSION_STATE_UNKNOWN;
     std::atomic<float> g_requestedHaptics{0.0f};
     void StopControllerHaptics();
+    void LogHeadsetPanelRate();
 
     // M2 stereo: per-eye recommended render size and per-eye pose/FOV.
     std::vector<XrViewConfigurationView> g_viewConfigs;
@@ -3659,6 +3666,16 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
             hasExtension(XR_FB_TOUCH_CONTROLLER_PRO_EXTENSION_NAME);
         if (g_touchProProfileEnabled)
             enabledExtensions.push_back(XR_FB_TOUCH_CONTROLLER_PRO_EXTENSION_NAME);
+        // Read-only: lets us log the headset's REAL panel rate. xrWaitFrame's
+        // predictedDisplayPeriod reports the rate the runtime is TARGETING the
+        // app at, which is a fraction of the panel rate whenever SteamVR engages
+        // reprojection (120 panel -> 60 or 40 targeted). Logging both side by
+        // side is the only way to tell "the headset is slow" apart from "the
+        // runtime halved us", which look identical from the period alone.
+        g_refreshRateExtEnabled =
+            hasExtension(XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME);
+        if (g_refreshRateExtEnabled)
+            enabledExtensions.push_back(XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME);
 
         XrInstanceCreateInfo ici{XR_TYPE_INSTANCE_CREATE_INFO};
         strcpy_s(ici.applicationInfo.applicationName, "HaloMCCVR");
@@ -4604,8 +4621,45 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
             LOG("WARNING: menu failed to initialize; F1 menu unavailable");
 
         strcpy_s(g_status.sessionState, "starting");
+        LogHeadsetPanelRate();
         LOG("OpenXR session created");
         return true;
+    }
+
+    // Read the headset's REAL panel rate once, so the log can separate two very
+    // different things that look identical from the frame period alone:
+    //   - the headset is genuinely running slow, versus
+    //   - the runtime is TARGETING us at a fraction of the panel (reprojection),
+    //     which pins us to panel/2 or panel/3 no matter what the GPU could do.
+    // Works for any rate (72, 80, 90, 120, 144); nothing here assumes a number.
+    void LogHeadsetPanelRate()
+    {
+        if (!g_refreshRateExtEnabled)
+        {
+            LOG("headset: this runtime does not expose %s, so the panel rate is "
+                "unknown; only the rate it targets us at can be read",
+                XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME);
+            return;
+        }
+        PFN_xrGetDisplayRefreshRateFB getRate = nullptr;
+        if (XR_FAILED(xrGetInstanceProcAddr(
+                g_instance, "xrGetDisplayRefreshRateFB",
+                (PFN_xrVoidFunction*)&getRate)) || !getRate)
+        {
+            LOG("headset: xrGetDisplayRefreshRateFB missing though the extension "
+                "is enabled; panel rate unknown");
+            return;
+        }
+        float hz = 0.0f;
+        const XrResult r = getRate(g_session, &hz);
+        if (XR_FAILED(r) || hz <= 0.0f)
+        {
+            LOG("headset: panel rate query failed (%s); panel rate unknown",
+                XrStr(r));
+            return;
+        }
+        g_panelRefreshHz.store(hz, std::memory_order_relaxed);
+        LOG("headset: panel is running at %.1fHz", hz);
     }
 
     // --------------------------------------------------------------- frame
