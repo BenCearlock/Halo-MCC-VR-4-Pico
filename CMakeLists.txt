@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(halomccvr LANGUAGES C CXX)
+project(halomccvr LANGUAGES C CXX RC)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -90,6 +90,66 @@ FetchContent_Declare(imgui
 
 FetchContent_MakeAvailable(openxr minhook imgui)
 
+# Generate, validate, and embed the pinned official SMAA shaders. Bytecode is
+# compiled at configure time so selecting SMAA cannot invoke the HLSL optimizer
+# on the VR render thread. The installed mod has no loose shader dependency.
+set(HALOMCCVR_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
+file(MAKE_DIRECTORY "${HALOMCCVR_GENERATED_DIR}")
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/third_party/smaa/SMAA.hlsl"
+    HALOMCCVR_SMAA_UPSTREAM_SOURCE)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/third_party/smaa/SMAA.hlsl")
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/dll/smaa_runtime.hlsl.in"
+    "${HALOMCCVR_GENERATED_DIR}/smaa_runtime.hlsl"
+    @ONLY)
+
+get_filename_component(HALOMCCVR_WINDOWS_SDK_BIN "${CMAKE_RC_COMPILER}" DIRECTORY)
+find_program(HALOMCCVR_FXC NAMES fxc.exe fxc
+    HINTS
+        "${HALOMCCVR_WINDOWS_SDK_BIN}"
+        "$ENV{WindowsSdkVerBinPath}/x64"
+        "C:/Program Files (x86)/Windows Kits/10/bin/${CMAKE_VS_WINDOWS_TARGET_PLATFORM_VERSION}/x64")
+if(NOT HALOMCCVR_FXC)
+    file(GLOB HALOMCCVR_FXC_CANDIDATES
+        "C:/Program Files (x86)/Windows Kits/10/bin/*/x64/fxc.exe")
+    list(SORT HALOMCCVR_FXC_CANDIDATES COMPARE NATURAL ORDER DESCENDING)
+    if(HALOMCCVR_FXC_CANDIDATES)
+        list(GET HALOMCCVR_FXC_CANDIDATES 0 HALOMCCVR_FXC)
+    endif()
+endif()
+if(NOT HALOMCCVR_FXC)
+    message(FATAL_ERROR "fxc is required to build the embedded SMAA shaders")
+endif()
+
+function(halomccvr_compile_smaa entry profile output_name)
+    execute_process(
+        COMMAND "${HALOMCCVR_FXC}" /nologo /Ges /WX /O3
+            /T "${profile}" /E "${entry}"
+            /Fo "${HALOMCCVR_GENERATED_DIR}/${output_name}"
+            "${HALOMCCVR_GENERATED_DIR}/smaa_runtime.hlsl"
+        RESULT_VARIABLE HALOMCCVR_FXC_RESULT
+        OUTPUT_VARIABLE HALOMCCVR_FXC_OUTPUT
+        ERROR_VARIABLE HALOMCCVR_FXC_ERROR)
+    if(NOT HALOMCCVR_FXC_RESULT EQUAL 0)
+        message(FATAL_ERROR
+            "SMAA shader ${entry} failed to compile:\n"
+            "${HALOMCCVR_FXC_OUTPUT}${HALOMCCVR_FXC_ERROR}")
+    endif()
+endfunction()
+
+halomccvr_compile_smaa(vs_smaa_edges vs_5_0 smaa_edges_vs.cso)
+halomccvr_compile_smaa(vs_smaa_weights vs_5_0 smaa_weights_vs.cso)
+halomccvr_compile_smaa(vs_smaa_neighborhood vs_5_0 smaa_neighborhood_vs.cso)
+halomccvr_compile_smaa(ps_smaa_edges ps_5_0 smaa_edges_ps.cso)
+halomccvr_compile_smaa(ps_smaa_weights ps_5_0 smaa_weights_ps.cso)
+halomccvr_compile_smaa(ps_smaa_neighborhood ps_5_0 smaa_neighborhood_ps.cso)
+
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/dll/smaa_resources.rc.in"
+    "${HALOMCCVR_GENERATED_DIR}/smaa_resources.rc"
+    @ONLY)
+
 # OpenXR requests the dynamic CRT for its static loader; keep it consistent with
 # the mod's static-CRT build.
 set_target_properties(openxr_loader PROPERTIES
@@ -107,6 +167,7 @@ target_include_directories(imgui_lib PUBLIC
     ${imgui_SOURCE_DIR}/backends)
 
 add_library(halo3xr SHARED
+    ${HALOMCCVR_GENERATED_DIR}/smaa_resources.rc
     src/common/log.cpp
     src/common/config.cpp
     src/common/input_logic.cpp
@@ -123,6 +184,10 @@ add_library(halo3xr SHARED
     src/dll/input.cpp
     src/dll/title_adapter.cpp
     src/dll/reach_adapter.cpp)
+target_include_directories(halo3xr PRIVATE
+    ${HALOMCCVR_GENERATED_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/dll
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/smaa/Textures)
 if(HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE)
     target_sources(halo3xr PRIVATE
         src/dll/reach_render_candidate.cpp
