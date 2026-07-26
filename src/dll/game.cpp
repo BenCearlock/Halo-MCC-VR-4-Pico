@@ -9570,7 +9570,7 @@ namespace
     // +0x18, vertical FOV +0x28 -- exactly what ValidateReachCompactCamera
     // decodes), and the player-view rollback regions.
     //
-    // The worker installs the complete six-hook transaction only after the
+    // The worker installs the five proven camera/FP hooks only after the
     // loaded-image preflight passes and the VR eye-capture resources are
     // published, then arms after a one-second fresh-camera safety interval,
     // exactly like the accepted ODST core. A failed owned eye is invalidated and
@@ -12985,21 +12985,8 @@ namespace
             LOG("Reach camera install: could not retain the exact title module");
             return false;
         }
-
-        // Mandatory HREK-only authored-crosshair parity gate. Reach VR must not
-        // arm as a mixed transaction with a flat native crosshair. A missing,
-        // ambiguous, or layout-mismatched function rejects the complete Reach
-        // transaction before hook installation or VR ownership.
+        // The unproven Reach CHUD detour is not part of core VR ownership.
         void* hudDrawWidget = nullptr;
-        if (!ResolveReachHrekChudDrawWidget(base, size, hudDrawWidget))
-        {
-            g_reachChudParityFailedGeneration.store(
-                generation, std::memory_order_release);
-            LOG("Reach camera install: HREK authored-crosshair parity gate "
-                "rejected the complete VR transaction");
-            FreeLibrary(moduleReference);
-            return false;
-        }
 
         void* inner = reinterpret_cast<void*>(base + kReachPlayerViewRenderRva);
         void* outer = reinterpret_cast<void*>(base + kReachMainRenderViewRva);
@@ -13025,13 +13012,9 @@ namespace
                 fpCamera,
                 reinterpret_cast<void*>(&ReachFpCameraRebuildDetour),
                 reinterpret_cast<void**>(&g_reachOrigFpCameraRebuild)) == MH_OK;
-        const bool hudDrawWidgetCreated = fpCameraCreated && MH_CreateHook(
-                hudDrawWidget,
-                reinterpret_cast<void*>(&ReachHudDrawWidgetDetour),
-                reinterpret_cast<void**>(&g_reachOrigHudDrawWidget)) == MH_OK;
+        const bool hudDrawWidgetCreated = false;
         if (!innerCreated || !outerCreated ||
-            !fpInterpolateCreated || !fpPaletteCreated || !fpCameraCreated ||
-            !hudDrawWidgetCreated)
+            !fpInterpolateCreated || !fpPaletteCreated || !fpCameraCreated)
         {
             bool cleanupOk=true;
             bool innerRetained=innerCreated;
@@ -13110,7 +13093,7 @@ namespace
         g_reachCamera.fpInterpolateTarget = fpInterpolate;
         g_reachCamera.fpPaletteTarget = fpPalette;
         g_reachCamera.fpCameraTarget = fpCamera;
-        g_reachCamera.hudDrawWidgetTarget = hudDrawWidget;
+        g_reachCamera.hudDrawWidgetTarget = nullptr;
         g_reachFpCameraUpload = reinterpret_cast<ReachFpCameraUploadFn>(
             base + kReachFpCameraUploadRva);
         g_reachCamera.installedAtMs = GetTickCount64();
@@ -13151,8 +13134,7 @@ namespace
             MH_EnableHook(outer) != MH_OK ||
             MH_EnableHook(fpInterpolate) != MH_OK ||
             MH_EnableHook(fpPalette) != MH_OK ||
-            MH_EnableHook(fpCamera) != MH_OK ||
-            MH_EnableHook(hudDrawWidget) != MH_OK)
+            MH_EnableHook(fpCamera) != MH_OK)
         {
             // State was published before the first enable, so even a partial
             // MinHook failure can use the same disable/quiesce/remove proof as
@@ -13176,10 +13158,6 @@ namespace
             "before arming");
         LOG("Reach FP camera hook installed for the exact HREK-homologous "
             "nested workspace; per-eye execution pending");
-        LOG("Reach crosshair: mandatory HREK class-2 authored-widget redirect "
-            "hooked at haloreach.dll+0x%llX; activation waits for stereo arm",
-            static_cast<unsigned long long>(
-                reinterpret_cast<uintptr_t>(hudDrawWidget) - base));
         LOG("Reach comfort evidence: blurScale=%llX blurMax=%llX "
             "(authored %.4f/%.4f); VR default keeps scale finite and zeros max",
             static_cast<unsigned long long>(
@@ -13306,8 +13284,8 @@ namespace
                 kReachRenderSafetyIntervalMs)
         {
             g_reachCamera.armed.store(true, std::memory_order_release);
-            LOG("Reach camera core armed: complete six-hook per-eye stereo + "
-                "authored-crosshair transaction is live; failed owned eyes "
+            LOG("Reach camera core armed: proven five-hook per-eye stereo + "
+                "camera/FP transaction is live; failed owned eyes "
                 "are revoked and never published");
         }
     }

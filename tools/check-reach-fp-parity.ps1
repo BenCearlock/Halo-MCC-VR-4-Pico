@@ -271,7 +271,28 @@ $requiredChudGame = [ordered]@{
     'frame-upload rejection latches and immediately disarms Reach' =
         'void\s+Game_RejectReachAuthoredReticle\(uint32_t\s+expectedGeneration\)[\s\S]{0,900}?!expectedGeneration[\s\S]{0,180}?TitleAdapter_GetActiveTitle\(\)\s*!=\s*GameTitle::HaloReach[\s\S]{0,220}?TitleAdapter_GetGeneration\(GameTitle::HaloReach\)\s*!=\s*expectedGeneration[\s\S]{0,260}?g_reachChudParityFailedGeneration\.store\(\s*expectedGeneration[\s\S]{0,220}?armed\.store\(false[\s\S]{0,180}?teardownRequested\.store\(true'
 }
+$reachChudCoreActive = $game -match
+    'MH_CreateHook\([\s\S]{0,180}?ReachHudDrawWidgetDetour'
+$inactiveChudCoreChecks = @(
+    'mandatory HREK authored-crosshair resolver gate',
+    'HREK resolver failure latches the rejected generation',
+    'mandatory CHUD hook creation follows the camera hooks',
+    'mandatory CHUD hook creation failure rejects the complete transaction',
+    'mandatory CHUD target publication',
+    'mandatory CHUD hook enable'
+)
+if (-not $reachChudCoreActive) {
+    if ($game -notmatch 'const\s+bool\s+hudDrawWidgetCreated\s*=\s*false' -or
+        $game -notmatch 'g_reachCamera\.hudDrawWidgetTarget\s*=\s*nullptr' -or
+        $game -match 'MH_EnableHook\(hudDrawWidget\)') {
+        throw 'Reach core-only gate rejected: unproven CHUD ownership is not fully disabled.'
+    }
+}
 foreach ($entry in $requiredChudGame.GetEnumerator()) {
+    if (-not $reachChudCoreActive -and
+        $inactiveChudCoreChecks -contains $entry.Key) {
+        continue
+    }
     if ($game -notmatch $entry.Value) {
         throw "Reach authored-crosshair parity gate missing: $($entry.Key)."
     }
@@ -461,4 +482,4 @@ if ($logic -notmatch 'kReachFpCameraRebuildAob' -or
     throw 'Reach FP parity gate missing: exact Reach camera rebuild/upload proof anchors.'
 }
 
-Write-Host 'Reach FP Halo 3/ODST palette + native weapon-IK + world-projection camera + mandatory HREK authored-crosshair parity gate passed; the rejected projectile experiment is absent from this candidate.'
+Write-Host 'Reach core Halo 3/ODST parity gate passed: five camera/FP hooks, native weapon-IK bypass, world projection, and the unproven CHUD hook disabled.'
