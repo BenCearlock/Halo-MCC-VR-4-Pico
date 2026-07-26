@@ -59,10 +59,15 @@ namespace
         kHalo3RuntimeCapabilities;
     // Matches kReachCapabilities in title_registry.cpp. Native HUD stays
     // withheld until Reach's CHUD anchor is proven and wired.
+    // ArmIk is deliberately NOT granted. Reach reported no capabilities at all
+    // until PublishReachLifecycle existed, so every arm-gated capability turned
+    // on at once the first time it did. ControllerAim was the one the VR
+    // crosshair needed and it is headset-confirmed working; ArmIk immediately
+    // attached the left hand to the player's face, because Reach's arm IK is
+    // not solved yet. Grant it only once that is proven in the headset.
     constexpr uint32_t kReachRuntimeCapabilities =
         TitleCapability_Stereo |
         TitleCapability_ControllerAim |
-        TitleCapability_ArmIk |
         TitleCapability_RuntimeModes |
         TitleCapability_RoomScale |
         TitleCapability_ControllerInput |
