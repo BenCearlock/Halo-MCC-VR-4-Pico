@@ -13437,8 +13437,32 @@ namespace
         lifecycle.enabledCapabilities =
             lifecycle.installed && !lifecycle.teardownRequested
                 ? kReachRuntimeCapabilities : TitleCapability_None;
-        return TitleAdapter_PublishLifecycle(
+
+        // Publish ONLY on a real state change. Republishing identical state
+        // every 50 ms poll re-opens the runtime publication sequence
+        // constantly, which keeps the shared snapshot "pending". A pending
+        // snapshot reports mode=Loading with NO capabilities
+        // (PendingSnapshotFromCandidate), so Game_HasTitleCapability kept
+        // denying ControllerAim and the VR reticle chain was never created --
+        // visible in the log as "Runtime mode: gameplay -> loading" flapping
+        // ~10x/second forever.
+        static uint32_t publishedGeneration = 0;
+        static uint32_t publishedState = 0xFFFFFFFFu;
+        const uint32_t state =
+            (lifecycle.installed ? 1u : 0u) |
+            (lifecycle.armed ? 2u : 0u) |
+            (lifecycle.teardownRequested ? 4u : 0u) |
+            (lifecycle.enabledCapabilities << 3);
+        if (generation == publishedGeneration && state == publishedState)
+            return true;
+        const bool published = TitleAdapter_PublishLifecycle(
             GameTitle::HaloReach, generation, lifecycle);
+        if (published)
+        {
+            publishedGeneration = generation;
+            publishedState = state;
+        }
+        return published;
     }
     void ReachCameraCore_Poll(
         uintptr_t base, size_t size, uint32_t generation, bool soleReachTitle)
