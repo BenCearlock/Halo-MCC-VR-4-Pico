@@ -1363,12 +1363,32 @@ post-readiness swapchain/RTV/texture result of `Failed` is terminal for that
 loaded Reach generation.
 
 HREK also proves the transaction order independently of any retail image.
-Source-named `player_view_render` begins at `0x00834490`; its late call
-`0x008354AE -> 0x008B67C0` is source-named `chud_draw_screen_LDR`.
-The later path `0x008354E5 -> 0x008355A0` reaches source-named
-`chud_draw_screen` at `0x00835682 -> 0x008B6300`, before the player-view
-return. The class-2 capture therefore stays inside the already proven per-eye
-world/first-person/native-CHUD transaction. With shared `crosshair=1` and
+Source-named `player_view_render` begins at `0x00834490` (function
+`0x834490-0x835598`); its late call `0x008354AE -> 0x008B67C0` is source-named
+`chud_draw_screen_LDR`. That call is verified present: `player_view_render`
+calls `0x8B67C0` exactly once and never calls `chud_draw_screen`.
+
+**Reach has TWO CHUD draw paths, and only one is inside the per-eye render.**
+Re-verified in HREK on 2026-07-26 because the original claim here was
+incomplete and misdirected a day of debugging:
+
+| path | entry | called from | camera in VR |
+| --- | --- | --- | --- |
+| `chud_draw_screen_LDR` | `0x8B67C0` | inside `player_view_render` at `0x8354AE` | per-eye VR camera (correct) |
+| `chud_draw_screen` | `0x8B6320` | UI compositing pass at `0x50BD58` | stock camera (WRONG in VR) |
+
+`0x8B6320` is `chud_draw_screen(user_index)`: it opens its own profiler scope
+named `chud_draw_screen`, takes a user index, and gates on `!= -1` and `<= 3`.
+The compositing caller `0x50B780` runs the stage sequence
+`composite tile -> preui screen_shaders -> user_interface_render ->
+chud_draw_screen -> overhead_map -> postui screen_shaders`, which is after the
+world render, outside any per-eye scope.
+
+Consequence, matching the 2026-07-26 headset report: CHUD elements drawn by the
+LDR path render correctly in VR, while elements drawn by the compositing path
+are projected with the stock camera - world-anchored navpoints land in the wrong
+place and move inversely with the view, and one muzzle flash sticks at screen
+centre while another tracks the weapon. With shared `crosshair=1` and
 `kill_reticle=1`, one configured eye captures the authored widget while the
 opposite eye suppresses its flat copy; `crosshair=0` suppresses it. The shared
 explicit `kill_reticle=0` setting preserves stock drawing by user choice, but
