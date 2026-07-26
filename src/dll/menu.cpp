@@ -53,6 +53,24 @@ namespace
     // thread.
     void FitGameWindow(HWND hwnd)
     {
+        // MCC's decorated window path keeps Slate in a different geometry from
+        // the DXGI-stretched client when the render is larger than the monitor.
+        // That is the path where native shell/pause hit-testing and controller
+        // focus become unusable. Use the game's borderless-window geometry for
+        // the fitted client so MCC has one client rectangle for both display and
+        // native menu input.
+        const LONG_PTR oldStyle = GetWindowLongPtrW(hwnd, GWL_STYLE);
+        const LONG_PTR borderlessStyle =
+            (oldStyle & ~(WS_CAPTION | WS_THICKFRAME | WS_MINIMIZEBOX |
+                          WS_MAXIMIZEBOX | WS_SYSMENU)) |
+            WS_POPUP;
+        const LONG_PTR oldExStyle = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+        const LONG_PTR borderlessExStyle =
+            oldExStyle & ~(WS_EX_DLGMODALFRAME | WS_EX_CLIENTEDGE |
+                           WS_EX_STATICEDGE | WS_EX_WINDOWEDGE);
+        SetWindowLongPtrW(hwnd, GWL_STYLE, borderlessStyle);
+        SetWindowLongPtrW(hwnd, GWL_EXSTYLE, borderlessExStyle);
+
         HMONITOR mon = MonitorFromWindow(hwnd, MONITOR_DEFAULTTOPRIMARY);
         MONITORINFO mi{sizeof(mi)};
         if (!GetMonitorInfo(mon, &mi))
@@ -71,7 +89,19 @@ namespace
         }
         const int x = mi.rcWork.left + (workW - w) / 2;
         const int y = mi.rcWork.top + (workH - h) / 2;
-        SetWindowPos(hwnd, nullptr, x, y, w, h, SWP_NOZORDER | SWP_NOACTIVATE);
+        if (!SetWindowPos(hwnd, nullptr, x, y, w, h,
+                          SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED))
+        {
+            LOG("fit: borderless SetWindowPos failed (%lu)",
+                static_cast<unsigned long>(GetLastError()));
+            return;
+        }
+        RECT client{};
+        if (GetClientRect(hwnd, &client))
+        {
+            LOG("fit: native MCC window is borderless; client %ldx%ld at (%d,%d)",
+                client.right - client.left, client.bottom - client.top, x, y);
+        }
     }
 
     LRESULT CALLBACK WndProcHook(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)

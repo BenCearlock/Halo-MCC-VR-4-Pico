@@ -103,16 +103,17 @@ advance the accepted pointer in `docs/CURRENT-STATE.md`. Updated 2026-07-25.
 - `0819a0d` restores the display-fit runtime files exactly to `546d301`: no
   broad `GetCursorPos` rewrite, selected-caller rewrite, or cursor relocation is
   retained. The fitted window and forced full-size headset backbuffer remain.
-- The current one-behavior candidate removes only `546d301`'s fitted-window
-  `WM_MOUSE*` lParam remapping. MCC has a stock message-cursor path and a
-  separate polled Windows-cursor path; the mod was scaling only the former from
-  the real fitted client into render coordinates. Every failed follow-up kept
-  that split. This candidate tests whether returning stock physical client
-  coordinates restores coherence between the two native UI sources and stops
-  mouse hover from continually replacing keyboard/controller focus. The fake
-  full-size `WM_SIZE`/`GetClientRect` resize transaction, DXGI stretch, focus
-  handling, XInput, title runtime, and headset render are unchanged. The result
-  remains unknown until the exact packaged DLL is tested in the headset.
+- `222d08f` removed only `546d301`'s fitted-window `WM_MOUSE*` lParam
+  remapping. The exact installed source appeared in the first log line and the
+  fitted client remained active, but the user reported that native menu
+  navigation was unchanged. That isolates the stock-vs-scaled message
+  coordinate theory as another no-effect path; the user explicitly requested
+  that the current fitted-window work not be reverted.
+- The forward candidate makes only the fitted MCC window borderless before it
+  is resized into the monitor work area. This follows the reproduced community
+  workaround that borderless mode preserves native shell/pause navigation. It
+  retains the forced full-size backbuffer, fake full-size resize transaction,
+  DXGI stretch, XInput transport, and title runtime unchanged.
 
 Evidence logs:
 
