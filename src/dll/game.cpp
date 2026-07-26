@@ -9944,7 +9944,7 @@ namespace
             }
             if (action == ReachChudCrosshairAction::CaptureAuthored)
             {
-                if (VR_BeginPreparedAuthoredReticleCapture())
+                if (VR_BeginAuthoredReticleCapture())
                 {
                     captureStarted = true;
                     original(userIndex, descriptor, widgetIndex,
@@ -12997,23 +12997,6 @@ namespace
                 generation, std::memory_order_release);
             LOG("Reach camera install: HREK authored-crosshair parity gate "
                 "rejected the complete VR transaction");
-            FreeLibrary(moduleReference);
-            return false;
-        }
-        const AuthoredReticlePreparationResult reticlePreparation =
-            VR_PrepareAuthoredReticleResources();
-        if (reticlePreparation ==
-            AuthoredReticlePreparationResult::NotReady)
-        {
-            FreeLibrary(moduleReference);
-            return false;
-        }
-        if (reticlePreparation != AuthoredReticlePreparationResult::Ready)
-        {
-            g_reachChudParityFailedGeneration.store(
-                generation, std::memory_order_release);
-            LOG("Reach camera install: authored-reticle resources failed cold "
-                "preparation; mandatory VR transaction rejected");
             FreeLibrary(moduleReference);
             return false;
         }

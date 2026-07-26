@@ -219,7 +219,7 @@ $requiredChudGame = [ordered]@{
     'universal crosshair configuration transaction' =
         'ReachDecideChudCrosshairAction\([\s\S]{0,260}?g_config\.crosshair,[\s\S]{0,100}?g_config\.kill_reticle,[\s\S]{0,160}?g_config\.right_eye_first\s*\)'
     'authored class-2 capture wraps the stock draw' =
-        'action\s*==\s*ReachChudCrosshairAction::CaptureAuthored[\s\S]{0,260}?VR_BeginPreparedAuthoredReticleCapture\(\)[\s\S]{0,180}?captureStarted\s*=\s*true[\s\S]{0,180}?original\(userIndex,\s*descriptor,\s*widgetIndex'
+        'action\s*==\s*ReachChudCrosshairAction::CaptureAuthored[\s\S]{0,260}?VR_BeginAuthoredReticleCapture\(\)[\s\S]{0,180}?captureStarted\s*=\s*true[\s\S]{0,180}?original\(userIndex,\s*descriptor,\s*widgetIndex'
     'owned class-2 emission is recorded on the exact eye scope' =
         'if\s*\(ownsStereo\s*&&\s*isCrosshairClass\)[\s\S]{0,120}?g_reachFpCameraEyeScope\.chudClass2Seen\s*=\s*true'
     'single current-eye rejection helper closes the transaction' =
@@ -229,7 +229,7 @@ $requiredChudGame = [ordered]@{
     'failed eye suppresses later class-2 draws in the same transaction' =
         'matchingEyeScope\s*&&\s*g_reachFpCameraEyeScope\.chudParityFailed\s*&&\s*isCrosshairClass[\s\S]{0,100}?return'
     'runtime authored-target loss rejects the parity generation' =
-        'VR_BeginPreparedAuthoredReticleCapture\(\)[\s\S]{0,520}?captureStarted\s*=\s*true[\s\S]{0,1100}?RejectReachChudParityForCurrentEye\(\)[\s\S]{0,100}?return'
+        'VR_BeginAuthoredReticleCapture\(\)[\s\S]{0,520}?captureStarted\s*=\s*true[\s\S]{0,1100}?RejectReachChudParityForCurrentEye\(\)[\s\S]{0,100}?return'
     'failed CHUD eye cannot publish a Reach raster' =
         'if\s*\(\s*!renderReturned\s*\|\|\s*fpCameraScope\.chudParityFailed\s*\)[\s\S]{0,180}?transactionValid\s*=\s*false[\s\S]{0,100}?break[\s\S]{0,900}?VR_ReachCopyEye'
     'every admitted Reach attempt invalidates prior authored art' =
@@ -246,12 +246,8 @@ $requiredChudGame = [ordered]@{
         '!ReachInnerScopeMatchesLive\(playerView,\s*returnAddress\)[\s\S]{0,260}?g_reachOwnerScope\.active[\s\S]{0,420}?Game_RejectReachAuthoredReticle\([\s\S]{0,220}?return[\s\S]{0,180}?g_reachOrigPlayerViewRender\(playerView\)'
     'exact owned scope disarm is terminal without flat rerender' =
         'if\s*\(\s*!g_reachCamera\.armed\.load[\s\S]{0,420}?Game_RejectReachAuthoredReticle\([\s\S]{0,180}?return'
-    'authored-reticle resources prepare cold before hook creation' =
-        'reticlePreparation\s*=\s*VR_PrepareAuthoredReticleResources\(\)\s*;[\s\S]{0,1000}?reticlePreparation\s*!=\s*AuthoredReticlePreparationResult::Ready[\s\S]{0,700}?return false[\s\S]{0,1000}?MH_CreateHook\(inner'
-    'OpenXR startup-not-ready does not latch the Reach generation' =
-        'reticlePreparation\s*==\s*AuthoredReticlePreparationResult::NotReady[\s\S]{0,260}?FreeLibrary\(moduleReference\)\s*;[\s\S]{0,100}?return false\s*;[\s\S]{0,160}?if\s*\(reticlePreparation\s*!=\s*AuthoredReticlePreparationResult::Ready\)'
-    'cold authored-reticle resource failure latches the generation' =
-        'reticlePreparation\s*!=\s*AuthoredReticlePreparationResult::Ready[\s\S]{0,220}?g_reachChudParityFailedGeneration\.store\(\s*generation,\s*std::memory_order_release\s*\)[\s\S]{0,420}?FreeLibrary\(moduleReference\)[\s\S]{0,120}?return false'
+    'Reach uses the shared Halo 3/ODST render-thread authored capture path' =
+        'VR_BeginAuthoredReticleCapture\(\)'
     'Reach install polling waits for authored-resource runtime readiness' =
         'VR_ReachDisplayReady\(epoch\)\s*&&\s*VR_CanPrepareAuthoredReticleResources\(\)'
     'mandatory CHUD hook creation follows the camera hooks' =
