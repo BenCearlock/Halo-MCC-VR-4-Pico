@@ -208,10 +208,33 @@ Evidence logs:
   runtime/headset; 8k-class source resolution can still bring real
   anti-aliasing gains with steep GPU cost and diminishing returns. This should
   shape the safety warning framing.
-- **FSR is invisible to the mod.** Enabling MCC's FSR produced **zero** recognized
-  log events. The mod captures and reprojects the full frame assuming FSR isn't
-  touching the render target/viewport, which is the likely cause of the
-  second-screen / wrong-FOV symptom.
+- **PROVEN 2026-07-26 (fsr_probe): MCC FSR renders the scene into a SMALLER
+  pre-upscale target, then upscales to the full backbuffer.** In a Halo 3 session
+  at resolution_scale 1.30 (backbuffer `3786x2730`) with MCC FSR on **Balanced**,
+  the probe logged the scene rendering into `1893x1365` targets -- **exactly half
+  the backbuffer** in both dimensions. Two formats appear at that half size:
+  `fmt=10` (R16G16B16A16_FLOAT, the HDR scene color, ~54k binds) and `fmt=28`
+  (R8G8B8A8_TYPELESS, ~4k binds). The mod's discovery predicate requires a
+  typeless RGBA scene target at **exactly backbuffer size**, so with FSR on it
+  never matches the real (half-res) scene render and instead learns the full-size
+  post-upscale target -- capturing the wrong image. That mismatch is the root
+  cause of the reported second-screen / wrong-FOV symptom. Evidence: distilled
+  target histogram in the 2026-07-26 probe run (145 MB raw log; the standout
+  lines are `RT 1893x1365 fmt=10/28 ... backbuffer 3786x2730`).
+- **The FSR pre-upscale size is TIER-DEPENDENT, not fixed.** MCC's FSR has 4
+  quality tiers (Ultra Quality / Quality / Balanced / Performance); each uses a
+  different render scale, so the smaller target's dimensions change with the tier
+  (Balanced measured at 50%). A fix must **detect** whatever sub-backbuffer scene
+  target FSR is currently rendering into (e.g. a typeless/HDR RGBA target smaller
+  than the backbuffer, learned like the current predicate but with the size
+  constraint relaxed), not hardcode a half-res assumption.
+- **PROBE BUG to fix before the next probe build:** `ProbeFsrTargets`'
+  distinct-shape dedup uses a fixed 12-slot table keyed on (w,h,format,bind).
+  MCC binds far more than 12 transient shapes (1x1, 2x2, 32x32 post-fx/shadow
+  targets), so the table saturates immediately and every later bind logs
+  unconditionally -> 1.16M lines / 145 MB. Any future FSR probe must dedup on a
+  larger/smarter key (or filter to >=1000px-wide targets and rate-limit) before
+  shipping.
 - **There is no FSR implementation in this repository.** No config key, F1
   control, launcher argument, FidelityFX dependency/shader, or MCC-setting owner
   exists. The current final eye expansion uses an ordinary linear sampler.
