@@ -57,8 +57,9 @@ namespace
         TitleCapability_Haptics;
     constexpr uint32_t kOdstRuntimeCapabilities =
         kHalo3RuntimeCapabilities;
-    // Matches kReachCapabilities in title_registry.cpp. Native HUD stays
-    // withheld until Reach's CHUD anchor is proven and wired.
+    // Matches kReachCapabilities in title_registry.cpp. Hud is granted: Reach's
+    // own curvature record is located by kReachHudLayoutAdapter, so hud_size
+    // and hud_aspect drive its native layout exactly as they do for Halo 3.
     // ArmIk is deliberately NOT granted. Reach reported no capabilities at all
     // until PublishReachLifecycle existed, so every arm-gated capability turned
     // on at once the first time it did. ControllerAim was the one the VR
@@ -68,6 +69,7 @@ namespace
     constexpr uint32_t kReachRuntimeCapabilities =
         TitleCapability_Stereo |
         TitleCapability_ControllerAim |
+        TitleCapability_Hud |
         TitleCapability_RuntimeModes |
         TitleCapability_RoomScale |
         TitleCapability_ControllerInput |
@@ -1210,6 +1212,12 @@ namespace
 #if HALOMCCVR_EXPERIMENTAL_ODST_BRINGUP
     std::atomic<uint64_t> g_odstLastCamCopyMs{0};
 #endif
+#if HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE
+    // Reach has no camera-copy hook to beat like Halo 3 and ODST. Its armed
+    // per-eye core is the equivalent liveness proof, so the Present-thread
+    // Reach branch stamps this beacon while that core owns the frame.
+    std::atomic<uint64_t> g_reachLastCamCopyMs{0};
+#endif
     std::atomic<uintptr_t> g_nativePauseFlag{0};
     std::atomic<bool> g_enginePauseValidated{false};
 
@@ -1315,6 +1323,7 @@ namespace
     // compound curvature. Reuse still requires exact title-anchor verification.
     HudLayoutRememberedCache g_halo3HudRemembered{};
     HudLayoutRememberedCache g_odstHudRemembered{};
+    HudLayoutRememberedCache g_reachHudRemembered{};
 
     static HudLayoutRememberedCache* HudLayoutRememberedFor(
         HudLayoutProfile profile)
@@ -1325,6 +1334,8 @@ namespace
             return &g_halo3HudRemembered;
         case HudLayoutProfile::Halo3ODST:
             return &g_odstHudRemembered;
+        case HudLayoutProfile::HaloReach:
+            return &g_reachHudRemembered;
         default:
             return nullptr;
         }
@@ -1424,38 +1435,61 @@ namespace
     // Plain helpers: SEH frames must stay free of C++ unwinding (C2712), and a
     // region can decommit between VirtualQuery and the read, so every touch of
     // foreign memory is guarded.
+    // Plain byte compare honouring the adapter's wildcard mask. No SEH here:
+    // every caller has already established that the bytes are readable.
+    static bool SafeFrameAnchorEquals(
+        const unsigned char* candidate, const HudLayoutAdapter& adapter)
+    {
+        for (int i = 8; i < adapter.anchorLength; ++i)
+        {
+            const uint8_t mask = adapter.mask[i];
+            if (mask && (candidate[i] & mask) != (adapter.anchor[i] & mask))
+                return false;
+        }
+        return true;
+    }
+
     static int SafeFrameScanRegion(
-        uintptr_t regionBase, size_t len, const unsigned char* anchor,
+        uintptr_t regionBase, size_t len, const HudLayoutAdapter& adapter,
         uintptr_t* out, int maxOut)
     {
         int found = 0;
         const unsigned char* p =
             reinterpret_cast<const unsigned char*>(regionBase);
+        const size_t span = static_cast<size_t>(HudLayoutScanSpan(adapter));
         __try
         {
             uint64_t prefix = 0;
-            memcpy(&prefix, anchor, sizeof(prefix));
-            for (size_t i = 0; i + 32 <= len && found < maxOut; ++i)
+            memcpy(&prefix, adapter.anchor.data(), sizeof(prefix));
+            for (size_t i = 0; i + span <= len && found < maxOut; ++i)
             {
                 if (*reinterpret_cast<const uint64_t*>(p + i) != prefix)
                     continue;
-                if (memcmp(p + i + 8, anchor + 8, 16) != 0)
+                if (!SafeFrameAnchorEquals(p + i, adapter))
                     continue;
-                out[found++] = regionBase + i + 24;
-                i += 23;
+                out[found++] = regionBase + i +
+                    static_cast<size_t>(adapter.safeFrameOffset);
+                // Skip the matched identity only, exactly as before: two
+                // curvature records are far further apart than one anchor.
+                i += static_cast<size_t>(adapter.anchorLength) - 1;
             }
         }
         __except (EXCEPTION_EXECUTE_HANDLER) { return found; }
         return found;
     }
 
+    // A title whose record has no depth field reports 0.0f, which every
+    // plausibility and equality check below treats as "nothing to move".
     static int SafeFrameReadLayout(
-        uintptr_t slot, uint32_t* destinationZ, uint32_t* h, uint32_t* v)
+        uintptr_t slot, const HudLayoutAdapter& adapter,
+        uint32_t* destinationZ, uint32_t* h, uint32_t* v)
     {
         __try
         {
-            *destinationZ =
-                *reinterpret_cast<const volatile uint32_t*>(slot - 28);
+            *destinationZ = HudLayoutHasDepthField(adapter)
+                ? *reinterpret_cast<const volatile uint32_t*>(
+                      slot + adapter.depthFromSlot)
+                : 0u;
             *h = *reinterpret_cast<const volatile uint32_t*>(slot);
             *v = *reinterpret_cast<const volatile uint32_t*>(slot + 4);
         }
@@ -1464,11 +1498,14 @@ namespace
     }
 
     static int SafeFrameWriteLayout(
-        uintptr_t slot, float destinationZ, float horizontal, float vertical)
+        uintptr_t slot, const HudLayoutAdapter& adapter, float destinationZ,
+        float horizontal, float vertical)
     {
         __try
         {
-            *reinterpret_cast<volatile float*>(slot - 28) = destinationZ;
+            if (HudLayoutHasDepthField(adapter))
+                *reinterpret_cast<volatile float*>(
+                    slot + adapter.depthFromSlot) = destinationZ;
             *reinterpret_cast<volatile float*>(slot) = horizontal;
             *reinterpret_cast<volatile float*>(slot + 4) = vertical;
         }
@@ -1480,13 +1517,21 @@ namespace
         uintptr_t slot, const HudLayoutAdapter& adapter,
         uint32_t* destinationZ, uint32_t* h, uint32_t* v)
     {
+        const uintptr_t anchorAddress =
+            slot - static_cast<uintptr_t>(adapter.safeFrameOffset);
         __try
         {
-            if (memcmp(reinterpret_cast<const void*>(slot - 24),
-                       adapter.anchor.data(), adapter.anchor.size()) != 0)
+            if (memcmp(reinterpret_cast<const void*>(anchorAddress),
+                       adapter.anchor.data(), 8) != 0)
                 return 0;
-            *destinationZ =
-                *reinterpret_cast<const volatile uint32_t*>(slot - 28);
+            if (!SafeFrameAnchorEquals(
+                    reinterpret_cast<const unsigned char*>(anchorAddress),
+                    adapter))
+                return 0;
+            *destinationZ = HudLayoutHasDepthField(adapter)
+                ? *reinterpret_cast<const volatile uint32_t*>(
+                      slot + adapter.depthFromSlot)
+                : 0u;
             *h = *reinterpret_cast<const volatile uint32_t*>(slot);
             *v = *reinterpret_cast<const volatile uint32_t*>(slot + 4);
             return 1;
@@ -1621,14 +1666,14 @@ namespace
             {
                 uintptr_t hits[kMaxSafeFrameHits]{};
                 const int n = SafeFrameScanRegion(
-                    regionBase, mbi.RegionSize, adapter->anchor.data(),
+                    regionBase, mbi.RegionSize, *adapter,
                     hits, kMaxSafeFrameHits);
                 for (int k = 0; k < n; ++k)
                 {
                     ++rawHits;
                     uint32_t destinationZ = 0, h = 0, v = 0;
                     if (!SafeFrameReadLayout(
-                            hits[k], &destinationZ, &h, &v))
+                            hits[k], *adapter, &destinationZ, &h, &v))
                         continue;
                     const bool payloadOk =
                         SafeFramePairPlausible(h, v) &&
@@ -1715,8 +1760,13 @@ namespace
             g_safeFrameHitCount.store(
                 accepted, std::memory_order_release);
             if (accepted)
-                LOG("SAFEFRAME [%s]: title-owned layout ready; shared HUD "
-                    "sliders apply from the next frame", adapter->name);
+                LOG("SAFEFRAME [%s]: title-owned layout ready; hud_size and "
+                    "hud_aspect apply from the next frame%s", adapter->name,
+                    HudLayoutHasDepthField(*adapter) ? " (hud_curvature too)"
+                        : " - hud_curvature has NO live control in this "
+                          "engine: its curvature is folded into a derived "
+                          "basis when the tag block loads, so the slider is "
+                          "deliberately not written");
         }
         else
         {
@@ -1835,17 +1885,19 @@ namespace
                 sizeof(authoredDestinationZ));
             // Identical Halo 3 user semantics: 0 is flat, 1 is fully curved,
             // and 0.5 restores this title's retained authored baseline.
+            const bool hasDepth = HudLayoutHasDepthField(*adapter);
             const float curvatureDelta =
                 0.30f - 0.60f * wantCurvature;
-            const float targetDestinationZ =
-                authoredDestinationZ + curvatureDelta;
+            const float targetDestinationZ = hasDepth
+                ? authoredDestinationZ + curvatureDelta
+                : 0.0f;
             uint32_t targetDestinationBits = 0;
             memcpy(
                 &targetDestinationBits, &targetDestinationZ,
                 sizeof(targetDestinationBits));
             if (!HudDestinationPlausible(targetDestinationBits))
                 continue;
-            if (destinationZ == targetDestinationBits &&
+            if ((!hasDepth || destinationZ == targetDestinationBits) &&
                 h == wantHBits && v == wantVBits)
             {
                 ++live;
@@ -1861,7 +1913,7 @@ namespace
                 HudLayoutResultsMatch(profile, generation);
             const bool wrote = stillOwned &&
                 SafeFrameWriteLayout(
-                    slot, targetDestinationZ, wantH, wantV);
+                    slot, *adapter, targetDestinationZ, wantH, wantV);
             ReleaseSRWLockShared(&g_hudLayoutWriteLock);
             if (!stillOwned)
                 return;
@@ -2021,6 +2073,13 @@ namespace
         {
             lastCam =
                 g_odstLastCamCopyMs.load(std::memory_order_relaxed);
+        }
+#endif
+#if HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE
+        else if (profile == HudLayoutProfile::HaloReach)
+        {
+            lastCam =
+                g_reachLastCamCopyMs.load(std::memory_order_relaxed);
         }
 #endif
         if (!lastCam || now < lastCam || now - lastCam > 1000)
@@ -14203,6 +14262,11 @@ void Game_LocateHudSafeFrames()
     if (Game_IsCameraOnlyBringup())
         profile = HudLayoutProfile::Halo3ODST;
 #endif
+#if HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE
+    if (profile == HudLayoutProfile::None &&
+        TitleAdapter_GetActiveTitle() == GameTitle::HaloReach)
+        profile = HudLayoutProfile::HaloReach;
+#endif
     if (profile == HudLayoutProfile::None &&
         Game_AllowsSharedGameplayFeatures())
         profile = HudLayoutProfile::Halo3;
@@ -14509,8 +14573,10 @@ void Game_AutoVrTick()
 #endif
 
 #if HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE
+    static bool wasReachHudContext = false;
     if (TitleAdapter_GetActiveTitle() == GameTitle::HaloReach)
     {
+        wasReachHudContext = true;
         // Reach owns head tracking + stereo whenever its per-eye camera core is
         // armed. Enabling them lets the present path composite the two eye
         // caches the inner detour captured, and publishing Gameplay drives the
@@ -14531,6 +14597,16 @@ void Game_AutoVrTick()
             if (reachGen)
                 TitleAdapter_PublishMode(
                     GameTitle::HaloReach, reachGen, RuntimeMode::Gameplay);
+            // Same shared HUD behavior Halo 3 and ODST get, against Reach's own
+            // record. An armed per-eye core is Reach's liveness proof; a failed
+            // or ambiguous locate leaves Reach's HUD wholly stock and says so.
+            if (!g_reachCamera.teardownRequested.load(
+                    std::memory_order_acquire))
+            {
+                g_reachLastCamCopyMs.store(
+                    GetTickCount64(), std::memory_order_release);
+                HudLayoutAutoTick(HudLayoutProfile::HaloReach);
+            }
         }
         else if (g_enabled.load(std::memory_order_relaxed) ||
                  VR_IsStereoEnabled())
@@ -14539,6 +14615,12 @@ void Game_AutoVrTick()
             VR_DetachGamePresentation();
         }
         return;
+    }
+    if (wasReachHudContext)
+    {
+        wasReachHudContext = false;
+        g_reachLastCamCopyMs.store(0, std::memory_order_release);
+        InvalidateHudLayoutProfile(HudLayoutProfile::HaloReach);
     }
 #endif
 

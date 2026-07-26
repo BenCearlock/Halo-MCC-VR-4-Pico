@@ -35,6 +35,7 @@ namespace
         TitleCapability_Stereo |
         TitleCapability_ControllerAim |
         TitleCapability_ArmIk |
+        TitleCapability_Hud |
         TitleCapability_RuntimeModes |
         TitleCapability_RoomScale |
         TitleCapability_ControllerInput |

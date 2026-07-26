@@ -3114,22 +3114,71 @@ int main()
             "Halo 3 HUD layout retains its three proven skin blocks");
         Check(odstHud && odstHud->expectedBlocks == 1,
             "ODST HUD layout accepts only its uniquely proven globals block");
-        constexpr std::array<uint8_t, 24> expectedHalo3HudAnchor = {
+        const HudLayoutAdapter* reachHud =
+            HudLayoutAdapterFor(HudLayoutProfile::HaloReach);
+        constexpr uint8_t expectedHalo3HudAnchor[24] = {
             0x00, 0x05, 0x00, 0x00, 0xD0, 0x02, 0x00, 0x00,
             0x00, 0x00, 0x5C, 0x42, 0x00, 0x40, 0x25, 0x44,
             0x00, 0x00, 0x68, 0x42, 0x00, 0x00, 0x80, 0x40,
         };
-        constexpr std::array<uint8_t, 24> expectedOdstHudAnchor = {
+        constexpr uint8_t expectedOdstHudAnchor[24] = {
             0x00, 0x05, 0x00, 0x00, 0xD0, 0x02, 0x00, 0x00,
             0x00, 0x00, 0xFA, 0x44, 0x00, 0x00, 0xFA, 0x44,
             0x00, 0x00, 0x68, 0x42, 0x00, 0x00, 0x80, 0x40,
         };
-        Check(halo3Hud && halo3Hud->anchor == expectedHalo3HudAnchor,
+        const auto anchorPrefixEquals = [](
+            const HudLayoutAdapter* adapter, const uint8_t* expected, int n)
+        {
+            if (!adapter || adapter->anchorLength != n)
+                return false;
+            for (int i = 0; i < n; ++i)
+            {
+                if (adapter->anchor[i] != expected[i] ||
+                    adapter->mask[i] != 0xFF)
+                    return false;
+            }
+            return true;
+        };
+        Check(anchorPrefixEquals(halo3Hud, expectedHalo3HudAnchor, 24),
             "Halo 3 HUD adapter retains its evidence-exact anchor");
-        Check(odstHud && odstHud->anchor == expectedOdstHudAnchor,
+        Check(anchorPrefixEquals(odstHud, expectedOdstHudAnchor, 24),
             "ODST HUD adapter retains its evidence-exact 2000/2000 anchor");
         Check(halo3Hud && odstHud && halo3Hud->anchor != odstHud->anchor,
             "ODST cannot reuse Halo 3's title-specific safe-frame anchor");
+        // Reach's record is a different shape, proven from HREK's own
+        // chud_curvature_info_block postprocess and tag export. Copying Halo 3's
+        // offsets would land 36 bytes short, inside the minimap points.
+        Check(halo3Hud && odstHud && halo3Hud->safeFrameOffset == 24 &&
+                  odstHud->safeFrameOffset == 24 &&
+                  halo3Hud->depthFromSlot == -28 &&
+                  odstHud->depthFromSlot == -28,
+            "Halo 3 and ODST keep the shared s_chud_curvature_info offsets");
+        Check(reachHud && reachHud->expectedBlocks == 3 &&
+                  reachHud->safeFrameOffset == 60 &&
+                  reachHud->anchorLength == 76,
+            "Reach HUD adapter uses its own record shape, not Halo 3's");
+        Check(reachHud && !HudLayoutHasDepthField(*reachHud),
+            "Reach declares no HUD depth field: its curvature is baked at "
+            "tag-block load, so writing it would be inert");
+        Check(halo3Hud && odstHud && HudLayoutHasDepthField(*halo3Hud) &&
+                  HudLayoutHasDepthField(*odstHud),
+            "Halo 3 and ODST keep their live dest-offset-z depth control");
+        Check(reachHud && reachHud->anchor[0] == 0x00 &&
+                  reachHud->anchor[1] == 0x05 && reachHud->anchor[20] == 0x00 &&
+                  reachHud->anchor[21] == 0x00 &&
+                  reachHud->anchor[22] == 0xA0 &&
+                  reachHud->anchor[23] == 0x42,
+            "Reach compares its own vehicle-3d-sensor-radius field, which "
+            "Halo 3's record does not contain at all");
+        Check(reachHud && reachHud->mask[12] == 0x00 &&
+                  reachHud->mask[16] == 0x00 && reachHud->mask[60] == 0x00 &&
+                  reachHud->mask[64] == 0x00,
+            "Reach wildcards its per-skin sensor values and the safe-frame "
+            "pair this feature writes");
+        Check(HudLayoutAdapterWellFormed(*halo3Hud) &&
+                  HudLayoutAdapterWellFormed(*odstHud) &&
+                  HudLayoutAdapterWellFormed(*reachHud),
+            "every HUD layout adapter keeps a fully compared scan prefix");
         Check(HudLayoutCanReacquireFromRemembered(1, 1) &&
                   HudLayoutCanReacquireFromRemembered(3, 3),
             "exact per-title remembered cardinality permits stock restoration");
@@ -3251,13 +3300,15 @@ int main()
         "Reach is a permanent runtime-supported title");
     Check(reach && reach->capabilities ==
               (TitleCapability_Stereo | TitleCapability_ControllerAim |
-               TitleCapability_ArmIk | TitleCapability_RuntimeModes |
+               TitleCapability_ArmIk | TitleCapability_Hud |
+               TitleCapability_RuntimeModes |
                TitleCapability_RoomScale |
                TitleCapability_ControllerInput | TitleCapability_Haptics),
         "Reach advertises controller aim and arm IK with its 3D motion core");
     Check(reach && (reach->capabilities &
-              TitleCapability_Hud) == 0u,
-        "Reach continues to withhold native HUD capability");
+              TitleCapability_Hud) != 0u,
+        "Reach advertises native HUD capability now that its layout adapter "
+        "locates Reach's own curvature record");
     Check(TitleRegistry_HookPlan(GameTitle::HaloReach) ==
               TitleHookPlan::ReachCameraCore,
         "Reach receives its permanent camera-core hook plan");

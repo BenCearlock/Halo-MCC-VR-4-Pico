@@ -146,3 +146,38 @@ The user confirmed that this frees the shotgun left arm. The removed synthetic p
   submitted imageRect. Keep the projection full-sized and scale Halo's source
   raster uniformly.
 - Never treat an RVA in this document as a shipping address. The matching signature in source is the implementation authority.
+
+## Halo: Reach HUD layout (2026-07-26)
+
+- Reach's curvature record is NOT Halo 3's `s_chud_curvature_info`. Proven from
+  the official HREK `chud_globals_definition` export plus HREK's own code: the
+  `chud_curvature_info_block` load-time postprocess function
+  (`reach_tag_test.exe 0x8E7170`, primary of the chunks `0x8E71D3` and
+  `0x8E7284`; it is the code behind `"Curvature points are invalid.  Defaulting
+  to no curvature"`) receives the record in `rdx` and writes the identity
+  curvature grid to `+0x04..+0x4B`, which pins the record start.
+- Record layout: `+0x00` res flags, `+0x04` nine curvature points,
+  `+0x4C` screen transform basis, `+0x94` virtual width, `+0x98` virtual height,
+  `+0x9C` sensor origin, `+0xA4` sensor radius, `+0xA8` vehicle 3d sensor radius,
+  `+0xAC` blip radius, `+0xB0` four minimap points, `+0xD0` global safe frame
+  horiz., `+0xD4` global safe frame vert., `+0xD8/+0xDC` safe-frame dings.
+  The safe-frame pair therefore sits 60 bytes after virtual width, not 24.
+- Three skins (default, dervish, monitor) each author five curvature records.
+  Only `fullscreen wide{720p fullscreen}` applies to a fullscreen VR render, so
+  the anchor targets three records - the same one-per-skin rule Halo 3 uses.
+  Those three differ in sensor origin Y (656/650/656) and sensor radius
+  (72/68/72), and dervish alone authors nonzero minimap points, so the adapter
+  wildcards those bytes. Authored safe frames are 0.86/0.87, 0.86/0.87 and
+  0.87/0.87 - close enough to Halo 3's 0.87 that one shared `hud_size` value
+  lands in the same place in both games.
+- **Reach has no `dest offset z`.** Its curvature is the nine-point grid, and
+  `0x8E7170` is reached through the block's tag-definition descriptor
+  (`.data` qword at `0x208A260`, beside the block's name string at `0x1874120`),
+  not from any call site - it is a load-time postprocess, so the derived basis at
+  `+0x4C` is computed once when the block loads. Writing the authored points at
+  runtime is therefore inert, exactly like the CHUD alpha array. `hud_curvature`
+  is deliberately not written for Reach and the log says so. Making it live
+  requires writing the derived basis, or re-running Reach's own builder over the
+  record after writing points; that is a separate candidate.
+- Reach's HUD height has no implementation: `hud_vertical_offset` uses the
+  `chud_compute_anchor_basis` hook and Reach's homolog is still unlocated.

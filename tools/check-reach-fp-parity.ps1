@@ -24,12 +24,14 @@ $vrPath = Join-Path $repoRoot 'src\dll\vr.cpp'
 $logicPath = Join-Path $repoRoot 'src\common\reach_render_logic.h'
 $chudLogicPath = Join-Path $repoRoot 'src\common\reach_chud_logic.h'
 $titleRegistryPath = Join-Path $repoRoot 'src\common\title_registry.cpp'
+$hudLayoutLogicPath = Join-Path $repoRoot 'src\common\hud_layout_logic.h'
 $agentsPath = Join-Path $repoRoot 'AGENTS.md'
 $game = [IO.File]::ReadAllText($gamePath)
 $vr = [IO.File]::ReadAllText($vrPath)
 $logic = [IO.File]::ReadAllText($logicPath)
 $chudLogic = [IO.File]::ReadAllText($chudLogicPath)
 $titleRegistry = [IO.File]::ReadAllText($titleRegistryPath)
+$hudLayoutLogic = [IO.File]::ReadAllText($hudLayoutLogicPath)
 $agents = [IO.File]::ReadAllText($agentsPath)
 
 $forbidden = [ordered]@{
@@ -111,12 +113,24 @@ foreach ($entry in $forbiddenChud.GetEnumerator()) {
 
 
 
+# Reach's HUD layout is now HREK-proven and wired through kReachHudLayoutAdapter,
+# so the capability is granted rather than withheld. What must stay true is that
+# the adapter never claims a depth field: Reach folds its curvature into a
+# derived basis at tag-block load, so a runtime write there would be inert.
 $reachCapabilities = [regex]::Match(
     $titleRegistry,
     'constexpr\s+uint32_t\s+kReachCapabilities\s*=\s*(?<body>[\s\S]*?);')
 if (!$reachCapabilities.Success -or
-    $reachCapabilities.Groups['body'].Value -match 'TitleCapability_Hud') {
-    throw 'Reach authored-crosshair parity gate rejected: native HUD capability must remain withheld.'
+    $reachCapabilities.Groups['body'].Value -notmatch 'TitleCapability_Hud') {
+    throw 'Reach parity gate rejected: HUD capability must be granted now that the Reach layout adapter exists.'
+}
+
+$reachHudAdapter = [regex]::Match(
+    $hudLayoutLogic,
+    'kReachHudLayoutAdapter\s*=\s*\{(?<body>[\s\S]*?)\n\};')
+if (!$reachHudAdapter.Success -or
+    $reachHudAdapter.Groups['body'].Value -notmatch 'kHudLayoutNoDepthField') {
+    throw 'Reach parity gate rejected: the Reach HUD adapter must declare its depth field absent, not point at inert data.'
 }
 
 $cameraOnlyBringup = [regex]::Match(
