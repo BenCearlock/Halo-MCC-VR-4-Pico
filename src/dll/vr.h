@@ -1,6 +1,7 @@
 #pragma once
 
 #include <d3d11.h>
+#include <cstdint>
 
 struct IDXGISwapChain;
 
@@ -26,9 +27,14 @@ void VR_InitInstance();
 // submitted before Present; after Present returns, OpenXR supplies the exact
 // predicted display time that Halo will use while rendering its next frame.
 void VR_BeforePresent(IDXGISwapChain* swapchain);
-void VR_AfterPresent(IDXGISwapChain* swapchain);
+void VR_AfterPresent(IDXGISwapChain* swapchain, int64_t presentStartQpc,
+                     int64_t presentEndQpc, HRESULT presentResult);
 void VR_OnResizeBuffers(IDXGISwapChain* swapchain);
 void VR_AfterResizeBuffers(IDXGISwapChain* swapchain);
+
+// Existing title worker only: drains and formats completed transition traces.
+// Render, camera, and palette hooks only publish fixed-size POD records.
+void VR_FramePacingWorkerPoll();
 
 // Worker-thread-only Reach display/resource proof. The private candidate calls
 // this after its loaded-image proof; normal builds never reference it.
@@ -83,9 +89,8 @@ bool VR_IsStereoEnabled();
 // synchronized/unfocused session commonly publishes false while the headset is
 // idle; game hooks must not treat the resulting absent eye raster as failure.
 bool VR_ShouldRenderPreparedFrame();
-// The headset's refresh as the OpenXR runtime reports it (0 until the first
-// xrWaitFrame). Never assumed or hardcoded anywhere: 72/90/120/144 all arrive
-// through this one number.
+// The application-frame cadence implied by xrWaitFrame's reported period
+// (0 until the first valid period). This is not the physical panel refresh.
 float VR_HeadsetRefreshHz();
 // True once xrWaitFrame is driving our cadence, i.e. the headset owns pacing and
 // the desktop present is free to run unlocked.

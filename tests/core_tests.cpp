@@ -13,6 +13,7 @@
 #include <windows.h>
 
 #include "config.h"
+#include "frame_pacing_logic.h"
 #include "hud_layout_logic.h"
 #include "input_logic.h"
 #include "odst_bringup_logic.h"
@@ -3626,6 +3627,18 @@ int main()
               ERROR_DEVICE_NOT_CONNECTED, 0, false) ==
               ERROR_DEVICE_NOT_CONNECTED,
         "An invalid vibration request preserves the underlying SetState result");
+
+    Check(!IsMaterialFramePeriodTransition(8333333, 8333334),
+        "OpenXR nanosecond period jitter does not trigger a pacing capture");
+    Check(IsMaterialFramePeriodTransition(8333333, 16666667),
+        "A 120-to-60 runtime cadence change triggers a pacing capture");
+    Check(IsMaterialFramePeriodTransition(11111111, 22222222),
+        "A 90-to-45 runtime cadence change triggers a pacing capture");
+    Check(IsMaterialFramePeriodTransition(6944444, 13888889),
+        "A 144-to-72 runtime cadence change triggers a pacing capture");
+    Check(!IsMaterialFramePeriodTransition(8333333, 8403361),
+        "A small runtime-period adjustment does not masquerade as a cadence flip");
+
     if (g_failures == 0)
         std::cout << "HaloMCCVR core tests passed\n";
     return g_failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;

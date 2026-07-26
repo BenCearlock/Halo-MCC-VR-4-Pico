@@ -683,11 +683,11 @@ static UINT PacedSyncInterval(UINT requested)
         s_loggedRequested = requested;
         if (requested == 0)
             LOG("pacing: MCC already presents unlocked (syncInterval=0); the "
-                "headset paces itself at %.1fHz", VR_HeadsetRefreshHz());
+                "runtime app cadence is %.1fHz", VR_HeadsetRefreshHz());
         else
             LOG("pacing: MCC asked for syncInterval=%u (its V-Sync would cap the "
                 "headset at the DESKTOP refresh); presenting unlocked so the "
-                "headset paces itself at %.1fHz",
+                "runtime app cadence remains %.1fHz",
                 requested, VR_HeadsetRefreshHz());
     }
     return 0;
@@ -702,10 +702,17 @@ static HRESULT STDMETHODCALLTYPE PresentHook(IDXGISwapChain* sc, UINT syncInterv
         LogSwapchainConfigOnce(sc);
         VR_BeforePresent(sc);
     }
-    HRESULT hr = g_origPresent(
-        sc, runVrFrame ? PacedSyncInterval(syncInterval) : syncInterval, flags);
+    const UINT pacedSyncInterval = runVrFrame
+        ? PacedSyncInterval(syncInterval) : syncInterval;
+    LARGE_INTEGER presentStart{}, presentEnd{};
     if (runVrFrame)
-        VR_AfterPresent(sc);
+        QueryPerformanceCounter(&presentStart);
+    HRESULT hr = g_origPresent(sc, pacedSyncInterval, flags);
+    if (runVrFrame)
+    {
+        QueryPerformanceCounter(&presentEnd);
+        VR_AfterPresent(sc, presentStart.QuadPart, presentEnd.QuadPart, hr);
+    }
     g_presentDepth--;
     return hr;
 }
@@ -720,11 +727,17 @@ static HRESULT STDMETHODCALLTYPE Present1Hook(IDXGISwapChain1* sc, UINT syncInte
         LogSwapchainConfigOnce(sc);
         VR_BeforePresent(sc);
     }
-    HRESULT hr = g_origPresent1(
-        sc, runVrFrame ? PacedSyncInterval(syncInterval) : syncInterval, flags,
-        params);
+    const UINT pacedSyncInterval = runVrFrame
+        ? PacedSyncInterval(syncInterval) : syncInterval;
+    LARGE_INTEGER presentStart{}, presentEnd{};
     if (runVrFrame)
-        VR_AfterPresent(sc);
+        QueryPerformanceCounter(&presentStart);
+    HRESULT hr = g_origPresent1(sc, pacedSyncInterval, flags, params);
+    if (runVrFrame)
+    {
+        QueryPerformanceCounter(&presentEnd);
+        VR_AfterPresent(sc, presentStart.QuadPart, presentEnd.QuadPart, hr);
+    }
     g_presentDepth--;
     return hr;
 }

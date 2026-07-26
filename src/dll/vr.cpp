@@ -33,6 +33,7 @@
 #endif
 #include "../common/log.h"
 #include "../common/config.h"
+#include "../common/frame_pacing_logic.h"
 #include "../common/input_logic.h"
 #include "../common/scope_logic.h"
 
@@ -410,16 +411,446 @@ namespace
     TimingRing<512> g_predictionErrorMs;
     LARGE_INTEGER g_qpcFrequency{};
     LARGE_INTEGER g_lastBeforePresentQpc{};
-    LARGE_INTEGER g_dxgiPresentStartQpc{};
     LARGE_INTEGER g_beginFrameQpc{};
     uint64_t g_timingLogStartMs = 0;
     XrTime g_lastPredictedDisplayTime = 0;
-    // The runtime's own display period for this headset, straight from
-    // xrWaitFrame. This is the ONLY thing allowed to set our frame cadence:
-    // 72, 90, 120, 144 Hz all come out of here with no assumption on our side.
-    // Published so the desktop present hook can log the two rates side by side
-    // when they disagree (that disagreement is the whole 60 Hz class of bug).
+    // OpenXR's application-frame period, straight from xrWaitFrame. It is the
+    // cadence the runtime is currently asking this app to submit at, and can be
+    // a fraction of the separately queried physical panel refresh. No rate is
+    // assumed: 72/80/90/120/144 and fractional cadences remain raw runtime data.
     std::atomic<uint64_t> g_displayPeriodNs{0};
+
+    // Exact transition capture. The render thread publishes one immutable POD
+    // record only after the corresponding DXGI Present returns. The existing
+    // 50 ms title worker drains this SPSC queue and is solely responsible for
+    // transition detection, formatting, allocation, and LOG/file I/O.
+    struct FramePacingRecord
+    {
+        uint64_t serial = 0;
+        uint64_t waitSequence = 0;
+        uint64_t overlappingWorkerWaitSequence = 0;
+        uint32_t sessionEpoch = 0;
+        uint32_t layerCount = 0;
+        int64_t predictedDisplayTimeNs = 0;
+        int64_t predictedDisplayPeriodNs = 0;
+        int64_t waitCallStartQpc = 0;
+        int64_t waitCallEndQpc = 0;
+        int64_t waitReadyQpc = 0;
+        int64_t renderWaitStartQpc = 0;
+        int64_t renderWaitEndQpc = 0;
+        int64_t beginStartQpc = 0;
+        int64_t beginEndQpc = 0;
+        int64_t consumedSignalQpc = 0;
+        int64_t prepareEndQpc = 0;
+        int64_t beforePresentQpc = 0;
+        int64_t endStartQpc = 0;
+        int64_t endEndQpc = 0;
+        int64_t presentStartQpc = 0;
+        int64_t presentEndQpc = 0;
+        int64_t afterPresentQpc = 0;
+        int32_t waitResult = XR_SUCCESS;
+        int32_t beginResult = XR_SUCCESS;
+        int32_t endResult = XR_SUCCESS;
+        int32_t presentResult = S_OK;
+        uint32_t eventWaitResult = WAIT_OBJECT_0;
+        uint8_t title = static_cast<uint8_t>(GameTitle::None);
+        bool inlineWait = false;
+        bool waitPacketCoherent = true;
+        bool shouldRender = false;
+        bool focused = false;
+        bool stereo = false;
+        bool headTracking = false;
+        bool scopeActive = false;
+        bool submitted = false;
+        GameFramePerfCounters perf{};
+    };
+    static_assert(std::is_trivially_copyable_v<FramePacingRecord>);
+
+    constexpr uint32_t kFramePacingQueueSize = 1024;
+    std::array<FramePacingRecord, kFramePacingQueueSize> g_framePacingQueue{};
+    std::atomic<uint32_t> g_framePacingQueueHead{0};
+    std::atomic<uint32_t> g_framePacingQueueTail{0};
+    std::atomic<uint64_t> g_framePacingQueueDrops{0};
+    FramePacingRecord g_framePacingPending{}; // render thread only
+    GameFramePerfCounters g_framePacingPerfStart{}; // render thread only
+    std::atomic<uint32_t> g_framePacingSessionEpoch{0};
+
+    void SubtractPerfCounters(const GameFramePerfCounters& after,
+                              const GameFramePerfCounters& before,
+                              GameFramePerfCounters& delta)
+    {
+        auto subtract = [](uint64_t end, uint64_t start) {
+            return end >= start ? end - start : 0;
+        };
+        delta = {};
+        delta.viewRenders = subtract(after.viewRenders, before.viewRenders);
+        for (int eye = 0; eye < 3; ++eye)
+        {
+            delta.fpPaletteRequests[eye] = subtract(
+                after.fpPaletteRequests[eye], before.fpPaletteRequests[eye]);
+            delta.fpPaletteFullSolves[eye] = subtract(
+                after.fpPaletteFullSolves[eye],
+                before.fpPaletteFullSolves[eye]);
+            delta.fpPaletteCacheHits[eye] = subtract(
+                after.fpPaletteCacheHits[eye], before.fpPaletteCacheHits[eye]);
+            delta.fpPaletteCacheStores[eye] = subtract(
+                after.fpPaletteCacheStores[eye],
+                before.fpPaletteCacheStores[eye]);
+            delta.fpPaletteCacheFull[eye] = subtract(
+                after.fpPaletteCacheFull[eye], before.fpPaletteCacheFull[eye]);
+        }
+        delta.zoomLogWrites = subtract(
+            after.zoomLogWrites, before.zoomLogWrites);
+        delta.viewRateLogWrites = subtract(
+            after.viewRateLogWrites, before.viewRateLogWrites);
+        delta.paletteRateLogWrites = subtract(
+            after.paletteRateLogWrites, before.paletteRateLogWrites);
+        delta.cameraRateLogWrites = subtract(
+            after.cameraRateLogWrites, before.cameraRateLogWrites);
+        delta.fpDriverRateLogWrites = subtract(
+            after.fpDriverRateLogWrites, before.fpDriverRateLogWrites);
+    }
+
+    void PublishFramePacingRecord(const FramePacingRecord& record)
+    {
+        const uint32_t head =
+            g_framePacingQueueHead.load(std::memory_order_relaxed);
+        const uint32_t next = (head + 1) % kFramePacingQueueSize;
+        if (next == g_framePacingQueueTail.load(std::memory_order_acquire))
+        {
+            g_framePacingQueueDrops.fetch_add(1, std::memory_order_relaxed);
+            return;
+        }
+        g_framePacingQueue[head] = record;
+        g_framePacingQueueHead.store(next, std::memory_order_release);
+    }
+
+    bool ConsumeFramePacingRecord(FramePacingRecord& record)
+    {
+        const uint32_t tail =
+            g_framePacingQueueTail.load(std::memory_order_relaxed);
+        if (tail == g_framePacingQueueHead.load(std::memory_order_acquire))
+            return false;
+        record = g_framePacingQueue[tail];
+        g_framePacingQueueTail.store(
+            (tail + 1) % kFramePacingQueueSize, std::memory_order_release);
+        return true;
+    }
+
+    constexpr size_t kFramePacingPreFrames = 64;
+    constexpr size_t kFramePacingPostFrames = 128;
+    constexpr size_t kFramePacingCaptureFrames =
+        kFramePacingPreFrames + 1 + kFramePacingPostFrames;
+    struct FramePacingWorkerState
+    {
+        std::array<FramePacingRecord, kFramePacingPreFrames> history{};
+        size_t historyNext = 0;
+        size_t historyCount = 0;
+        std::array<FramePacingRecord, kFramePacingCaptureFrames> capture{};
+        size_t captureCount = 0;
+        size_t triggerIndex = 0;
+        size_t postRemaining = 0;
+        int64_t oldPeriodNs = 0;
+        int64_t newPeriodNs = 0;
+        uint64_t dropsAtStart = 0;
+        uint64_t lastDataMs = 0;
+        bool capturing = false;
+        bool exact = true;
+    };
+    FramePacingWorkerState g_framePacingWorker{}; // title worker only
+
+    bool IsEligiblePacingRecord(const FramePacingRecord& record)
+    {
+        return record.predictedDisplayPeriodNs > 0 && record.shouldRender &&
+            record.focused && record.stereo && record.headTracking;
+    }
+
+    bool IsExactWaitRecord(const FramePacingRecord& record)
+    {
+        return record.waitPacketCoherent && !record.inlineWait &&
+            record.waitSequence != 0;
+    }
+
+    bool IsExactWaitPair(const FramePacingRecord& previous,
+                         const FramePacingRecord& current)
+    {
+        return IsExactWaitRecord(previous) && IsExactWaitRecord(current) &&
+            current.waitSequence == previous.waitSequence + 1;
+    }
+
+    const FramePacingRecord* LastPacingHistory(
+        const FramePacingWorkerState& worker)
+    {
+        if (!worker.historyCount)
+            return nullptr;
+        const size_t index =
+            (worker.historyNext + kFramePacingPreFrames - 1) %
+            kFramePacingPreFrames;
+        return &worker.history[index];
+    }
+
+    void AddPacingHistory(FramePacingWorkerState& worker,
+                          const FramePacingRecord& record)
+    {
+        worker.history[worker.historyNext] = record;
+        worker.historyNext =
+            (worker.historyNext + 1) % kFramePacingPreFrames;
+        if (worker.historyCount < kFramePacingPreFrames)
+            ++worker.historyCount;
+    }
+
+    void ClearPacingHistory(FramePacingWorkerState& worker)
+    {
+        worker.historyNext = 0;
+        worker.historyCount = 0;
+    }
+
+    void BeginPacingCapture(FramePacingWorkerState& worker,
+                            const FramePacingRecord& trigger,
+                            int64_t oldPeriodNs)
+    {
+        worker.captureCount = 0;
+        worker.exact = true;
+        const size_t first =
+            (worker.historyNext + kFramePacingPreFrames -
+             worker.historyCount) % kFramePacingPreFrames;
+        for (size_t i = 0; i < worker.historyCount; ++i)
+        {
+            const FramePacingRecord& prior =
+                worker.history[(first + i) % kFramePacingPreFrames];
+            if (worker.captureCount &&
+                !IsExactWaitPair(
+                    worker.capture[worker.captureCount - 1], prior))
+            {
+                worker.exact = false;
+            }
+            worker.capture[worker.captureCount++] = prior;
+            if (!IsExactWaitRecord(prior))
+                worker.exact = false;
+        }
+        worker.triggerIndex = worker.captureCount;
+        worker.capture[worker.captureCount++] = trigger;
+        worker.postRemaining = kFramePacingPostFrames;
+        worker.oldPeriodNs = oldPeriodNs;
+        worker.newPeriodNs = trigger.predictedDisplayPeriodNs;
+        worker.dropsAtStart =
+            g_framePacingQueueDrops.load(std::memory_order_relaxed);
+        worker.lastDataMs = GetTickCount64();
+        worker.capturing = true;
+        if (!IsExactWaitRecord(trigger) ||
+            (worker.triggerIndex && !IsExactWaitPair(
+                worker.capture[worker.triggerIndex - 1], trigger)))
+        {
+            worker.exact = false;
+        }
+    }
+
+    double PacingQpcMs(int64_t end, int64_t start, int64_t frequency)
+    {
+        if (!end || !start || !frequency)
+            return -1.0;
+        return static_cast<double>(end - start) * 1000.0 /
+            static_cast<double>(frequency);
+    }
+
+    void LogPacingCapture(const FramePacingWorkerState& worker,
+                          const char* completion)
+    {
+        LARGE_INTEGER frequency{};
+        QueryPerformanceFrequency(&frequency);
+        const uint64_t dropsNow =
+            g_framePacingQueueDrops.load(std::memory_order_relaxed);
+        const uint64_t dropsDuring = dropsNow - worker.dropsAtStart;
+        const bool exact = worker.exact && dropsDuring == 0;
+        const double oldHz = worker.oldPeriodNs > 0
+            ? 1000000000.0 / static_cast<double>(worker.oldPeriodNs) : 0.0;
+        const double newHz = worker.newPeriodNs > 0
+            ? 1000000000.0 / static_cast<double>(worker.newPeriodNs) : 0.0;
+        const size_t postCount = worker.captureCount > worker.triggerIndex
+            ? worker.captureCount - worker.triggerIndex - 1 : 0;
+
+        std::string text;
+        text.reserve(worker.captureCount * 640 + 2048);
+        char line[1536]{};
+        snprintf(line, sizeof(line),
+            "PACING TRANSITION CAPTURE: %lldns (%.3fHz) -> %lldns "
+            "(%.3fHz), triggerSerial=%llu, pre=%zu post=%zu, "
+            "completion=%s exact=%d queueDrops=%llu panel=%.3fHz\n",
+            static_cast<long long>(worker.oldPeriodNs), oldHz,
+            static_cast<long long>(worker.newPeriodNs), newHz,
+            static_cast<unsigned long long>(
+                worker.capture[worker.triggerIndex].serial),
+            worker.triggerIndex, postCount, completion, exact ? 1 : 0,
+            static_cast<unsigned long long>(dropsDuring),
+            static_cast<double>(
+                g_panelRefreshHz.load(std::memory_order_relaxed)));
+        text.append(line);
+        text.append(
+            "PACING F fields: rel serial epoch edge periodNs appHz predDeltaMs "
+            "beginStepMs presentStepMs waitSeq source conflictSeq coherent "
+            "workerWaitMs readyAgeMs eventWaitMs beginMs resumeMs prepareMs "
+            "gameMs submitBuildMs renderWindowMs endMs preDxgiMs dxgiMs "
+            "afterDxgiMs flags(S/F/T/H/C) layers title xr(wait/begin/end) "
+            "eventWait dxgiHr\n");
+        text.append(
+            "PACING C fields: serial views requests[e0/e1/out] "
+            "fullSolves[e0/e1/out] hits[e0/e1/out] stores[e0/e1/out] "
+            "cacheFull[e0/e1/out] hotLogs[zoom/view/palette/camera/fpDriver]\n");
+        text.append(
+            "PACING C semantics: views=Halo3 outer stereo transactions; "
+            "fullSolves=successful non-explicit arm-IK misses; "
+            "out=eye -1 (includes scope and other outside-eye work)\n");
+
+        for (size_t i = 0; i < worker.captureCount; ++i)
+        {
+            const FramePacingRecord& record = worker.capture[i];
+            const FramePacingRecord* previous = i ? &worker.capture[i - 1] : nullptr;
+            const bool contiguous = previous &&
+                previous->sessionEpoch == record.sessionEpoch &&
+                previous->serial + 1 == record.serial;
+            const bool edge = contiguous && IsMaterialFramePeriodTransition(
+                static_cast<uint64_t>(previous->predictedDisplayPeriodNs),
+                static_cast<uint64_t>(record.predictedDisplayPeriodNs));
+            const double predictedDeltaMs = contiguous
+                ? static_cast<double>(record.predictedDisplayTimeNs -
+                    previous->predictedDisplayTimeNs) / 1000000.0 : -1.0;
+            const double beginStepMs = contiguous
+                ? PacingQpcMs(record.beginEndQpc, previous->beginEndQpc,
+                              frequency.QuadPart) : -1.0;
+            const double presentStepMs = contiguous
+                ? PacingQpcMs(record.presentStartQpc,
+                              previous->presentStartQpc,
+                              frequency.QuadPart) : -1.0;
+            const double resumeMs = contiguous &&
+                IsExactWaitPair(*previous, record)
+                ? PacingQpcMs(record.waitCallStartQpc,
+                              previous->consumedSignalQpc,
+                              frequency.QuadPart) : -1.0;
+            const long long relative = static_cast<long long>(i) -
+                static_cast<long long>(worker.triggerIndex);
+            const double appHz = record.predictedDisplayPeriodNs > 0
+                ? 1000000000.0 /
+                    static_cast<double>(record.predictedDisplayPeriodNs) : 0.0;
+
+            snprintf(line, sizeof(line),
+                "PACING F rel=%+lld serial=%llu epoch=%u edge=%d "
+                "periodNs=%lld appHz=%.3f predDeltaMs=%.3f "
+                "beginStepMs=%.3f presentStepMs=%.3f waitSeq=%llu "
+                "source=%c conflictSeq=%llu coherent=%d workerWaitMs=%.3f "
+                "readyAgeMs=%.3f eventWaitMs=%.3f beginMs=%.3f "
+                "resumeMs=%.3f prepareMs=%.3f gameMs=%.3f "
+                "submitBuildMs=%.3f renderWindowMs=%.3f endMs=%.3f "
+                "preDxgiMs=%.3f dxgiMs=%.3f afterDxgiMs=%.3f "
+                "flags=%d/%d/%d/%d/%d layers=%u title=%u "
+                "xr=%d/%d/%d event=%lu dxgi=0x%08X\n",
+                relative, static_cast<unsigned long long>(record.serial),
+                record.sessionEpoch, edge ? 1 : 0,
+                static_cast<long long>(record.predictedDisplayPeriodNs), appHz,
+                predictedDeltaMs, beginStepMs, presentStepMs,
+                static_cast<unsigned long long>(record.waitSequence),
+                record.inlineWait ? 'I' : 'W',
+                static_cast<unsigned long long>(
+                    record.overlappingWorkerWaitSequence),
+                record.waitPacketCoherent ? 1 : 0,
+                PacingQpcMs(record.waitCallEndQpc,
+                            record.waitCallStartQpc, frequency.QuadPart),
+                PacingQpcMs(record.renderWaitStartQpc,
+                            record.waitReadyQpc, frequency.QuadPart),
+                PacingQpcMs(record.renderWaitEndQpc,
+                            record.renderWaitStartQpc, frequency.QuadPart),
+                PacingQpcMs(record.beginEndQpc,
+                            record.beginStartQpc, frequency.QuadPart),
+                resumeMs,
+                PacingQpcMs(record.prepareEndQpc,
+                            record.beginEndQpc, frequency.QuadPart),
+                PacingQpcMs(record.beforePresentQpc,
+                            record.prepareEndQpc, frequency.QuadPart),
+                PacingQpcMs(record.endStartQpc,
+                            record.beforePresentQpc, frequency.QuadPart),
+                PacingQpcMs(record.endStartQpc,
+                            record.beginEndQpc, frequency.QuadPart),
+                PacingQpcMs(record.endEndQpc,
+                            record.endStartQpc, frequency.QuadPart),
+                PacingQpcMs(record.presentStartQpc,
+                            record.endEndQpc, frequency.QuadPart),
+                PacingQpcMs(record.presentEndQpc,
+                            record.presentStartQpc, frequency.QuadPart),
+                PacingQpcMs(record.afterPresentQpc,
+                            record.presentEndQpc, frequency.QuadPart),
+                record.shouldRender ? 1 : 0, record.focused ? 1 : 0,
+                record.stereo ? 1 : 0, record.headTracking ? 1 : 0,
+                record.scopeActive ? 1 : 0, record.layerCount,
+                static_cast<unsigned>(record.title), record.waitResult,
+                record.beginResult, record.endResult,
+                static_cast<unsigned long>(record.eventWaitResult),
+                static_cast<unsigned>(record.presentResult));
+            text.append(line);
+
+            const auto& perf = record.perf;
+            snprintf(line, sizeof(line),
+                "PACING C serial=%llu views=%llu requests=%llu/%llu/%llu "
+                "fullSolves=%llu/%llu/%llu hits=%llu/%llu/%llu "
+                "stores=%llu/%llu/%llu cacheFull=%llu/%llu/%llu "
+                "hotLogs=%llu/%llu/%llu/%llu/%llu\n",
+                static_cast<unsigned long long>(record.serial),
+                static_cast<unsigned long long>(perf.viewRenders),
+                static_cast<unsigned long long>(perf.fpPaletteRequests[0]),
+                static_cast<unsigned long long>(perf.fpPaletteRequests[1]),
+                static_cast<unsigned long long>(perf.fpPaletteRequests[2]),
+                static_cast<unsigned long long>(perf.fpPaletteFullSolves[0]),
+                static_cast<unsigned long long>(perf.fpPaletteFullSolves[1]),
+                static_cast<unsigned long long>(perf.fpPaletteFullSolves[2]),
+                static_cast<unsigned long long>(perf.fpPaletteCacheHits[0]),
+                static_cast<unsigned long long>(perf.fpPaletteCacheHits[1]),
+                static_cast<unsigned long long>(perf.fpPaletteCacheHits[2]),
+                static_cast<unsigned long long>(perf.fpPaletteCacheStores[0]),
+                static_cast<unsigned long long>(perf.fpPaletteCacheStores[1]),
+                static_cast<unsigned long long>(perf.fpPaletteCacheStores[2]),
+                static_cast<unsigned long long>(perf.fpPaletteCacheFull[0]),
+                static_cast<unsigned long long>(perf.fpPaletteCacheFull[1]),
+                static_cast<unsigned long long>(perf.fpPaletteCacheFull[2]),
+                static_cast<unsigned long long>(perf.zoomLogWrites),
+                static_cast<unsigned long long>(perf.viewRateLogWrites),
+                static_cast<unsigned long long>(perf.paletteRateLogWrites),
+                static_cast<unsigned long long>(perf.cameraRateLogWrites),
+                static_cast<unsigned long long>(perf.fpDriverRateLogWrites));
+            text.append(line);
+        }
+        LOG("%s", text.c_str());
+    }
+
+    void SeedHistoryFromCapture(FramePacingWorkerState& worker)
+    {
+        const size_t count = worker.captureCount;
+        const size_t first = count > kFramePacingPreFrames
+            ? count - kFramePacingPreFrames : 0;
+        ClearPacingHistory(worker);
+        for (size_t i = first; i < count; ++i)
+        {
+            const FramePacingRecord& record = worker.capture[i];
+            const FramePacingRecord* previous = LastPacingHistory(worker);
+            if (!IsEligiblePacingRecord(record) ||
+                (previous && (previous->sessionEpoch != record.sessionEpoch ||
+                              previous->serial + 1 != record.serial)))
+            {
+                ClearPacingHistory(worker);
+                if (!IsEligiblePacingRecord(record))
+                    continue;
+            }
+            AddPacingHistory(worker, record);
+        }
+    }
+
+    void FinishPacingCapture(FramePacingWorkerState& worker,
+                             const char* completion)
+    {
+        LogPacingCapture(worker, completion);
+        SeedHistoryFromCapture(worker);
+        worker.capturing = false;
+        worker.captureCount = 0;
+        worker.postRemaining = 0;
+        worker.exact = true;
+    }
 
     // --- Frame-wait pipelining ------------------------------------------
     // xrWaitFrame blocks until the runtime's next display time. Calling it
@@ -446,6 +877,15 @@ namespace
     std::atomic<bool> g_waitedStateFailed{false};
     XrResult g_waitedStateResult = XR_SUCCESS;
     uint64_t g_inlineWaitFallbacks = 0;
+    std::atomic<uint64_t> g_waitCallSequence{0};
+    std::atomic<uint64_t> g_waitCallInFlight{0};
+    std::atomic<uint64_t> g_waitedPacketSequence{0};
+    std::atomic<uint64_t> g_waitedPacketVersion{0};
+    std::atomic<uint32_t> g_waitedSessionEpochStart{0};
+    std::atomic<uint32_t> g_waitedSessionEpochEnd{0};
+    std::atomic<int64_t> g_waitedCallStartQpc{0};
+    std::atomic<int64_t> g_waitedCallEndQpc{0};
+    std::atomic<int64_t> g_waitedReadyQpc{0};
 
     uint64_t g_missedPredictions = 0;
     uint64_t g_duplicatePredictions = 0;
@@ -3216,7 +3656,11 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
                     bi.primaryViewConfigurationType = XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO;
                     XrResult r = xrBeginSession(g_session, &bi);
                     if (XR_SUCCEEDED(r))
+                    {
                         g_sessionRunning = true;
+                        g_framePacingSessionEpoch.fetch_add(
+                            1, std::memory_order_release);
+                    }
                     else
                         LOG("xrBeginSession failed: %s", XrStr(r));
                 }
@@ -4817,7 +5261,18 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
         {
             XrFrameWaitInfo waitInfo{XR_TYPE_FRAME_WAIT_INFO};
             XrFrameState state{XR_TYPE_FRAME_STATE};
+            const uint64_t waitSequence =
+                g_waitCallSequence.fetch_add(1, std::memory_order_relaxed) + 1;
+            const uint32_t waitSessionEpoch =
+                g_framePacingSessionEpoch.load(std::memory_order_acquire);
+            LARGE_INTEGER waitStart{}, waitEnd{};
+            g_waitCallInFlight.store(waitSequence, std::memory_order_release);
+            QueryPerformanceCounter(&waitStart);
             const XrResult r = xrWaitFrame(g_session, &waitInfo, &state);
+            QueryPerformanceCounter(&waitEnd);
+            const uint32_t returnSessionEpoch =
+                g_framePacingSessionEpoch.load(std::memory_order_acquire);
+            g_waitCallInFlight.store(0, std::memory_order_release);
             if (g_waitThreadStop.load(std::memory_order_acquire))
                 break;
             if (XR_FAILED(r))
@@ -4830,7 +5285,25 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
                 Sleep(4);
                 continue;
             }
+            LARGE_INTEGER ready{};
+            QueryPerformanceCounter(&ready);
+            // Version the existing packet handoff so a consumed-event timeout
+            // and overwrite cannot be mislabeled as an exact diagnostic row.
+            g_waitedPacketVersion.fetch_add(1, std::memory_order_acq_rel);
             g_waitedFrameState = state;
+            g_waitedCallStartQpc.store(
+                waitStart.QuadPart, std::memory_order_relaxed);
+            g_waitedCallEndQpc.store(
+                waitEnd.QuadPart, std::memory_order_relaxed);
+            g_waitedReadyQpc.store(
+                ready.QuadPart, std::memory_order_relaxed);
+            g_waitedSessionEpochStart.store(
+                waitSessionEpoch, std::memory_order_relaxed);
+            g_waitedSessionEpochEnd.store(
+                returnSessionEpoch, std::memory_order_relaxed);
+            g_waitedPacketSequence.store(
+                waitSequence, std::memory_order_release);
+            g_waitedPacketVersion.fetch_add(1, std::memory_order_release);
             g_waitedStateValid.store(true, std::memory_order_release);
             SetEvent(g_waitReadyEvent);
             // Bounded so a stalled render thread can never wedge this one.
@@ -4872,10 +5345,20 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
         if (g_preparedFrame.begun)
             return;
 
+        g_framePacingPending = {};
         ++g_frameNo;
         FLog("xrWaitFrame after DXGI Present");
         XrFrameState frameState{XR_TYPE_FRAME_STATE};
         bool haveState = false;
+        bool inlineWait = false;
+        bool waitPacketCoherent = true;
+        uint64_t waitSequence = 0;
+        uint64_t overlappingWorkerWaitSequence = 0;
+        uint32_t waitSessionEpoch = 0;
+        int64_t waitCallStartQpc = 0;
+        int64_t waitCallEndQpc = 0;
+        int64_t waitReadyQpc = 0;
+        DWORD eventWaitResult = WAIT_OBJECT_0;
         LARGE_INTEGER waitStart{}, waitEnd{};
         QueryPerformanceCounter(&waitStart);
         if (g_waitThread)
@@ -4883,7 +5366,8 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
             // Normally already signalled, so this returns at once and the frame
             // costs only the game's own work. The timeout exists purely so a
             // stalled runtime can never hang the game's render thread.
-            if (WaitForSingleObject(g_waitReadyEvent, 1000) == WAIT_OBJECT_0)
+            eventWaitResult = WaitForSingleObject(g_waitReadyEvent, 1000);
+            if (eventWaitResult == WAIT_OBJECT_0)
             {
                 if (g_waitedStateFailed.exchange(false, std::memory_order_acq_rel))
                 {
@@ -4895,7 +5379,35 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
                 }
                 if (g_waitedStateValid.exchange(false, std::memory_order_acq_rel))
                 {
+                    const uint64_t versionBefore =
+                        g_waitedPacketVersion.load(std::memory_order_acquire);
+                    const uint64_t sequenceBefore =
+                        g_waitedPacketSequence.load(std::memory_order_acquire);
                     frameState = g_waitedFrameState;
+                    waitCallStartQpc = g_waitedCallStartQpc.load(
+                        std::memory_order_relaxed);
+                    waitCallEndQpc = g_waitedCallEndQpc.load(
+                        std::memory_order_relaxed);
+                    waitReadyQpc = g_waitedReadyQpc.load(
+                        std::memory_order_relaxed);
+                    const uint32_t epochAtStart =
+                        g_waitedSessionEpochStart.load(std::memory_order_relaxed);
+                    const uint32_t epochAtEnd =
+                        g_waitedSessionEpochEnd.load(std::memory_order_relaxed);
+                    const uint64_t sequenceAfter =
+                        g_waitedPacketSequence.load(std::memory_order_acquire);
+                    const uint64_t versionAfter =
+                        g_waitedPacketVersion.load(std::memory_order_acquire);
+                    overlappingWorkerWaitSequence =
+                        g_waitCallInFlight.load(std::memory_order_acquire);
+                    waitSequence = sequenceAfter;
+                    waitSessionEpoch = epochAtStart;
+                    waitPacketCoherent = sequenceBefore != 0 &&
+                        sequenceBefore == sequenceAfter &&
+                        versionBefore == versionAfter &&
+                        (versionBefore & 1u) == 0 && epochAtStart != 0 &&
+                        epochAtStart == epochAtEnd &&
+                        overlappingWorkerWaitSequence == 0;
                     haveState = true;
                 }
             }
@@ -4903,13 +5415,26 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
         if (!haveState)
         {
             // LOUD fail-open: exactly the old inline behavior, never silent.
+            inlineWait = true;
+            overlappingWorkerWaitSequence =
+                g_waitCallInFlight.load(std::memory_order_acquire);
+            waitSessionEpoch =
+                g_framePacingSessionEpoch.load(std::memory_order_acquire);
+            waitPacketCoherent = overlappingWorkerWaitSequence == 0 &&
+                waitSessionEpoch != 0;
             if ((g_inlineWaitFallbacks++ % 100) == 0)
                 LOG("pacing: frame state was not ready (%llu inline waits so "
                     "far); waiting on the render thread for this frame",
                     static_cast<unsigned long long>(g_inlineWaitFallbacks));
             XrFrameWaitInfo waitInfo{XR_TYPE_FRAME_WAIT_INFO};
             frameState = XrFrameState{XR_TYPE_FRAME_STATE};
+            LARGE_INTEGER inlineWaitStart{}, inlineWaitEnd{};
+            QueryPerformanceCounter(&inlineWaitStart);
             const XrResult waitResult = xrWaitFrame(g_session, &waitInfo, &frameState);
+            QueryPerformanceCounter(&inlineWaitEnd);
+            waitCallStartQpc = inlineWaitStart.QuadPart;
+            waitCallEndQpc = inlineWaitEnd.QuadPart;
+            waitReadyQpc = 0; // no worker-ready handoff on the inline path
             if (XR_FAILED(waitResult))
             {
                 QueryPerformanceCounter(&waitEnd);
@@ -4924,7 +5449,10 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
 
         FLog("xrBeginFrame before Halo render");
         XrFrameBeginInfo beginInfo{XR_TYPE_FRAME_BEGIN_INFO};
+        LARGE_INTEGER beginStart{}, beginEnd{};
+        QueryPerformanceCounter(&beginStart);
         const XrResult beginResult = xrBeginFrame(g_session, &beginInfo);
+        QueryPerformanceCounter(&beginEnd);
         if (XR_FAILED(beginResult))
         {
             ++g_frameOrderFailures;
@@ -4932,12 +5460,14 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
             return;
         }
 
-        QueryPerformanceCounter(&g_beginFrameQpc);
+        g_beginFrameQpc = beginEnd;
 
         // Frame begun: release the wait thread NOW so its next xrWaitFrame runs
         // concurrently with the game's render work below, instead of the game
         // paying for that block itself. This is the line that returns the idle
         // time to the game, and it is rate-agnostic by construction.
+        LARGE_INTEGER consumedSignal{};
+        QueryPerformanceCounter(&consumedSignal);
         if (g_waitThread)
             SetEvent(g_waitConsumedEvent);
 
@@ -4946,6 +5476,35 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
         g_preparedFrame.serial = ++g_nextPreparedSerial;
         g_preparedShouldRender.store(
             frameState.shouldRender == XR_TRUE, std::memory_order_release);
+
+        FramePacingRecord& pacing = g_framePacingPending;
+        pacing.serial = g_preparedFrame.serial;
+        pacing.waitSequence = waitSequence;
+        pacing.overlappingWorkerWaitSequence =
+            overlappingWorkerWaitSequence;
+        pacing.sessionEpoch = waitSessionEpoch;
+        pacing.predictedDisplayTimeNs = frameState.predictedDisplayTime;
+        pacing.predictedDisplayPeriodNs = frameState.predictedDisplayPeriod;
+        pacing.waitCallStartQpc = waitCallStartQpc;
+        pacing.waitCallEndQpc = waitCallEndQpc;
+        pacing.waitReadyQpc = waitReadyQpc;
+        pacing.renderWaitStartQpc = waitStart.QuadPart;
+        pacing.renderWaitEndQpc = waitEnd.QuadPart;
+        pacing.beginStartQpc = beginStart.QuadPart;
+        pacing.beginEndQpc = beginEnd.QuadPart;
+        pacing.consumedSignalQpc = consumedSignal.QuadPart;
+        pacing.waitResult = XR_SUCCESS;
+        pacing.beginResult = beginResult;
+        pacing.eventWaitResult = eventWaitResult;
+        pacing.title = static_cast<uint8_t>(TitleAdapter_GetActiveTitle());
+        pacing.inlineWait = inlineWait;
+        pacing.waitPacketCoherent = waitPacketCoherent;
+        pacing.shouldRender = frameState.shouldRender == XR_TRUE;
+        pacing.focused = g_sessionState == XR_SESSION_STATE_FOCUSED;
+        pacing.stereo = g_stereoEnabled.load(std::memory_order_relaxed);
+        pacing.headTracking = Game_IsHeadTracking();
+        pacing.scopeActive = g_scopeActive.load(std::memory_order_relaxed);
+        Game_ReadFramePerfCounters(g_framePacingPerfStart);
 
         if (g_lastPredictedDisplayTime)
         {
@@ -4997,6 +5556,9 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
         if (g_frameNo == 1)
             LOG("timing: exact OpenXR pipeline active; headset smoothing %.1f%%",
                 std::clamp(g_config.headset_smoothing, 0.0f, 0.10f) * 100.0f);
+        LARGE_INTEGER prepareEnd{};
+        QueryPerformanceCounter(&prepareEnd);
+        pacing.prepareEndQpc = prepareEnd.QuadPart;
     }
 
     bool LocateViewsForUpcomingRender(XrTime displayTime)
@@ -5414,12 +5976,9 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
         ei.environmentBlendMode = g_blendMode;
         ei.layerCount = (uint32_t)layers.size();
         ei.layers = layers.data();
-        // Time the submit. This is the one segment of the frame that was never
-        // measured, and it is the only remaining place ~15ms of a 17.4ms frame
-        // can be hiding: xrWait reads 0.00ms and DXGI Present reads ~1ms, so the
-        // time is going somewhere between begin and here. SteamVR's xrEndFrame
-        // can block until the compositor accepts the frame, which would look
-        // exactly like this and would be fixable the same way the wait was.
+        // Preserve the legacy rolling submit timer. Transition diagnosis uses
+        // the correlated raw-QPC record above; this aggregate cannot identify
+        // which logical frame changed cadence.
         LARGE_INTEGER endStart{}, endEnd{};
         QueryPerformanceCounter(&endStart);
         if (g_beginFrameQpc.QuadPart)
@@ -5427,6 +5986,15 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
         XrResult r = xrEndFrame(g_session, &ei);
         QueryPerformanceCounter(&endEnd);
         g_endFrameDurationsMs.Add(QpcMs(endEnd.QuadPart - endStart.QuadPart));
+        if (g_framePacingPending.serial == g_preparedFrame.serial)
+        {
+            g_framePacingPending.endStartQpc = endStart.QuadPart;
+            g_framePacingPending.endEndQpc = endEnd.QuadPart;
+            g_framePacingPending.endResult = r;
+            g_framePacingPending.layerCount =
+                static_cast<uint32_t>(layers.size());
+            g_framePacingPending.submitted = true;
+        }
         ResetPreparedFrame();
         if (XR_FAILED(r))
         {
@@ -5593,6 +6161,19 @@ void VR_ReachEndRenderAccess(ReachVrRenderAccess& access)
 
 void VR_BeforePresent(IDXGISwapChain* sc)
 {
+    LARGE_INTEGER pacingBeforePresent{};
+    QueryPerformanceCounter(&pacingBeforePresent);
+    if (g_framePacingPending.serial)
+    {
+        g_framePacingPending.beforePresentQpc =
+            pacingBeforePresent.QuadPart;
+        g_framePacingPending.scopeActive =
+            g_scopeActive.load(std::memory_order_relaxed);
+        GameFramePerfCounters perfEnd{};
+        Game_ReadFramePerfCounters(perfEnd);
+        SubtractPerfCounters(
+            perfEnd, g_framePacingPerfStart, g_framePacingPending.perf);
+    }
     g_gameSwapchain = sc;
 #if HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE
     // This observation is intentionally before every OpenXR/session early
@@ -5667,13 +6248,11 @@ void VR_BeforePresent(IDXGISwapChain* sc)
         if (--fpsLogCountdown <= 0)
         {
             fpsLogCountdown = 10;
-            // Log the headset's own refresh next to the delivered rate. If they
-            // match we are pacing off the headset, which is the contract. If fps
-            // sits at a clean fraction of headset Hz (60 of 120, 72 of 144) the
-            // desktop present path is gating us, not the GPU.
-            LOG("fps %.0f (stereo %s); headset %.1fHz (runtime-reported)",
+            LOG("fps %.0f (stereo %s); app cadence %.1fHz "
+                "(xrWaitFrame period), panel %.1fHz",
                 g_status.fps, g_stereoEnabled.load() ? "on" : "off",
-                VR_HeadsetRefreshHz());
+                VR_HeadsetRefreshHz(),
+                g_panelRefreshHz.load(std::memory_order_relaxed));
         }
     }
 
@@ -5682,14 +6261,12 @@ void VR_BeforePresent(IDXGISwapChain* sc)
         g_timingLogStartMs = timingNowMs;
     else if (timingNowMs - g_timingLogStartMs >= 10000)
     {
-        // renderWindow = xrBeginFrame -> xrEndFrame (the game's own frame work,
-        // including our eye capture/blits). endFrame = the submit itself. With
-        // frame interval and DXGI Present already here, those four account for
-        // the whole frame, so an unexplained gap can be attributed rather than
-        // guessed at.
+        // Backward-compatible rolling summaries. These are the latest 512
+        // samples (not a fixed 10-second window) and are intentionally not used
+        // to attribute a transition; the PACING capture correlates exact rows.
         LOG("timing: frame interval p95 %.2fms p99 %.2fms; "
             "renderWindow p95 %.2fms; xrEndFrame p95 %.2fms; "
-            "DXGI Present p95 %.2fms; xrWait p95 %.2fms; "
+            "DXGI Present p95 %.2fms; wait handoff p95 %.2fms; "
             "prediction error p95 %.3fms; missed=%llu duplicate=%llu "
             "orderFailures=%llu firstCamera=%.3fms",
             TimingPercentile(g_presentIntervalsMs, 0.95),
@@ -5716,17 +6293,26 @@ void VR_BeforePresent(IDXGISwapChain* sc)
         VR_SetScopeActive(false);
 
     SubmitPreparedFrame(sc);
-    QueryPerformanceCounter(&g_dxgiPresentStartQpc);
 }
 
-void VR_AfterPresent(IDXGISwapChain* sc)
+void VR_AfterPresent(IDXGISwapChain* sc, int64_t presentStartQpc,
+                     int64_t presentEndQpc, HRESULT presentResult)
 {
     LARGE_INTEGER now{};
     QueryPerformanceCounter(&now);
-    if (g_dxgiPresentStartQpc.QuadPart)
+    if (presentEndQpc >= presentStartQpc && presentStartQpc)
         g_presentDurationsMs.Add(
-            QpcMs(now.QuadPart - g_dxgiPresentStartQpc.QuadPart));
-    g_dxgiPresentStartQpc = {};
+            QpcMs(presentEndQpc - presentStartQpc));
+
+    if (g_framePacingPending.serial && g_framePacingPending.submitted)
+    {
+        g_framePacingPending.presentStartQpc = presentStartQpc;
+        g_framePacingPending.presentEndQpc = presentEndQpc;
+        g_framePacingPending.afterPresentQpc = now.QuadPart;
+        g_framePacingPending.presentResult = presentResult;
+        PublishFramePacingRecord(g_framePacingPending);
+    }
+    g_framePacingPending = {};
 
     // Present has advanced the flip-model chain. Retain its reported current
     // buffer outside all camera/render hooks for ODST's direct death capture.
@@ -5758,6 +6344,79 @@ void VR_AfterPresent(IDXGISwapChain* sc)
     if (g_state != State::Ready || !g_sessionRunning)
         return;
     PrepareNextFrame();
+}
+
+void VR_FramePacingWorkerPoll()
+{
+    FramePacingWorkerState& worker = g_framePacingWorker;
+    FramePacingRecord record{};
+    while (ConsumeFramePacingRecord(record))
+    {
+        if (worker.capturing)
+        {
+            const FramePacingRecord& previous =
+                worker.capture[worker.captureCount - 1];
+            if (record.sessionEpoch != previous.sessionEpoch ||
+                !IsEligiblePacingRecord(record))
+            {
+                FinishPacingCapture(worker, "eligibility-ended");
+            }
+            else
+            {
+                if (record.serial != previous.serial + 1 ||
+                    !IsExactWaitPair(previous, record))
+                {
+                    worker.exact = false;
+                }
+                if (worker.captureCount < worker.capture.size())
+                    worker.capture[worker.captureCount++] = record;
+                else
+                    worker.exact = false;
+                worker.lastDataMs = GetTickCount64();
+                if (worker.postRemaining)
+                    --worker.postRemaining;
+                if (!worker.postRemaining ||
+                    worker.captureCount == worker.capture.size())
+                {
+                    FinishPacingCapture(worker, "post-roll-complete");
+                }
+                continue;
+            }
+        }
+
+        if (!IsEligiblePacingRecord(record))
+        {
+            ClearPacingHistory(worker);
+            continue;
+        }
+
+        const FramePacingRecord* previous = LastPacingHistory(worker);
+        if (previous &&
+            (previous->sessionEpoch != record.sessionEpoch ||
+             previous->serial + 1 != record.serial))
+        {
+            ClearPacingHistory(worker);
+            previous = nullptr;
+        }
+        if (previous && IsMaterialFramePeriodTransition(
+                static_cast<uint64_t>(previous->predictedDisplayPeriodNs),
+                static_cast<uint64_t>(record.predictedDisplayPeriodNs)))
+        {
+            BeginPacingCapture(
+                worker, record, previous->predictedDisplayPeriodNs);
+        }
+        else
+        {
+            AddPacingHistory(worker, record);
+        }
+    }
+
+    if (worker.capturing && worker.lastDataMs &&
+        GetTickCount64() - worker.lastDataMs >= 3000)
+    {
+        worker.exact = false;
+        FinishPacingCapture(worker, "post-roll-timeout");
+    }
 }
 
 void VR_NotifyCameraTransform()

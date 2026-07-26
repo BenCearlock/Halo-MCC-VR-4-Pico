@@ -114,6 +114,28 @@ namespace
     std::atomic<float> g_renderHalfFovX{atanf(1.091595f)};
     std::atomic<float> g_renderHalfFovY{atanf(1.114286f)};
 
+    // Frame-pacing transition telemetry. These are monotonic relaxed counters:
+    // hot hooks never format, allocate, lock, or perform file I/O for the new
+    // capture. VR samples them at exact OpenXR frame boundaries and the title
+    // worker writes a completed transition only after its post-roll is frozen.
+    std::atomic<uint64_t> g_perfViewRenders{0};
+    std::atomic<uint64_t> g_perfFpPaletteRequests[3]{};
+    std::atomic<uint64_t> g_perfFpPaletteFullSolves[3]{};
+    std::atomic<uint64_t> g_perfFpPaletteCacheHits[3]{};
+    std::atomic<uint64_t> g_perfFpPaletteCacheStores[3]{};
+    std::atomic<uint64_t> g_perfFpPaletteCacheFull[3]{};
+    std::atomic<uint64_t> g_perfZoomLogWrites{0};
+    std::atomic<uint64_t> g_perfViewRateLogWrites{0};
+    std::atomic<uint64_t> g_perfPaletteRateLogWrites{0};
+    std::atomic<uint64_t> g_perfCameraRateLogWrites{0};
+    std::atomic<uint64_t> g_perfFpDriverRateLogWrites{0};
+
+    int FramePerfEyeBucket()
+    {
+        const int eye = g_stereoEye.load(std::memory_order_relaxed);
+        return eye == 0 || eye == 1 ? eye : 2;
+    }
+
     // The exact camera state the engine consumed this tick (position from
     // kSrcPos, fwd/up = the very floats ApplyHeadLook wrote). Captured in
     // CamCopyHook; consumed by the first-person transform (head-bake
@@ -853,9 +875,13 @@ namespace
                 static std::atomic<DWORD> lastLog{GetTickCount()};
                 const DWORD now=GetTickCount(); DWORD last=lastLog.load();
                 if (now-last>=10000 && lastLog.compare_exchange_strong(last,now))
+                {
+                    g_perfFpDriverRateLogWrites.fetch_add(
+                        1, std::memory_order_relaxed);
                     LOG("PERF: FP driver camera stamps=%u skips=%u per 10s "
                         "(skips = uploads avoided)",
                         stamps.exchange(0),skips.exchange(0));
+                }
             }
             static std::atomic<bool> logged{false};
             if (!logged.exchange(true))
@@ -3298,6 +3324,10 @@ namespace
         // hand's rigid delta; it is never independently seated on a controller.
         // Slot-1 failures never touch the primary arm diagnostics.
         const bool dual=(context.slot==1);
+        const int perfEyeBucket = explicitTargets ? -1 : FramePerfEyeBucket();
+        if (perfEyeBucket >= 0)
+            g_perfFpPaletteRequests[perfEyeBucket].fetch_add(
+                1, std::memory_order_relaxed);
         const BoneMatrix* const unmodified=unmodifiedOverride
             ? unmodifiedOverride
             : g_fpUnmodifiedInterpolations[context.slot];
@@ -3344,6 +3374,9 @@ namespace
                 }
                 if (reused)
                 {
+                    if (perfEyeBucket >= 0)
+                        g_perfFpPaletteCacheHits[perfEyeBucket].fetch_add(
+                            1, std::memory_order_relaxed);
                     replacement = g_fpPaletteScratch;
                     return true;
                 }
@@ -3374,8 +3407,14 @@ namespace
                 cache.root = root;
                 memcpy(cache.original, unmodified, paletteBytes);
                 memcpy(cache.solved, solved, paletteBytes);
+                if (perfEyeBucket >= 0)
+                    g_perfFpPaletteCacheStores[perfEyeBucket].fetch_add(
+                        1, std::memory_order_relaxed);
                 return;
             }
+            if (perfEyeBucket >= 0)
+                g_perfFpPaletteCacheFull[perfEyeBucket].fetch_add(
+                    1, std::memory_order_relaxed);
         };
 
         float meshScale=1.0f;
@@ -3864,12 +3903,18 @@ namespace
                     {
                         static std::atomic<uint32_t> solves{0};
                         static std::atomic<DWORD> lastLog{GetTickCount()};
+                        g_perfFpPaletteFullSolves[perfEyeBucket].fetch_add(
+                            1, std::memory_order_relaxed);
                         solves.fetch_add(1);
                         const DWORD now=GetTickCount(); DWORD last=lastLog.load();
                         if (now-last>=10000 && lastLog.compare_exchange_strong(last,now))
+                        {
+                            g_perfPaletteRateLogWrites.fetch_add(
+                                1, std::memory_order_relaxed);
                             LOG("PERF: FP palette full solves %.0f/sec "
                                 "(exact stereo-pair cache misses)",
                                 solves.exchange(0)*1000.0/(now-last));
+                        }
                     }
                     return true;
                 }
@@ -4677,6 +4722,7 @@ namespace
         if (!cameraRateStartMs) cameraRateStartMs = cameraNowMs;
         else if (cameraNowMs - cameraRateStartMs >= 10000)
         {
+            g_perfCameraRateLogWrites.fetch_add(1, std::memory_order_relaxed);
             LOG("M1 timing: camera transforms %.1f/sec (latest predicted HMD pose consumed each call)",
                 cameraTransforms * 1000.0 / (cameraNowMs - cameraRateStartMs));
             cameraTransforms = 0;
@@ -4714,6 +4760,7 @@ namespace
                 if (zoomed!=wasZoomed)
                 {
                     wasZoomed=zoomed;
+                    g_perfZoomLogWrites.fetch_add(1, std::memory_order_relaxed);
                     LOG("M3 ZOOM: %s (tan %.3f vs base %.3f => %.2fx)",
                         zoomed?"zoomed IN":"unzoomed",srcTanX,baseTan,factor);
                 }
@@ -4909,12 +4956,14 @@ namespace
         {
             static std::atomic<unsigned> viewRenders{0};
             static std::atomic<DWORD> lastLog{GetTickCount()};
+            g_perfViewRenders.fetch_add(1, std::memory_order_relaxed);
             viewRenders.fetch_add(1);
             const DWORD now = GetTickCount();
             DWORD last = lastLog.load();
             if (now - last >= 10000 && lastLog.compare_exchange_strong(last, now))
             {
                 const unsigned n = viewRenders.exchange(0);
+                g_perfViewRateLogWrites.fetch_add(1, std::memory_order_relaxed);
                 LOG("M2: view renders %.0f/sec (equals fps => one per frame; "
                     "a multiple => extra engine views)", n * 1000.0 / (now - last));
             }
@@ -14123,12 +14172,42 @@ namespace
             LogOdstRenderSkipIfNew();      // emit why a frame stayed flat 2D
             LogOdstFpLayoutSelfCheckIfNew(); // emit FP weapon-layout self-check
             LogOdstNativeHudRouteOnce();    // bounded in-place CHUD route result
+            VR_FramePacingWorkerPoll();
             Sleep(50);
 #else
+            VR_FramePacingWorkerPoll();
             Sleep(50);
 #endif
         }
     }
+}
+
+void Game_ReadFramePerfCounters(GameFramePerfCounters& out)
+{
+    out = {};
+    out.viewRenders = g_perfViewRenders.load(std::memory_order_relaxed);
+    for (int eye = 0; eye < 3; ++eye)
+    {
+        out.fpPaletteRequests[eye] =
+            g_perfFpPaletteRequests[eye].load(std::memory_order_relaxed);
+        out.fpPaletteFullSolves[eye] =
+            g_perfFpPaletteFullSolves[eye].load(std::memory_order_relaxed);
+        out.fpPaletteCacheHits[eye] =
+            g_perfFpPaletteCacheHits[eye].load(std::memory_order_relaxed);
+        out.fpPaletteCacheStores[eye] =
+            g_perfFpPaletteCacheStores[eye].load(std::memory_order_relaxed);
+        out.fpPaletteCacheFull[eye] =
+            g_perfFpPaletteCacheFull[eye].load(std::memory_order_relaxed);
+    }
+    out.zoomLogWrites = g_perfZoomLogWrites.load(std::memory_order_relaxed);
+    out.viewRateLogWrites =
+        g_perfViewRateLogWrites.load(std::memory_order_relaxed);
+    out.paletteRateLogWrites =
+        g_perfPaletteRateLogWrites.load(std::memory_order_relaxed);
+    out.cameraRateLogWrites =
+        g_perfCameraRateLogWrites.load(std::memory_order_relaxed);
+    out.fpDriverRateLogWrites =
+        g_perfFpDriverRateLogWrites.load(std::memory_order_relaxed);
 }
 
 void Game_Init()

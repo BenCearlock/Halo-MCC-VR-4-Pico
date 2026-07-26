@@ -4,6 +4,26 @@
 
 #include "../common/runtime_types.h"
 
+// Monotonic counters written by render/palette hooks and sampled at OpenXR
+// frame boundaries. Hooks only touch relaxed atomics; formatting and file I/O
+// stay on the existing 50 ms title worker.
+struct GameFramePerfCounters
+{
+    uint64_t viewRenders = 0;
+    uint64_t fpPaletteRequests[3]{};
+    uint64_t fpPaletteFullSolves[3]{}; // eye 0, eye 1, outside an eye pass
+    uint64_t fpPaletteCacheHits[3]{};
+    uint64_t fpPaletteCacheStores[3]{};
+    uint64_t fpPaletteCacheFull[3]{};
+    uint64_t zoomLogWrites = 0;
+    uint64_t viewRateLogWrites = 0;
+    uint64_t paletteRateLogWrites = 0;
+    uint64_t cameraRateLogWrites = 0;
+    uint64_t fpDriverRateLogWrites = 0;
+};
+
+void Game_ReadFramePerfCounters(GameFramePerfCounters& out);
+
 // The Halo 3 engine (halo3.dll) loads only once you enter a level. This module
 // waits for it, then (M1) drives the in-game camera from the headset. Runs on
 // its own threads and never blocks rendering.
