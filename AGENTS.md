@@ -1,104 +1,118 @@
 # Halo MCC VR agent contract
 
-Before changing code, read `CLAUDE.md` and `docs/CURRENT-STATE.md` completely.
-`docs/CURRENT-STATE.md` is the authoritative accepted-build pointer. Detailed
-reverse-engineering facts live in the evidence documents under `docs/`.
+Read `CLAUDE.md` and `docs/CURRENT-STATE.md` before changing code.
+`docs/CURRENT-STATE.md` is the authoritative accepted-build pointer.
+Reverse-engineering facts live in the evidence documents under `docs/`.
 
-## Baseline discipline
+This file was rewritten on 2026-07-26. The previous version mandated a single
+"strict implementation-parity" architecture across three different engines and
+required that any failure inside a claimed VR transaction tear the whole thing
+down. Those two rules, plus a direct self-contradiction about removing dormant
+code, produced a day of regressions on Halo: Reach. Keep this file short. A rule
+that has never prevented a real defect is not worth the damage it causes.
 
-- This is one cumulative multi-title mod. Halo 3 and ODST are not separate
-  development lines.
-- The public `MCC_VR_ALPHA_0.2.2` release is the current known-good baseline.
-  Its runtime source is commit `3a2a11bfc66b36e70f60282e91c9d5436f2e18d1`.
-- Begin each candidate from the newest headset-accepted source recorded in
-  `docs/CURRENT-STATE.md`. Do not select an old branch, build directory, backup,
-  DLL, or ZIP merely because it exists.
-- Give every candidate a unique commit and artifact hash. Untested or failed
-  candidates do not advance the accepted pointer.
-- Revert a failed behavioral experiment. Do not leave it dormant behind a
-  switch or stack it into the next candidate.
-- Never bulk-remove or consolidate accepted dormant diagnostic/fallback paths.
-  Cleanup commit `42a1276` built and launched, then fatally failed at the first
-  level transition. Isolate one understood path per candidate and headset test.
-- Every successful `tools/package-candidate.ps1` run automatically deploys that
-  exact manifest-verified candidate into the dedicated `Halo_MCC_VR` directory;
-  do not ask the user for a separate install confirmation. Require MCC and the
-  launcher to be closed, preserve the prior installed files, stage and verify
-  the candidate hashes, then verify the installed hashes separately. Packaging
-  or deployment never authorizes launching MCC or changing `halomccvr.cfg`.
+## What parity means
 
-## Halo 3 parity foundation
+Halo 3's headset-confirmed experience is the reference for every other title.
 
-Halo 3's headset-confirmed player experience is the reference for every other
-title: controls, camera ownership, stereo presentation, transitions, HUD,
-weapons, comfort, configuration, and lifecycle recovery.
+**Parity is the player experience, not the code.** A title has parity when it
+honours the same `halomccvr.cfg` knobs, looks and feels the same in the headset,
+and behaves the same from the player's seat. Halo 3, ODST and Reach are
+different engines; identical implementations are neither required nor expected.
 
-- **Strict implementation-parity rule:** when Halo 3/ODST already implement a
-  player-visible feature through a proven engine transaction, every later title
-  must reuse that same transaction architecture. For first-person hands and
-  weapons, this specifically means one bounded interpolation context per engine
-  source/palette transaction, source-pointer matching at every final visible
-  palette, and reconstruction into private scratch before the stock palette
-  builder. It also requires bypassing the title's native flat-screen
-  support-hand weapon IK through a statically verified existing no-weapon-IK
-  path, so that native IK cannot overwrite the controller-owned wrist after the
-  palette solve. A title adapter may supply only verified title-specific call
-  sites, layouts, counts, mappings, and no-weapon-IK control edge. Do not
-  substitute live-graph parenting,
-  body-only admission, inferred ownership masks, probes-as-runtime-behavior, or
-  fallback/approximation paths. If exact transaction parity is not yet proven,
-  do not install or arm the affected VR ownership path; continue static evidence
-  work while the unclaimed engine transaction remains untouched. Once a VR
-  transaction is claimed, any mandatory-path failure rejects that transaction
-  and enters teardown; it must never rerender through a flat or stock path.
-- `tools/check-reach-fp-parity.ps1` is a mandatory candidate-packaging gate.
-  Do not bypass, weaken, or remove it to make a candidate package.
-- Reuse shared behavior. Put only verified engine-specific signatures,
-  layouts, skeleton facts, and calibration in a title adapter.
-- Never copy a Halo 3 offset, structure member, bone, marker, tag meaning, or
-  engine constant into another title without title-specific evidence.
-- State the exact Halo 3 behavior being matched before implementing a title
-  feature.
-- Document any unavoidable player-visible difference and obtain explicit user
-  approval. An untested approximation is not parity.
-- A shared-code or lifecycle change requires a target-title headset result and
-  a Halo 3 regression result.
+- Find each engine's own way to achieve the behavior. If an engine genuinely
+  lacks the construct another title uses, say so plainly and record it in the
+  evidence docs. Reach has no `game_is_playback`-gated class-2 CHUD crosshair
+  predicate (`docs/REACH-SIGNATURE-EVIDENCE.md`); two candidates were lost
+  hunting a construct that does not exist in that engine.
+- A shared VR-side implementation is allowed when an engine lacks the native
+  path, provided it is deliberate, logged, and documented as a difference. The
+  procedural VR reticle the ODST camera core ships is the model.
+- Silent degradation is still forbidden. Choosing a different, stated
+  implementation is not degradation.
+- State the Halo 3 behavior being matched before implementing a title feature.
+- A shared-code or lifecycle change needs a target-title headset result and a
+  Halo 3 regression result.
 
-## Render-pipeline parity
+## Failure isolation
 
-The accepted lifecycle arms at the first eligible fresh camera boundary after
-the one-second safety interval. Each eye's world, first-person weapon, native
-CHUD, and capture work then occur as one transaction. A title adapter may locate
-equivalent engine stages with title-specific evidence, but must not add latency,
-replace native CHUD with a panel/copy path, or reorder the transaction without
-explicit approval.
+**A feature failing must never take down a working VR path.** This is the rule
+whose absence caused the 2026-07-26 Reach regressions.
 
-## Reach evidence sources
+- Every player-visible feature is its own transaction. If it cannot be proven,
+  or it fails at runtime, it degrades to stock **for that feature only**, loudly
+  and in the log. It must never disarm the camera core, end the OpenXR session,
+  or gate arming.
+- Build optional features on ODST's fail-open shape
+  (`InstallOdstCrosshairHider`: `StockFallback` / `CleanupRequired` /
+  `Installed`).
+- For the core per-eye render, "reject" means **drop that frame** and keep
+  going. It does not mean end the session, detach VR, or unhook. Halo 3 and ODST
+  skip the frame and recover; every title should.
+- Any code path that disarms a title core must log why, naming itself. A silent
+  teardown is a bug: it cost a full day of unattributable failures.
 
-- New Halo: Reach feature evidence must come from the official HREK/mod tools.
-  Do not derive a new hook, layout, marker, class, constant, or behavior from
-  Reclaimer or an archived retail/console binary analysis.
-- Existing cumulative accepted behavior is preserved unless a scoped candidate
-  replaces it. The loaded MCC Reach module may be used only as the runtime
-  match target for an HREK-derived unique signature, executable boundary, ABI,
-  and layout proof; it is not a source for inventing a new binding.
-- If the HREK identity does not match exactly, reject the complete affected
-  transaction. Do not install a mixed partial feature or substitute a copied
-  cross-title offset, widget-name heuristic, procedural path, or approximation.
+## Evidence
+
+- Locate engine code with unique signatures verified against the pinned module.
+  Never ship a guessed or copied address.
+- Zero or multiple signature matches block **that hook**. That blocks VR
+  ownership only when the hook is required for camera ownership; for an optional
+  feature hook, only that feature stays stock.
+- Never copy a Halo 3 offset, struct member, bone, marker, tag meaning, or
+  constant into another title without title-specific evidence.
+- Reach evidence comes from official HREK/mod tools and the pinned
+  `haloreach.dll`. Do not derive bindings from Reclaimer or archived console
+  binaries. HREK proves semantics and ABI shape; the shipping module must still
+  be matched on its own terms, because it is a separate compile.
+- Never write a theory into an evidence document as a finding. Ship a probe, or
+  write down the negative result.
+
+## Changing code
+
+- One evidence-backed behavioral change per candidate. Unique commit and
+  artifact hash. Untested or failed candidates do not advance the pointer.
+- Revert a failed experiment when it fails, as its own commit, before starting
+  the next one. Do not stack onto a known-failed candidate.
+- **Reverting means disabling the behavior, not deleting the code.** Deleting
+  dormant code is a separate, later task: one understood path per candidate,
+  each headset tested. Cleanup commit `42a1276` and the 2026-07-26 crosshair
+  cleanup both built, passed tests and passed the gate, then broke the runtime.
+  If in doubt, leave inert code alone; a disabled hook costs nothing at runtime.
+- `tools/check-reach-fp-parity.ps1` is a consistency check, not a design
+  authority. It guards against reintroducing disproven architectures. It must
+  never be used to freeze implementation text. If a rule there blocks a correct
+  change, fix the rule and say so in the commit.
 
 ## Safety
 
-- Use unique AOB signatures. Zero or multiple matches must prevent hook
-  installation and VR ownership before anything is claimed. This hook-safety
-  rule never authorizes a claimed transaction to rerender through stock output.
 - Never hook `halo3+0x120DF8`.
 - Never patch game files on disk or interact with Easy Anti-Cheat.
 - Keep logging, file I/O, locks, COM, allocation, and signature scanning out of
   render and palette hot hooks.
 - Preserve finite-value, bounds, index, count, and teardown guards.
-- Headset observation outranks desktop appearance and theories. Verify the
-  installed DLL's SHA-256 separately and match the source/configuration in the
-  first log line. Do not call a runtime fix complete until the user tests that
-  exact hash in the headset.
 - `camscan` is opt-in and has process-memory write modes. Never build or run a
-  write mode without explicit user approval for that offline diagnostic.
+  write mode without explicit approval.
+
+## Deployment
+
+- `tools/package-candidate.ps1` builds, tests, packages into ignored `out/`, and
+  automatically installs that exact manifest-verified candidate into
+  `Halo_MCC_VR`. Do not ask for a separate install confirmation.
+- It requires MCC closed, preserves the prior files under `out/deploy-backups`,
+  and never launches MCC or changes `halomccvr.cfg`.
+- `tools/install-candidate.ps1` requires git `HEAD` to equal the package's
+  `source_commit`. To reinstall an older candidate, check out that commit first.
+- Verify the installed DLL's SHA-256 separately; the log does not contain it.
+  Match the source and configuration in the log's first line.
+
+## Acceptance
+
+The user's headset result is the acceptance test. A clean build, passing tests,
+and a passing gate prove nothing about runtime behavior — every broken Reach
+build on 2026-07-26 passed all three. Advance `docs/CURRENT-STATE.md` only after
+explicit headset acceptance.
+
+When a runtime failure is being diagnosed, compare the new log against the
+preserved log in `out/deploy-backups/<hash>-before-<hash>/halo3xr.log`. Do not
+theorize past a log that disagrees.

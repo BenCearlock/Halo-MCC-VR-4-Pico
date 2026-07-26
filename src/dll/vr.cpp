@@ -4109,8 +4109,14 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
         // during death/loading gaps. The private ODST camera core installs no
         // authored capture yet, so there the procedural reticle IS the
         // crosshair and must be opaque to be seen at all.
+        // Reach is the same case as the ODST camera core: haloreach.dll has
+        // no class-2 CHUD gate to capture authored art from, so the procedural
+        // reticle IS its crosshair and must be opaque to be seen at all.
+        const bool titleHasAuthoredCapture =
+            !Game_IsCameraOnlyBringup() &&
+            TitleAdapter_GetActiveTitle() != GameTitle::HaloReach;
         const float kProceduralOpacity =
-            Game_IsCameraOnlyBringup() ? 1.0f : 0.0f;
+            titleHasAuthoredCapture ? 0.0f : 1.0f;
         const bool enemy = g_reticleEnemy.load(std::memory_order_relaxed);
         const float wantR = enemy ? 1.0f : g_config.reticle_r;
         const float wantG = enemy ? 0.18f : g_config.reticle_g;
@@ -6184,7 +6190,12 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
                             0, std::memory_order_release);
                         g_authoredReticleReady = false;
                         g_authoredReticleSerial = 0;
-                        Game_RejectReachAuthoredReticle(reachGeneration);
+                        Game_RejectReachAuthoredReticle(
+                            reachGeneration,
+                            !reachStereoUploadComplete
+                                ? "eye pair did not finish uploading to the XR "
+                                  "swapchain"
+                                : "projection did not expose two views");
                     }
 #endif
                     const bool projectionImagesReady = reachTitle
@@ -6210,16 +6221,19 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
                             reachTitle && reachImages &&
                             authoredReticleThisFrame &&
                             Game_OwnsReachAuthoredReticle();
-                        const bool nonReachReticleUploadAdmitted =
-                            !reachTitle &&
+                        // Reach reaches the shared aim-ray quad through the
+                        // PROCEDURAL path only. The authored branch below --
+                        // and the transaction rejection inside its failure
+                        // handler -- stays Halo 3 / ODST only, so a crosshair
+                        // problem can never disarm Reach's camera core.
+                        const bool reticleUploadAdmitted =
                             Game_HasTitleCapability(
                                 TitleCapability_ControllerAim) &&
                             g_config.crosshair && haveAim &&
                             EnsureReticleChain();
-                        const bool shouldUploadAuthoredReticle = reachTitle
-                            ? reachAuthoredReticleThisFrame
-                            : authoredReticleThisFrame &&
-                                nonReachReticleUploadAdmitted;
+                        const bool shouldUploadAuthoredReticle =
+                            !reachTitle && authoredReticleThisFrame &&
+                            reticleUploadAdmitted;
                         bool authoredUploadFailed = false;
                         if (shouldUploadAuthoredReticle &&
                             !UploadAuthoredReticle(reachTitle))
@@ -6243,7 +6257,8 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
                                     0, std::memory_order_release);
 #endif
                                 Game_RejectReachAuthoredReticle(
-                                    reachGeneration);
+                                    reachGeneration,
+                                    "authored reticle upload failed");
                             }
                             else
                                 EnsureReticleChain();
@@ -6273,23 +6288,19 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
                                 reachTitle, reachStereoUploadComplete,
                                 authoredUploadFailed,
                                 liveReachOwnerAfterUpload);
-                        const bool reachReticleReadyForSubmit =
-                            reachProjectionAdmitted &&
-                            reachAuthoredReticleThisFrame &&
-                            !authoredUploadFailed;
-                        const bool reticleOwnerAdmitted = reachTitle
-                            ? reachReticleReadyForSubmit
-                            : Game_HasTitleCapability(
-                                  TitleCapability_ControllerAim);
+                        const bool reticleOwnerAdmitted =
+                            Game_HasTitleCapability(
+                                TitleCapability_ControllerAim) &&
+                            // Reach shows its crosshair only alongside its own
+                            // admitted world projection.
+                            (!reachTitle || reachProjectionAdmitted);
                         if (reachProjectionAdmitted)
                         {
                             layers.push_back(
                                 reinterpret_cast<XrCompositionLayerBaseHeader*>(
                                     &projection));
                         }
-                        const bool reticleChainAdmitted = reachTitle
-                            ? reachReticleReadyForSubmit
-                            : nonReachReticleUploadAdmitted;
+                        const bool reticleChainAdmitted = reticleUploadAdmitted;
                         if (reticleOwnerAdmitted &&
                             g_config.crosshair &&
                             haveAim && reticleChainAdmitted)

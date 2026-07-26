@@ -39,7 +39,8 @@ bool Game_OwnsReachAuthoredReticle();
 // Atomically rejects the active Reach authored-reticle transaction after a
 // frame-bound upload failure. The title worker performs verified teardown;
 // there is no procedural, transparent, or flat-crosshair substitute.
-void Game_RejectReachAuthoredReticle(uint32_t expectedGeneration);
+void Game_RejectReachAuthoredReticle(uint32_t expectedGeneration,
+                                     const char* reason);
 bool Game_AllowsSharedGameplayFeatures();
 bool Game_AllowsSharedControllerInput();
 bool Game_HasTitleCapability(uint32_t requiredCapabilities);

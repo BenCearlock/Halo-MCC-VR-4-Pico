@@ -10593,6 +10593,150 @@ namespace
     // Returns true only if the already-claimed transaction rendered and
     // captured both eyes. False is terminal for this title generation: the
     // caller must revoke ownership and must not invoke the flat renderer.
+    // Reach's own script function chud_show_crosshair (haloreach.dll+0x1B3190)
+    // hides the crosshair by writing 0.0f into a per-widget alpha field:
+    //
+    //   chud_globals = *(void**)(TLS[*(uint32_t*)(base+0xC17B18)] + 0x5B0)
+    //   alpha_n      = *(float*)(chud_globals + 0x334 + n*0xC60), n = 0..15
+    //
+    // chud_fade_crosshair_for_player (+0x1B3528) writes the same +0x334 field
+    // (and +0x358/+0x37C for a timed fade), which confirms the meaning. The
+    // float it stores for "shown" is 1.0f at haloreach.dll+0xA8AF18.
+    //
+    // Reproducing that exact native write is how Reach honours kill_reticle.
+    // It hooks nothing, allocates nothing, and cannot affect camera ownership:
+    // every step is guarded, and failure simply leaves the stock crosshair up.
+    constexpr size_t kReachChudGlobalsTlsOffset = 0x5B0;
+    constexpr size_t kReachChudWidgetAlphaOffset = 0x334;
+    constexpr size_t kReachChudWidgetStride = 0xC60;
+    constexpr size_t kReachChudCrosshairSlots = 16;
+
+    // Resolved once on the cold title worker, never guessed. Chain:
+    //   "chud_show_crosshair\0"   -> exactly one occurrence in the image
+    //   exactly one qword -> it   -> that script-function table entry
+    //   entry + 0x18              -> the implementation
+    //   implementation + 0x30     -> its own 'mov ecx,[rip+rel32]' TLS index
+    // Every step is required to be unique/exact; anything else leaves the stock
+    // crosshair alone.
+    const uint32_t* g_reachChudTlsIndex = nullptr;
+
+    bool ResolveReachChudCrosshairFields(uintptr_t base, size_t size)
+    {
+        g_reachChudTlsIndex = nullptr;
+        static const char kName[] = "chud_show_crosshair";
+        const uint8_t* image = reinterpret_cast<const uint8_t*>(base);
+        constexpr size_t kNameBytes = sizeof(kName); // includes the NUL
+
+        uintptr_t nameVa = 0;
+        size_t nameHits = 0;
+        for (size_t i = 0; i + kNameBytes <= size;)
+        {
+            const void* hit = memchr(image + i, kName[0], size - i - kNameBytes + 1);
+            if (!hit)
+                break;
+            const size_t at = static_cast<size_t>(
+                reinterpret_cast<const uint8_t*>(hit) - image);
+            if (memcmp(image + at, kName, kNameBytes) == 0)
+            {
+                nameVa = base + at;
+                if (++nameHits > 1)
+                    break;
+            }
+            i = at + 1;
+        }
+        if (nameHits != 1)
+            return false;
+
+        uintptr_t entry = 0;
+        size_t pointerHits = 0;
+        for (size_t i = 0; i + sizeof(uintptr_t) <= size; i += sizeof(uintptr_t))
+        {
+            if (*reinterpret_cast<const uintptr_t*>(image + i) == nameVa)
+            {
+                entry = base + i;
+                if (++pointerHits > 1)
+                    break;
+            }
+        }
+        if (pointerHits != 1)
+            return false;
+
+        const uintptr_t impl =
+            *reinterpret_cast<const uintptr_t*>(entry + 0x18);
+        if (impl < base || impl + 0x40 > base + size)
+            return false;
+
+        // The implementation's own prologue and its TLS-index instruction.
+        static const uint8_t kPrologue[] = {
+            0x40, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x0F,
+            0xBF, 0xC1, 0x8B, 0xDA, 0x45, 0x8A, 0xC8};
+        const uint8_t* fn = reinterpret_cast<const uint8_t*>(impl);
+        if (memcmp(fn, kPrologue, sizeof(kPrologue)) != 0)
+            return false;
+        if (fn[0x30] != 0x8B || fn[0x31] != 0x0D)
+            return false;
+        int32_t displacement = 0;
+        memcpy(&displacement, fn + 0x32, sizeof(displacement));
+        const uintptr_t tlsIndexVa = impl + 0x36 +
+            static_cast<uintptr_t>(static_cast<intptr_t>(displacement));
+        if (tlsIndexVa < base || tlsIndexVa + sizeof(uint32_t) > base + size)
+            return false;
+
+        g_reachChudTlsIndex =
+            reinterpret_cast<const uint32_t*>(tlsIndexVa);
+        LOG("Reach crosshair: chud_show_crosshair resolved at haloreach.dll+"
+            "0x%llX through its unique script-table entry; CHUD TLS index at "
+            "+0x%llX",
+            static_cast<unsigned long long>(impl - base),
+            static_cast<unsigned long long>(tlsIndexVa - base));
+        return true;
+    }
+
+    void SuppressReachNativeCrosshair()
+    {
+        if (!g_config.crosshair || !g_config.kill_reticle)
+            return;
+        if (!g_reachChudTlsIndex)
+            return;
+
+        uintptr_t chudGlobals = 0;
+        __try
+        {
+            const uint32_t tlsIndex = *g_reachChudTlsIndex;
+            if (tlsIndex >= 1088)
+                return;
+            auto** slots = reinterpret_cast<void**>(__readgsqword(0x58));
+            if (!slots)
+                return;
+            auto* tls = reinterpret_cast<unsigned char*>(slots[tlsIndex]);
+            if (!tls)
+                return;
+            chudGlobals = *reinterpret_cast<const volatile uintptr_t*>(
+                tls + kReachChudGlobalsTlsOffset);
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER) { return; }
+        if (!chudGlobals)
+            return;
+
+        for (size_t slot = 0; slot < kReachChudCrosshairSlots; ++slot)
+        {
+            float* alpha = reinterpret_cast<float*>(
+                chudGlobals + kReachChudWidgetAlphaOffset +
+                slot * kReachChudWidgetStride);
+            float current = 0.0f;
+            // Only clear a currently visible widget, and never fight a value
+            // the engine is already holding at zero.
+            if (!SafeReadFloat(alpha, &current) || !(current > 0.0f))
+                continue;
+            (void)SafeWriteFloat(alpha, 0.0f);
+        }
+
+        static std::atomic<bool> logged{false};
+        if (!logged.exchange(true))
+            LOG("Reach crosshair: native CHUD crosshair alpha cleared through "
+                "the title's own chud_show_crosshair field (kill_reticle=1)");
+    }
+
     bool ReachStereoTransaction(uintptr_t playerView, ReachVrRenderAccess& access)
     {
         const uintptr_t workspace = g_reachOwnerScope.workspace;
@@ -10605,6 +10749,10 @@ namespace
             g_reachFpPairScope.preparedSerial!=access.preparedSerial ||
             access.preparedSerial != g_reachOwnerScope.preparedSerial)
             return false;
+
+        // Once per admitted frame, before either eye renders. Fail-open: this
+        // never reports failure and never influences the transaction result.
+        SuppressReachNativeCrosshair();
 
         ReachCompactCameraObservation observed{};
         ReachCompactCameraObservation secondaryObserved{};
@@ -10907,7 +11055,8 @@ namespace
             // claimed this call tree. Mid-call revocation is terminal and may
             // never invoke the flat renderer, regardless of teardown-store order.
             Game_RejectReachAuthoredReticle(
-                g_reachCamera.generation.load(std::memory_order_acquire));
+                g_reachCamera.generation.load(std::memory_order_acquire),
+                "core disarmed mid-call while an eye scope was claimed");
             return;
         }
 
@@ -10924,7 +11073,9 @@ namespace
             g_reachOwnerScope.renderAccess->preparedSerial !=
                 prepared.Serial())
         {
-            Game_RejectReachAuthoredReticle(epoch.generation);
+            Game_RejectReachAuthoredReticle(
+                epoch.generation,
+                "preflight/prepared-frame/display-access proof not current");
             return;
         }
 
@@ -10939,7 +11090,8 @@ namespace
             handled = false;
         }
         if (!handled)
-            Game_RejectReachAuthoredReticle(epoch.generation);
+            Game_RejectReachAuthoredReticle(
+                epoch.generation, "stereo eye transaction did not complete");
     }
 
     // Keep the counter wrapper separate from the SEH-heavy body. The wrapper's
@@ -13150,6 +13302,11 @@ namespace
             "interpolation/palette + per-eye world-projection camera "
             "transactions hooked; waiting one-second fresh-camera interval "
             "before arming");
+        // Optional and fail-open: kill_reticle only. If this cannot be resolved
+        // exactly, Reach keeps its stock crosshair and nothing else changes.
+        if (!ResolveReachChudCrosshairFields(base, size))
+            LOG("Reach crosshair: chud_show_crosshair script-table chain not "
+                "exact; the native crosshair stays visible");
         LOG("Reach FP camera hook installed for the exact HREK-homologous "
             "nested workspace; per-eye execution pending");
         LOG("Reach comfort evidence: blurScale=%llX blurMax=%llX "
@@ -13735,7 +13892,8 @@ bool Game_OwnsReachAuthoredReticle()
 #endif
 }
 
-void Game_RejectReachAuthoredReticle(uint32_t expectedGeneration)
+void Game_RejectReachAuthoredReticle(uint32_t expectedGeneration,
+                                     const char* reason)
 {
 #if HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE
     if (!expectedGeneration ||
@@ -13746,12 +13904,26 @@ void Game_RejectReachAuthoredReticle(uint32_t expectedGeneration)
     {
         return;
     }
-    g_reachChudParityFailedGeneration.store(
-        expectedGeneration, std::memory_order_release);
+    // This is the ONLY runtime path that disarms Reach and requests hook
+    // removal. It used to do so silently, which made every Reach failure this
+    // session unattributable: the log showed one good eye pass, then stereo
+    // OFF, with nothing saying who decided that. Always name the caller.
+    const bool alreadyRejected =
+        g_reachChudParityFailedGeneration.exchange(
+            expectedGeneration, std::memory_order_acq_rel) ==
+        expectedGeneration;
+    if (!alreadyRejected)
+    {
+        LOG("Reach VR transaction rejected: %s; disarming and requesting hook "
+            "teardown for generation %u",
+            reason ? reason : "unspecified",
+            static_cast<unsigned>(expectedGeneration));
+    }
     g_reachCamera.armed.store(false, std::memory_order_release);
     g_reachCamera.teardownRequested.store(true, std::memory_order_release);
 #else
     (void)expectedGeneration;
+    (void)reason;
 #endif
 }
 
