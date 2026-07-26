@@ -1,19 +1,20 @@
 # Resolution + FSR investigation (active, not an accepted change)
 
-Status: **investigation only.** No behavioral code change has been made. This
-records verified findings, clearly-labeled hypotheses, and open questions for the
-resolution-scaling and FSR feature work. It does **not** advance the accepted
-pointer in `docs/CURRENT-STATE.md`. Dated 2026-07-24.
+Status: **Stage 1 desktop-fit correction in progress; no resolution/FSR change is
+accepted.** This records verified findings, failed candidates, labeled
+hypotheses, and the evidence gates for resolution scaling and FSR. It does **not**
+advance the accepted pointer in `docs/CURRENT-STATE.md`. Updated 2026-07-25.
 
 ## Session context (where the branch is)
 
-- Branch `reach/campaign-parity`. The most recent behavioral work was Reach
-  head-relative movement, headset-confirmed working by the user on candidate
-  `a65c96b` (DLL `30481A4D…`). That is the build currently installed. The
-  accepted pointer in `docs/CURRENT-STATE.md` has **not** been advanced — Reach
-  remains experimental (`REACH-SIGNATURE-EVIDENCE.md` is the proof ledger).
-- This doc covers a **new** request: real-time / higher resolution scaling and an
-  FSR control.
+- Branch `reach/campaign-parity`; the authoritative accepted pointer remains the
+  commit named by `docs/CURRENT-STATE.md`. Current Reach and resolution work is
+  cumulative but unaccepted.
+- Installed failed input candidate before this correction: source `a440654`, DLL
+  SHA-256 `E4CEF28463717763F012DA0E8C407E7DC60151EE1FB3657A8BD820369AED9684`;
+  package `out/candidates/a440654-reach-fp-parity-20260725-232800404Z`.
+- This track covers desktop/render decoupling first, then the 8K-class cap and
+  tiers, then FSR as a separate diagnostic-first behavior.
 
 ## What the user wants
 
@@ -26,6 +27,47 @@ pointer in `docs/CURRENT-STATE.md`. Dated 2026-07-24.
    FSR must work across **all MCC titles** (persistent feature), not only the
    three the mod ships today. The user suspects the resolution revert **might be
    ODST-specific** (untested — their captured logs were Halo 3).
+
+## Stage 1 desktop-fit evidence (verified, still unaccepted)
+
+- `546d301` preserved the full `3204x2310` backbuffer while fitting the visible
+  window inside a `1280x720` monitor. The user confirmed that the full picture was
+  visible on the monitor and the headset render remained complete. It did not
+  make MCC's shell operable, so it is not accepted.
+- `a440654` tried to repair the shell by rewriting every non-mod
+  `user32!GetCursorPos` call. Its first three logs all ran before the window
+  shrink while client and render were both `3204x2310`; they provide no post-fit
+  transform evidence. The user then confirmed mouse, keyboard, and controller
+  could all fail in the fitted shell. Reach gameplay could run only in a session
+  that happened to get past the shell.
+- Controller transport was not lost. In the stalled run, XInput reached
+  `reads=159619`, `merged=152798`, with D-pad input observed, but no title loaded.
+- The successful a440 session began with physical cursor `(1126,555)`, inside the
+  fitted window. The stalled session began at `(1244,624)`, outside the fitted
+  outer rectangle (approximately `x=141..1138`). The old fit never relocated the
+  cursor and its transform explicitly skipped outside points.
+- Static analysis of the pinned MCC executable (SHA-256
+  `BE70D6DCD1A884F10CEB342A7A2DCB35EE0FA43181B66A1D19C3D830E9834691`) found
+  exactly three direct `GetCursorPos` consumers. `MCC+0x87D785` immediately feeds
+  `ScreenToClient` and stores two float coordinates; `MCC+0xEEBD40` immediately feeds
+  `WindowFromPoint`; `MCC+0xEE911E` performs a separate active-window/DPI
+  conversion. Feeding a synthetic render-space point to `WindowFromPoint` can
+  make MCC reject its own window, a concrete mechanism consistent with the
+  all-input failure.
+- The current correction therefore removes the broad rewrite, resolves only the
+  observed GetCursorPos-to-ScreenToClient coordinate caller through a unique
+  relocation-tolerant AOB plus imported-call identity checks, and keeps all
+  physical window/focus consumers stock. Bounded post-fit logs distinguish a
+  scaled in-client point from an outside point. If the exact input signature or
+  hook is unavailable, the swapchain and window geometry both remain stock. This
+  remains headset-pending until its exact packaged hash passes the three-title
+  matrix.
+
+Evidence logs:
+
+- `out/deploy-backups/1ba1103-before-a440654-20260725-232801242Z/halo3xr.log`
+- installed `Halo_MCC_VR/halo3xr.log.prev` (successful shell session)
+- installed `Halo_MCC_VR/halo3xr.log` (stalled shell session)
 
 ## How resolution works today (verified)
 
@@ -46,14 +88,16 @@ pointer in `docs/CURRENT-STATE.md`. Dated 2026-07-24.
 
 ## Verified findings (evidence, not guesses)
 
-- **No engine resolution variable exists.** Scanned all three game DLLs' debug-var
-  tables (`scratchpad/dumpvars_res.py`, same mechanism that found
+- **No engine resolution variable was found in the prior session.** Its recorded
+  scan covered all three game DLLs' debug-var tables (the same mechanism that found
   `render_far_clip_distance`). Only `allow_480p_resolutions`,
   `render_debug_depth_render_scale_*`, `render_screen_res` (Reach, value 0), and
   `texture_camera_set_resolution` (an hs_function) exist. **None** is a usable
   scene render-scale. So resolution **cannot** be driven by name the way
   `draw_distance` / `motion_blur` are. The lever is MCC-level (the DXGI
-  swapchain), not the Halo engine.
+  swapchain), not the Halo engine. The referenced one-off scan script and raw
+  output were not retained in this repository, so repeat that offline scan before
+  treating the negative result as a production proof.
 - **A mod-initiated swapchain resize is not possible.** DXGI forbids
   `ResizeBuffers` while another module (MCC) holds references to the swapchain's
   back buffers; the call fails. MCC owns its swapchain. The mod already **hooks**
@@ -77,6 +121,18 @@ pointer in `docs/CURRENT-STATE.md`. Dated 2026-07-24.
   log events. The mod captures and reprojects the full frame assuming FSR isn't
   touching the render target/viewport, which is the likely cause of the
   second-screen / wrong-FOV symptom.
+- **There is no FSR implementation in this repository.** No config key, F1
+  control, launcher argument, FidelityFX dependency/shader, or MCC-setting owner
+  exists. The current final eye expansion uses an ordinary linear sampler.
+- **MCC FSR, OpenXR Toolkit FSR, and a future mod-owned eye upscaler are different
+  transactions.** The old Toolkit tiled/overlap report must not be treated as
+  proof of what MCC's built-in setting does.
+- **The current capture has specific FSR blind spots.** Once it learns one exact
+  full-backbuffer scene RTV, it ignores different RTVs until resize/title detach.
+  It observes render-target binds but not viewport, scissor, or compute/UAV
+  output changes. A stale pre/post-upscale target or a changed active sub-rect can
+  therefore produce the reported duplicate/wrong-scale image without a
+  swapchain-resize log. This mechanism is code-backed but runtime-unproven.
 
 ## Hypotheses (explicitly unproven)
 
@@ -97,6 +153,12 @@ pointer in `docs/CURRENT-STATE.md`. Dated 2026-07-24.
   viewport rect (so the mod's projection assumptions break). The mod already sees
   the depth-stencil and RTV in `OMSetRenderTargets` → `VR_RedirectRenderTargets`
   and logs swapchain resizes, so most of the instrumentation hooks already exist.
+  The probe must use fixed storage in the D3D hot hooks and emit the completed
+  bounded snapshot later at Present. Compare the exact same DLL hash with MCC FSR
+  Off and On, desktop fit disabled, Halo 3 first and then ODST. Capture slot-0
+  RTV/UAV identity, dimensions/format/bind flags, viewport/scissor, eye-cache,
+  backbuffer, XR destination, and final blit path. Do not add an F1 toggle or alter
+  capture behavior until that transaction is proven.
 - **Cap + tiers + safety (safe, user-testable):** raising `kResolutionScaleMax`
   and rescaling the tiers is constants-only across `config.h`, `config.cpp`,
   `launcher.cpp`, `menu.cpp`, plus an F1 warning past ~5k. The user can test how
@@ -120,4 +182,3 @@ pointer in `docs/CURRENT-STATE.md`. Dated 2026-07-24.
 - `src/dll/vr.cpp:4692-4735` — `VR_OnResizeBuffers` / `VR_AfterResizeBuffers`.
 - `src/dll/vr.cpp:5110+` — `VR_RedirectRenderTargets` (scene-color RTV learn).
 - `docs/RE-notes.md` "Resolution and upscaling" — the non-negotiable rules.
-- `scratchpad/dumpvars_res.py` — the debug-var scan used above.
