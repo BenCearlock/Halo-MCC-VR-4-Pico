@@ -405,10 +405,13 @@ namespace
     TimingRing<512> g_presentIntervalsMs;
     TimingRing<512> g_presentDurationsMs;
     TimingRing<512> g_waitDurationsMs;
+    TimingRing<512> g_endFrameDurationsMs;
+    TimingRing<512> g_renderWindowMs;
     TimingRing<512> g_predictionErrorMs;
     LARGE_INTEGER g_qpcFrequency{};
     LARGE_INTEGER g_lastBeforePresentQpc{};
     LARGE_INTEGER g_dxgiPresentStartQpc{};
+    LARGE_INTEGER g_beginFrameQpc{};
     uint64_t g_timingLogStartMs = 0;
     XrTime g_lastPredictedDisplayTime = 0;
     // The runtime's own display period for this headset, straight from
@@ -4929,6 +4932,8 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
             return;
         }
 
+        QueryPerformanceCounter(&g_beginFrameQpc);
+
         // Frame begun: release the wait thread NOW so its next xrWaitFrame runs
         // concurrently with the game's render work below, instead of the game
         // paying for that block itself. This is the line that returns the idle
@@ -5409,7 +5414,19 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
         ei.environmentBlendMode = g_blendMode;
         ei.layerCount = (uint32_t)layers.size();
         ei.layers = layers.data();
+        // Time the submit. This is the one segment of the frame that was never
+        // measured, and it is the only remaining place ~15ms of a 17.4ms frame
+        // can be hiding: xrWait reads 0.00ms and DXGI Present reads ~1ms, so the
+        // time is going somewhere between begin and here. SteamVR's xrEndFrame
+        // can block until the compositor accepts the frame, which would look
+        // exactly like this and would be fixable the same way the wait was.
+        LARGE_INTEGER endStart{}, endEnd{};
+        QueryPerformanceCounter(&endStart);
+        if (g_beginFrameQpc.QuadPart)
+            g_renderWindowMs.Add(QpcMs(endStart.QuadPart - g_beginFrameQpc.QuadPart));
         XrResult r = xrEndFrame(g_session, &ei);
+        QueryPerformanceCounter(&endEnd);
+        g_endFrameDurationsMs.Add(QpcMs(endEnd.QuadPart - endStart.QuadPart));
         ResetPreparedFrame();
         if (XR_FAILED(r))
         {
@@ -5665,12 +5682,20 @@ void VR_BeforePresent(IDXGISwapChain* sc)
         g_timingLogStartMs = timingNowMs;
     else if (timingNowMs - g_timingLogStartMs >= 10000)
     {
+        // renderWindow = xrBeginFrame -> xrEndFrame (the game's own frame work,
+        // including our eye capture/blits). endFrame = the submit itself. With
+        // frame interval and DXGI Present already here, those four account for
+        // the whole frame, so an unexplained gap can be attributed rather than
+        // guessed at.
         LOG("timing: frame interval p95 %.2fms p99 %.2fms; "
+            "renderWindow p95 %.2fms; xrEndFrame p95 %.2fms; "
             "DXGI Present p95 %.2fms; xrWait p95 %.2fms; "
             "prediction error p95 %.3fms; missed=%llu duplicate=%llu "
             "orderFailures=%llu firstCamera=%.3fms",
             TimingPercentile(g_presentIntervalsMs, 0.95),
             TimingPercentile(g_presentIntervalsMs, 0.99),
+            TimingPercentile(g_renderWindowMs, 0.95),
+            TimingPercentile(g_endFrameDurationsMs, 0.95),
             TimingPercentile(g_presentDurationsMs, 0.95),
             TimingPercentile(g_waitDurationsMs, 0.95),
             TimingPercentile(g_predictionErrorMs, 0.95),
