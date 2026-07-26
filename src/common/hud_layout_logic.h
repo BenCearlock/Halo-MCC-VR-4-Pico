@@ -20,6 +20,9 @@ enum class HudLayoutProfile : uint32_t
 
 inline constexpr int kHudLayoutMaxAnchor = 80;
 
+// Mirrors kMaxSafeFrameHits in the writer.
+inline constexpr int kMaxHudLayoutBlocks = 16;
+
 // A title whose curvature record has no runtime depth field. Reach bakes its
 // curvature into a derived basis when the tag block is postprocessed at load,
 // so there is nothing for the shared depth write to move.
@@ -39,6 +42,13 @@ struct HudLayoutAdapter
     // Safe-frame slot to the depth field, or kHudLayoutNoDepthField.
     int depthFromSlot;
     int expectedBlocks;
+    // Halo 3 and ODST keep their proven exact cardinality. Reach accepts any
+    // count in this range so a second identity-verified copy of the record can
+    // also be written; every target still has to pass the full anchor check.
+    int maxBlocks;
+    // Halo 3's tag data lives in private read-write memory. Reach's map data
+    // does not have to, so its adapter may also inspect mapped regions.
+    bool scanMappedRegions;
 };
 
 inline constexpr std::array<uint8_t, kHudLayoutMaxAnchor> HudLayoutBytes(
@@ -78,6 +88,8 @@ inline constexpr HudLayoutAdapter kHalo3HudLayoutAdapter = {
     24,
     -28,
     3,
+    3,
+    false,
 };
 
 inline constexpr HudLayoutAdapter kOdstHudLayoutAdapter = {
@@ -97,6 +109,8 @@ inline constexpr HudLayoutAdapter kOdstHudLayoutAdapter = {
     24,
     -28,
     1,
+    1,
+    false,
 };
 
 // Halo: Reach's own record, from official HREK evidence only. The block's
@@ -158,6 +172,8 @@ inline constexpr HudLayoutAdapter kReachHudLayoutAdapter = {
     60,
     kHudLayoutNoDepthField,
     3,
+    kMaxHudLayoutBlocks,
+    true,
 };
 
 inline constexpr const HudLayoutAdapter* HudLayoutAdapterFor(
@@ -232,8 +248,24 @@ inline constexpr bool HudLayoutPublicationMatches(
         currentGeneration == publishedGeneration;
 }
 
+// Halo 3 and ODST prove an exact cardinality. Reach only proves a floor: a
+// second identity-verified copy of the same record is a target, not a reason to
+// reject every candidate.
+inline constexpr bool HudLayoutAcceptedCountOk(
+    const HudLayoutAdapter& adapter, int accepted)
+{
+    return accepted >= adapter.expectedBlocks &&
+        accepted <= adapter.maxBlocks;
+}
+
 inline constexpr bool HudLayoutCanReacquireFromRemembered(
     int rememberedCount, int expectedBlocks)
 {
     return expectedBlocks > 0 && rememberedCount == expectedBlocks;
+}
+
+inline constexpr bool HudLayoutCanReacquireFromRemembered(
+    const HudLayoutAdapter& adapter, int rememberedCount)
+{
+    return HudLayoutAcceptedCountOk(adapter, rememberedCount);
 }

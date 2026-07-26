@@ -3179,6 +3179,25 @@ int main()
                   HudLayoutAdapterWellFormed(*odstHud) &&
                   HudLayoutAdapterWellFormed(*reachHud),
             "every HUD layout adapter keeps a fully compared scan prefix");
+        // Halo 3 and ODST keep their proven exact cardinality and their proven
+        // private-read-write-only search. Only Reach may look wider.
+        Check(HudLayoutAcceptedCountOk(*halo3Hud, 3) &&
+                  !HudLayoutAcceptedCountOk(*halo3Hud, 2) &&
+                  !HudLayoutAcceptedCountOk(*halo3Hud, 4),
+            "Halo 3 still accepts exactly three layout blocks");
+        Check(HudLayoutAcceptedCountOk(*odstHud, 1) &&
+                  !HudLayoutAcceptedCountOk(*odstHud, 0) &&
+                  !HudLayoutAcceptedCountOk(*odstHud, 2),
+            "ODST still accepts exactly its one proven globals block");
+        Check(HudLayoutAcceptedCountOk(*reachHud, 3) &&
+                  HudLayoutAcceptedCountOk(*reachHud, 6) &&
+                  !HudLayoutAcceptedCountOk(*reachHud, 2) &&
+                  !HudLayoutAcceptedCountOk(*reachHud, 17),
+            "Reach accepts a second identity-verified copy of its record but "
+            "never fewer than its three skins");
+        Check(!halo3Hud->scanMappedRegions && !odstHud->scanMappedRegions &&
+                  reachHud->scanMappedRegions,
+            "only Reach widens the search beyond private read-write memory");
         Check(HudLayoutCanReacquireFromRemembered(1, 1) &&
                   HudLayoutCanReacquireFromRemembered(3, 3),
             "exact per-title remembered cardinality permits stock restoration");

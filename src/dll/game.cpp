@@ -1657,9 +1657,24 @@ namespace
             const uintptr_t regionBase =
                 reinterpret_cast<uintptr_t>(mbi.BaseAddress);
             const uintptr_t next = regionBase + mbi.RegionSize;
+            // Halo 3's tag data is private read-write, and that exact filter is
+            // headset-proven for Halo 3 and ODST. Reach's map data need not be:
+            // its adapter also inspects mapped and copy-on-write regions, so a
+            // record the engine actually reads cannot be missed just because it
+            // was not allocated the way Halo 3's was. Writing a copy-on-write
+            // page privatises it in this process only; no file is modified.
+            const bool writableProtect =
+                mbi.Protect == PAGE_READWRITE ||
+                (adapter->scanMappedRegions &&
+                 (mbi.Protect == PAGE_WRITECOPY ||
+                  mbi.Protect == PAGE_EXECUTE_READWRITE ||
+                  mbi.Protect == PAGE_EXECUTE_WRITECOPY));
+            const bool allowedType =
+                mbi.Type == MEM_PRIVATE ||
+                (adapter->scanMappedRegions && mbi.Type == MEM_MAPPED);
             const bool candidate =
                 mbi.State == MEM_COMMIT && !(mbi.Protect & PAGE_GUARD) &&
-                mbi.Protect == PAGE_READWRITE && mbi.Type == MEM_PRIVATE;
+                writableProtect && allowedType;
             const bool self = selfBase && regionBase >= selfBase &&
                 regionBase < selfBase + selfSize;
             if (candidate && !self)
@@ -1707,11 +1722,12 @@ namespace
         }
 
         const int observedAccepted = accepted;
-        if (accepted != adapter->expectedBlocks)
+        if (!HudLayoutAcceptedCountOk(*adapter, accepted))
         {
-            LOG("SAFEFRAME [%s]: expected exactly %d title-proven layout "
+            LOG("SAFEFRAME [%s]: expected %d to %d title-proven layout "
                 "block(s), observed %d; all candidates rejected",
-                adapter->name, adapter->expectedBlocks, accepted);
+                adapter->name, adapter->expectedBlocks, adapter->maxBlocks,
+                accepted);
             accepted = 0;
         }
         LOG("SAFEFRAME [%s]: scan done in %llu ms (private-RW only) - "
@@ -1739,7 +1755,7 @@ namespace
             // authored baseline: the resident tag may still contain our prior
             // curvature adjustment. Replace remembered data only with a full,
             // exact-cardinality title proof.
-            if (accepted == adapter->expectedBlocks)
+            if (HudLayoutAcceptedCountOk(*adapter, accepted))
             {
                 for (int i = 0; i < kMaxSafeFrameHits; ++i)
                 {
@@ -1858,6 +1874,18 @@ namespace
         memcpy(&wantHBits, &wantH, sizeof(wantHBits));
         memcpy(&wantVBits, &wantV, sizeof(wantVBits));
 
+        // Read-back reporting. The value observed here is whatever survived
+        // since the previous pass, so it distinguishes "our write never stuck"
+        // from "our write stuck and the title ignores this copy" without
+        // another test session. Present thread, at most once every five
+        // seconds, and never from a render or palette hot hook.
+        static uint64_t lastReadbackLogMs = 0;
+        const uint64_t readbackNow = GetTickCount64();
+        const bool reportReadback =
+            readbackNow - lastReadbackLogMs >= 5000;
+        if (reportReadback)
+            lastReadbackLogMs = readbackNow;
+
         int live = 0;
         for (int i = 0; i < n && i < kMaxSafeFrameHits; ++i)
         {
@@ -1874,6 +1902,16 @@ namespace
             if (!SafeFramePairPlausible(h, v) ||
                 !HudDestinationPlausible(destinationZ))
                 continue;
+            if (reportReadback)
+            {
+                float readH = 0.0f, readV = 0.0f;
+                memcpy(&readH, &h, sizeof(readH));
+                memcpy(&readV, &v, sizeof(readV));
+                LOG("SAFEFRAME [%s]: slot %d at %p reads %.4f/%.4f, "
+                    "writing %.4f/%.4f", adapter->name, i,
+                    reinterpret_cast<void*>(slot), readH, readV,
+                    wantH, wantV);
+            }
             const uint32_t baseBits =
                 g_safeFrameBaseCurvatureBits[i].load(
                     std::memory_order_relaxed);
@@ -1921,7 +1959,7 @@ namespace
                 ++live;
         }
 
-        if (live == adapter->expectedBlocks)
+        if (live == n)
         {
             g_hudAppliedBits.store(
                 wantBits, std::memory_order_relaxed);
@@ -1956,8 +1994,7 @@ namespace
             return false;
 
         const int count = remembered->count.load(std::memory_order_acquire);
-        if (!HudLayoutCanReacquireFromRemembered(
-                count, adapter->expectedBlocks))
+        if (!HudLayoutCanReacquireFromRemembered(*adapter, count))
             return false;
         uintptr_t slots[kMaxSafeFrameHits]{};
         uint32_t baselines[kMaxSafeFrameHits]{};
@@ -1982,7 +2019,8 @@ namespace
                 ++accepted;
             }
         }
-        if (accepted != adapter->expectedBlocks ||
+        if (accepted != count ||
+            !HudLayoutAcceptedCountOk(*adapter, accepted) ||
             !HudLayoutContextMatches(profile, generation))
             return false;
 
@@ -2102,7 +2140,7 @@ namespace
                 ? remembered->count.load(std::memory_order_acquire)
                 : 0;
             if (!HudLayoutCanReacquireFromRemembered(
-                    rememberedCount, adapter->expectedBlocks))
+                    *adapter, rememberedCount))
                 return;
 
             const uint64_t lastReacquire =
