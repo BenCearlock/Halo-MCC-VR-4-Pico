@@ -6174,12 +6174,19 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
                                 everyReachEyeUploaded && stereoReleased;
                     }
 
-                    // Once a complete Reach eye pair reaches the compositor,
-                    // acquiring, waiting, resolving both eyes, releasing, and
-                    // exposing two projection views are all mandatory. Revoke
-                    // the copied serials and title generation on any loss; no
-                    // stale projection, flat reticle, or partial layer may be
-                    // queued from this frame.
+                    // A Reach frame that cannot expose a complete stereo pair
+                    // is SKIPPED, not fatal. Revoke this frame's copied eye
+                    // serials so nothing stale or partial is queued, then let
+                    // the next frame try again.
+                    //
+                    // This used to call Game_RejectReachAuthoredReticle, which
+                    // disarms the core and unhooks the mod. projection.viewCount
+                    // is only set to 2 once Game_GetRenderHalfFovs matches the
+                    // prepared frame serial, and Reach publishes those FOVs
+                    // while its eyes render -- so an ordinary ordering gap on a
+                    // single frame permanently destroyed Reach VR. That is the
+                    // teardown behind every unexplained "stereo OFF" on
+                    // 2026-07-26. Halo 3 and ODST skip such a frame and recover.
 #if HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE
                     if (reachTitle && reachImages &&
                         (!reachStereoUploadComplete || projection.viewCount != 2))
@@ -6190,12 +6197,22 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
                             0, std::memory_order_release);
                         g_authoredReticleReady = false;
                         g_authoredReticleSerial = 0;
-                        Game_RejectReachAuthoredReticle(
-                            reachGeneration,
-                            !reachStereoUploadComplete
-                                ? "eye pair did not finish uploading to the XR "
-                                  "swapchain"
-                                : "projection did not expose two views");
+                        // Loud but rate-limited: never a silent degrade.
+                        static std::atomic<uint64_t> lastSkipLogMs{0};
+                        const uint64_t nowMs = GetTickCount64();
+                        uint64_t previousMs =
+                            lastSkipLogMs.load(std::memory_order_relaxed);
+                        if (nowMs - previousMs >= 2000 &&
+                            lastSkipLogMs.compare_exchange_strong(
+                                previousMs, nowMs, std::memory_order_relaxed))
+                        {
+                            LOG("Reach frame skipped (%s); the camera core "
+                                "stays armed and the next frame retries",
+                                !reachStereoUploadComplete
+                                    ? "eye pair did not finish uploading to the "
+                                      "XR swapchain"
+                                    : "projection did not expose two views");
+                        }
                     }
 #endif
                     const bool projectionImagesReady = reachTitle
