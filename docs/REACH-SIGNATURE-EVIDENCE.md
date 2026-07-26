@@ -1387,8 +1387,14 @@ world render, outside any per-eye scope.
 Consequence, matching the 2026-07-26 headset report: CHUD elements drawn by the
 LDR path render correctly in VR, while elements drawn by the compositing path
 are projected with the stock camera - world-anchored navpoints land in the wrong
-place and move inversely with the view, and one muzzle flash sticks at screen
-centre while another tracks the weapon. With shared `crosshair=1` and
+place and move inversely with the view.
+
+This does NOT explain the muzzle flash. The user corrected an earlier reading:
+there is ONE muzzle flash effect with TWO TEXTURES, and one texture is
+misaligned from the weapon - not two competing draws. A muzzle flash is an
+effect attached to a weapon marker, not a CHUD element, so it is a separate
+defect and must be investigated through the first-person marker/palette
+transform, not through this CHUD path. With shared `crosshair=1` and
 `kill_reticle=1`, one configured eye captures the authored widget while the
 opposite eye suppresses its flat copy; `crosshair=0` suppresses it. The shared
 explicit `kill_reticle=0` setting preserves stock drawing by user choice, but
