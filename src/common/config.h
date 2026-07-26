@@ -163,13 +163,13 @@ struct Config
     // and the mod upscales the difference.
     int upscale_filter = 1;
 
-    // RCAS-based 2x-overdrive sharpening, 0.00 = off, 1.00 = max. Same five
-    // texture loads/one pass; the intentionally aggressive top can ring or clip.
+    // Sharpening strength (AMD FidelityFX RCAS), 0.00 = off, 1.00 = max. A light
+    // contrast-adaptive sharpen that adds apparent detail without ringing.
     float sharpness = 0.30f;
 
-    // Anti-aliasing on the finished eye: 0 off, 1 FXAA, 2 FXAA Strong, 3 genuine
-    // SMAA 1x, 4 SMAA 1x followed by FXAA Strong. SMAA modes are optional and
-    // heavier; Off/FXAA do not run their passes or retain the third eye target.
+    // Anti-aliasing on the finished eye: 0 = off, 1 = FXAA (balanced), 2 = FXAA
+    // Strong (lower edge thresholds, more smoothing). Lets a lower/mid-tier rig
+    // get clean edges without rendering at a huge resolution.
     int aa_mode = 0;
 
     // Render draw-distance trim, applied live to every title's shared
