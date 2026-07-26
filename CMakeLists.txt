@@ -53,16 +53,17 @@ endif()
 
 # Halo: Reach is a permanent title in the one cumulative build, exactly like
 # Halo 3 and ODST. There is no experimental Reach flag to toggle on or off.
-# Reach arms its VR camera/stereo path only after its proven loaded-image
-# preflight passes on the live module, and fails open to stock Reach otherwise,
-# so a permanent build can never break Halo 3 or ODST. Every new title follows
-# this same permanent, fail-open doctrine instead of an on/off compile gate.
+# Reach installs and arms its VR camera/stereo path only after the complete
+# loaded-image proof passes on the live module. Before ownership, a failed proof
+# installs nothing; after ownership, a mandatory-path failure rejects the whole
+# transaction and enters teardown without a flat rerender. This all-or-nothing
+# title isolation preserves Halo 3 and ODST without an on/off compile gate.
 set(HALOMCCVR_EXPERIMENTAL_REACH_BRINGUP ON)
 set(HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE ON)
 set(HALOMCCVR_BUILD_REACH "ON")
 set(HALOMCCVR_BUILD_REACH_RENDER "ON")
 message(STATUS
-    "Halo MCC VR: Halo: Reach is a permanent cumulative title (fail-open to stock)")
+    "Halo MCC VR: Halo: Reach is permanent with all-or-nothing gated ownership")
 message(STATUS
     "Halo MCC VR build identity: ${HALOMCCVR_BUILD_COMMIT}, ODST=${HALOMCCVR_BUILD_ODST}, Reach=${HALOMCCVR_BUILD_REACH}, ReachRender=${HALOMCCVR_BUILD_REACH_RENDER}")
 
