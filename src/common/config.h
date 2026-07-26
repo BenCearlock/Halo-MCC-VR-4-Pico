@@ -153,6 +153,25 @@ struct Config
     // this takes effect on the next game start (close MCC and relaunch).
     bool fit_desktop_window = false;
 
+    // Image quality (mod-owned, applied live when each eye is expanded into the
+    // headset — universal to every title, no restart). These replace/augment the
+    // plain linear upscale that made edges shimmer even at high resolution.
+    //
+    // Upscale/resolve filter: 0 = linear (the old behavior), 1 = sharp
+    // (Catmull-Rom bicubic). Sharp is the default and the single biggest clarity
+    // win, since the game usually renders BELOW the headset's per-eye resolution
+    // and the mod upscales the difference.
+    int upscale_filter = 1;
+
+    // Sharpening strength (AMD FidelityFX RCAS), 0.00 = off, 1.00 = max. A light
+    // contrast-adaptive sharpen that adds apparent detail without ringing.
+    float sharpness = 0.30f;
+
+    // Anti-aliasing on the finished eye: 0 = off, 1 = FXAA (cheap, slight
+    // softening), 2 = SMAA (sharper edges, heavier). Lets a lower/mid-tier rig
+    // get clean edges without rendering at a huge resolution.
+    int aa_mode = 0;
+
     // Render draw-distance trim, applied live to every title's shared
     // render_far_clip_distance debug var (stock 10240 world units), resolved by
     // name — no hardcoded addresses. 1.00 = full stock draw distance (no

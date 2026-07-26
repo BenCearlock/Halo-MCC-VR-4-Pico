@@ -44,6 +44,31 @@ for any title/state it doesn't recognize. The hardened probe must therefore be
 captured across titles (Halo 3 + ODST at minimum, Reach if it renders) to confirm
 the FSR render graph is the same everywhere before the fix is written.
 
+### DIRECTION CHANGE 2026-07-26: MCC FSR abandoned; build a MOD-OWNED image-quality pipeline
+
+The user discovered **Reach does not have MCC's FSR at all**, so "make MCC's FSR
+work" can never be the universal answer. More importantly, the real complaint is
+image quality: even at high resolution the picture is more aliased/soft than it
+should be. Root cause: the mod's final eye expansion (`Blit`, `src/dll/vr.cpp`)
+used a **plain linear sampler**, and the game usually renders *below* the headset's
+per-eye resolution (eye ~4164x4244 vs 2912x2100 at scale 1.0, 4368x3150 at 1.5x),
+so the mod is almost always **upscaling** with a linear filter -> shimmer.
+
+New feature (approved): a title-agnostic **image-quality pipeline** at the eye
+`Blit` boundary (`BlitImageQuality`, `src/dll/vr.cpp`), controlled in F1:
+- **Upscale filter** `upscale_filter` (0 linear / 1 Catmull-Rom sharp, default 1).
+- **Sharpening** `sharpness` (0..1, RCAS).
+- **Anti-aliasing** `aa_mode` (0 off / 1 FXAA / 2 SMAA; SMAA is candidate 2, maps
+  to FXAA behaviour for now).
+All passes run in perceptual space via UNORM intermediates, decode to linear only
+at the final sRGB write, and **fail open** to the old linear `Blit` when everything
+is off. It reads the source (game render) and destination (headset/SteamVR eye)
+sizes at runtime, so it scales for any in-game + any SteamVR resolution combination,
+on every title. **FSR 2 (needs game motion vectors) and MSAA (hardware raster AA)
+are not buildable mod-side** and were explained to the user. The MCC-FSR probe work
+above is retired but its findings are kept as evidence. See the approved plan for
+the full design.
+
 ## Stage 1 desktop-fit evidence (verified, still unaccepted)
 
 - `546d301` preserved the full `3204x2310` backbuffer while fitting the visible

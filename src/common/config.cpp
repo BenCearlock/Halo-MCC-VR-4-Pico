@@ -60,6 +60,9 @@ static void Clamp()
                                            kResolutionScaleMin, kResolutionScaleMax);
     g_config.draw_distance = std::clamp(g_config.draw_distance,
                                         kDrawDistanceMin, kDrawDistanceMax);
+    g_config.upscale_filter = std::clamp(g_config.upscale_filter, 0, 1);
+    g_config.sharpness = std::clamp(g_config.sharpness, 0.0f, 1.0f);
+    g_config.aa_mode = std::clamp(g_config.aa_mode, 0, 2);
     g_config.hud_size = std::clamp(g_config.hud_size, 0.30f, 1.00f);
     g_config.hud_aspect = std::clamp(g_config.hud_aspect, kHudAspectMin, kHudAspectMax);
     g_config.hud_curvature = std::clamp(g_config.hud_curvature,
@@ -224,6 +227,12 @@ void ConfigLoad(const wchar_t* path)
             g_config.fit_desktop_window = atoi(val) != 0;
         else if (!strcmp(key, "draw_distance"))
             g_config.draw_distance = (float)atof(val);
+        else if (!strcmp(key, "upscale_filter"))
+            g_config.upscale_filter = atoi(val);
+        else if (!strcmp(key, "sharpness"))
+            ParseFloatSetting(key, val, g_config.sharpness);
+        else if (!strcmp(key, "aa_mode"))
+            g_config.aa_mode = atoi(val);
         else if (!strcmp(key, "hud_size"))
             g_config.hud_size = (float)atof(val);
         else if (!strcmp(key, "hud_aspect"))
@@ -526,6 +535,21 @@ void ConfigSave()
     fprintf(f, "# (default %.2f, range %.2f to %.2f)\n",
             d.draw_distance, kDrawDistanceMin, kDrawDistanceMax);
     fprintf(f, "draw_distance = %.2f\n\n", g_config.draw_distance);
+    fprintf(f, "# Upscale/resolve filter for the headset image: 0 = linear (old),\n");
+    fprintf(f, "# 1 = sharp (Catmull-Rom). The game usually renders below your\n");
+    fprintf(f, "# headset's per-eye resolution, so the mod upscales the difference;\n");
+    fprintf(f, "# sharp keeps edges crisp instead of the linear shimmer. Live, no restart.\n");
+    fprintf(f, "# (default %d)\n", d.upscale_filter);
+    fprintf(f, "upscale_filter = %d\n\n", g_config.upscale_filter);
+    fprintf(f, "# Sharpening strength (contrast-adaptive, AMD RCAS). 0 = off, 1 = max.\n");
+    fprintf(f, "# Adds apparent detail without ringing. Live, no restart.\n");
+    fprintf(f, "# (default %.2f, range 0 to 1)\n", d.sharpness);
+    fprintf(f, "sharpness = %.2f\n\n", g_config.sharpness);
+    fprintf(f, "# Anti-aliasing on the finished image: 0 = off, 1 = FXAA (cheap,\n");
+    fprintf(f, "# slight softening), 2 = SMAA (sharper edges, heavier). Smooths jagged\n");
+    fprintf(f, "# edges without needing a huge render resolution. Live, no restart.\n");
+    fprintf(f, "# (default %d)\n", d.aa_mode);
+    fprintf(f, "aa_mode = %d\n\n", g_config.aa_mode);
     fprintf(f, "# HUD size: fraction of the view the HUD lays out into. Smaller pulls\n");
     fprintf(f, "# shields/radar/ammo toward the center so both VR eyes see them.\n");
     fprintf(f, "# (default %.2f = calibrated stock layout, range 0.30 to 1.00)\n", d.hud_size);

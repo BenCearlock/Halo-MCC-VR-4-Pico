@@ -594,6 +594,23 @@ namespace
             ImGui::TextColored(ImVec4(1.0f, 0.55f, 0.25f, 1.0f),
                                "[!] Very heavy (~5K and up): can crash weaker GPUs. Test in\n"
                                "    short sessions and drop this if the game won't start.");
+        ImGui::Spacing();
+        ImGui::Text("Image quality (applies live, every title)");
+        const char* upscaleItems[] = {"Linear (old)", "Sharp (Catmull-Rom)"};
+        changed |= ImGui::Combo("Upscale filter", &g_config.upscale_filter,
+                                upscaleItems, 2);
+        ImGui::TextDisabled("How the game image is scaled to your headset. The game usually\n"
+                            "renders BELOW your per-eye headset resolution, so this upscales it.\n"
+                            "Sharp keeps edges crisp; Linear is the old soft/shimmery look.");
+        changed |= ImGui::SliderFloat("Sharpening", &g_config.sharpness, 0.0f, 1.0f, "%.2f");
+        ImGui::TextDisabled("Contrast-adaptive sharpen (AMD RCAS). 0 = off. Adds apparent detail\n"
+                            "without ringing.");
+        const char* aaItems[] = {"Off", "FXAA", "SMAA"};
+        changed |= ImGui::Combo("Anti-aliasing", &g_config.aa_mode, aaItems, 3);
+        ImGui::TextDisabled("Smooths jagged edges on the finished image, so a mid/low rig doesn't\n"
+                            "need a huge render resolution. FXAA is cheap (slight softening);\n"
+                            "SMAA is sharper (coming next -- currently behaves like FXAA).");
+        ImGui::Spacing();
         changed |= ImGui::Checkbox("Fit desktop window to my monitor",
                                    &g_config.fit_desktop_window);
         ImGui::TextDisabled(
