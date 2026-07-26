@@ -13,6 +13,11 @@ advance the accepted pointer in `docs/CURRENT-STATE.md`. Updated 2026-07-25.
 - Failed predecessor `a440654`: package
   `out/candidates/a440654-reach-fp-parity-20260725-232800404Z`, DLL SHA-256
   `E4CEF28463717763F012DA0E8C407E7DC60151EE1FB3657A8BD820369AED9684`.
+- Failed cursor-containment successor `c6385db`: package
+  `out/candidates/c6385db-reach-fp-parity-20260726-011531523Z`, DLL SHA-256
+  `4394C169D4AD28EDBE41498B20494EC6C3DB144B4F48976476A9676890794691`.
+  Its exact failed run is archived under
+  `out/test-runs/c6385db-desktop-fit-menu-fail-20260726-011903Z`.
 - This track covers desktop/render decoupling first, then the 8K-class cap and
   tiers, then FSR as a separate diagnostic-first behavior.
 
@@ -89,26 +94,33 @@ advance the accepted pointer in `docs/CURRENT-STATE.md`. Updated 2026-07-25.
   plain menu-stick path. No authoritative Reach pause-state proof exists yet;
   this must be corrected as a separate title-runtime candidate, not inferred
   from Start edges or stacked into desktop fit.
-- The replacement desktop candidate fully removes both failed `GetCursorPos`
-  mutations and restores the D3D fit path to `546d301`. It deliberately retains
-  that baseline's existing `WM_MOUSE*` lParam mapping, so this is not a
-  stock-input claim; that mapping remains an unproven variable for a later
-  isolated test.
-- On the one UI-thread shrink, the replacement preserves a cursor only when
-  `WindowFromPoint` proves the old physical point belonged to the MCC root, the
-  point was inside the old client on the same selected monitor, the cursor did
-  not move during the resize, and the point would otherwise land outside the
-  new client. It retains the normalized client location, preflights and verifies
-  the destination owner, and never moves a pointer over non-client controls,
-  another app/monitor, or a covered destination. This is the smallest isolated
-  test of the inside-success/outside-failure correlation; it remains
-  headset-pending.
+- `c6385db` tested one-time cursor containment during the fitted-window shrink.
+  The exact log proves the guarded path fired and moved the verified game-owned
+  cursor from `(916,20)` to `(429,36)` while the client changed from
+  `3204x2310` to `982x681`. Menu navigation still failed. XInput remained live,
+  four A edges reached MCC, Reach loaded, and the F1 overlay toggled twice. The
+  containment theory is falsified and the behavior was removed in `0819a0d`.
+- `0819a0d` restores the display-fit runtime files exactly to `546d301`: no
+  broad `GetCursorPos` rewrite, selected-caller rewrite, or cursor relocation is
+  retained. The fitted window and forced full-size headset backbuffer remain.
+- The current one-behavior candidate removes only `546d301`'s fitted-window
+  `WM_MOUSE*` lParam remapping. MCC has a stock message-cursor path and a
+  separate polled Windows-cursor path; the mod was scaling only the former from
+  the real fitted client into render coordinates. Every failed follow-up kept
+  that split. This candidate tests whether returning stock physical client
+  coordinates restores coherence between the two native UI sources and stops
+  mouse hover from continually replacing keyboard/controller focus. The fake
+  full-size `WM_SIZE`/`GetClientRect` resize transaction, DXGI stretch, focus
+  handling, XInput, title runtime, and headset render are unchanged. The result
+  remains unknown until the exact packaged DLL is tested in the headset.
 
 Evidence logs:
 
 - `out/deploy-backups/e4cef28-before-8fa36d6-20260726-002303744Z/halo3xr.log`
   (stalled `a440654` shell session)
 - `out/test-runs/8fa36d6-desktop-fit-input-fail-20260725-192527Z/halo3xr.log`
+- `out/test-runs/c6385db-desktop-fit-menu-fail-20260726-011903Z/halo3xr.log`
+  (failed `c6385db` cursor-containment session)
 
 ## How resolution works today (verified)
 

@@ -74,42 +74,6 @@ namespace
         SetWindowPos(hwnd, nullptr, x, y, w, h, SWP_NOZORDER | SWP_NOACTIVATE);
     }
 
-    // Mouse messages whose lParam is a client-area point. With the fit on the
-    // visible window is smaller than the render MCC thinks it is drawing into, so
-    // we scale these back up to render space before MCC sees them -- otherwise a
-    // click on the shrunken window would land on the wrong menu button.
-    bool ClientMouseMessage(UINT msg)
-    {
-        switch (msg)
-        {
-        case WM_MOUSEMOVE:
-        case WM_LBUTTONDOWN: case WM_LBUTTONUP: case WM_LBUTTONDBLCLK:
-        case WM_RBUTTONDOWN: case WM_RBUTTONUP: case WM_RBUTTONDBLCLK:
-        case WM_MBUTTONDOWN: case WM_MBUTTONUP: case WM_MBUTTONDBLCLK:
-            return true;
-        default:
-            return false;
-        }
-    }
-
-    LPARAM ScaleDesktopMouseToRender(HWND hwnd, LPARAM lp)
-    {
-        unsigned fw = 0, fh = 0;
-        D3D_GetForcedRenderSize(fw, fh);
-        if (!fw || !fh)
-            return lp;
-        RECT rc{};
-        if (!GetClientRect(hwnd, &rc)) // real (small) client -- not on the lie stack
-            return lp;
-        const int cw = rc.right - rc.left;
-        const int ch = rc.bottom - rc.top;
-        if (cw <= 0 || ch <= 0)
-            return lp;
-        const int x = (int)((long long)GET_X_LPARAM(lp) * (int)fw / cw);
-        const int y = (int)((long long)GET_Y_LPARAM(lp) * (int)fh / ch);
-        return MAKELPARAM((WORD)x, (WORD)y);
-    }
-
     LRESULT CALLBACK WndProcHook(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     {
         // Fit request (posted from Menu_Init) -- run it here on the UI thread.
@@ -257,11 +221,10 @@ namespace
                 !(msg == WM_SYSKEYDOWN && wp == VK_F4))
                 return 0;
         }
-        // Only reached by mouse messages when the F1 menu is closed (the block
-        // above swallows them when it is open). Scale desktop clicks from the
-        // shrunken window up to render space so MCC's menu hit-testing matches.
-        if (D3D_FitActive() && ClientMouseMessage(msg))
-            lp = ScaleDesktopMouseToRender(hwnd, lp);
+        // Keep native mouse messages in MCC's stock physical client domain. The
+        // prior fit scaled only this path while its separately polled cursor stayed
+        // physical. This candidate tests whether restoring one coordinate domain
+        // stops mouse hover from displacing keyboard/controller menu focus.
         return CallWindowProcW(g_origWndProc, hwnd, msg, wp, lp);
     }
 

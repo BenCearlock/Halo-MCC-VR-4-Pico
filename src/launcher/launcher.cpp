@@ -221,7 +221,7 @@ int APIENTRY wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int)
     // Hand the DLL the EXACT render surface size we are launching with, so that
     // when fit_desktop_window is on it can force MCC's swapchain backbuffer to
     // this exact size (matching this ScaleEven, so the two can never disagree)
-    // and scale desktop mouse input back to it. The child inherits these because
+    // and preserve it through window resize. The child inherits these because
     // CreateProcessW is given a NULL environment block. Harmless when the fit is
     // off -- the DLL only reads them in that case.
     wchar_t envBuf[16];

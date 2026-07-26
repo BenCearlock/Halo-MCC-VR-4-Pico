@@ -8,9 +8,8 @@ bool InstallD3D11Hooks();
 
 // --- Desktop-window fit (config.fit_desktop_window) -------------------------
 // The forced full-render backbuffer size (0,0 when the fit is off or not yet
-// initialized). menu.cpp reads it to scale desktop mouse input from the shrunken
-// window back into the full render the game believes it is drawing into, so menu
-// clicks land on the right buttons.
+// initialized). menu.cpp uses it while rewriting MCC's WM_SIZE transaction so
+// the engine keeps drawing the full headset render into the fitted window.
 void D3D_GetForcedRenderSize(unsigned& width, unsigned& height);
 
 // True only when the desktop fit is on AND its hooks installed at startup. All
