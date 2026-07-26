@@ -172,6 +172,8 @@ void ConfigLoad(const wchar_t* path)
             continue; // retired: the composed-wrist snap was reverted (hand spin); accept old cfgs quietly
         else if (!strcmp(key, "hud_probe"))
             g_config.hud_probe = atoi(val) != 0;
+        else if (!strcmp(key, "fsr_probe"))
+            g_config.fsr_probe = atoi(val) != 0;
         else if (!strcmp(key, "bullet_probe"))
             g_config.bullet_probe = atoi(val) != 0;
         else if (!strcmp(key, "weapon_probe"))
@@ -609,6 +611,11 @@ void ConfigSave()
     fprintf(f, "# enemy-red reticle state and per-element HUD flags). Log-only.\n");
     fprintf(f, "# Not in the F1 menu; this file only. (default %d)\n", d.hud_probe ? 1 : 0);
     fprintf(f, "hud_probe = %d\n\n", g_config.hud_probe ? 1 : 0);
+    fprintf(f, "# Diagnostic: 1 logs each distinct scene render target MCC binds\n");
+    fprintf(f, "# (size/format/flags + viewport) so toggling MCC's built-in FSR shows\n");
+    fprintf(f, "# what it changes. Not in the F1 menu; this file only. (default %d)\n",
+            d.fsr_probe ? 1 : 0);
+    fprintf(f, "fsr_probe = %d\n\n", g_config.fsr_probe ? 1 : 0);
     fprintf(f, "# Diagnostic: log camera-vs-muzzle offset on each shot (bullet origin).\n");
     fprintf(f, "# Not in the F1 menu; this file only. (default %d)\n", d.bullet_probe ? 1 : 0);
     fprintf(f, "bullet_probe = %d\n\n", g_config.bullet_probe ? 1 : 0);

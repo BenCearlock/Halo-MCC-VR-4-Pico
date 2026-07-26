@@ -5337,10 +5337,67 @@ bool VR_GetScopeRenderAspect(float& outAspect)
 }
 
 
+// FSR diagnostic (fsr_probe, off by default). Log-only: observe slot 0 of every
+// OMSetRenderTargets bind and record each DISTINCT (width, height, format,
+// bind-flags) render target, plus the viewport active at that bind. When MCC's
+// built-in FSR is toggled, a newly logged tuple tells us whether FSR renders the
+// scene into a smaller target (the mod would then need to capture the
+// pre-upscale image) or changes the viewport rect (the mod's projection would
+// break) -- instead of guessing. Runs on the render thread only, allocation-free
+// and lock-free: the table is a fixed 12-slot static seen only from that thread.
+static void ProbeFsrTargets(ID3D11DeviceContext* context, UINT count,
+                            ID3D11RenderTargetView* const* input)
+{
+    if (!g_config.fsr_probe || !context || !count || !input || !input[0])
+        return;
+
+    ID3D11Resource* resource = nullptr;
+    input[0]->GetResource(&resource);
+    if (!resource)
+        return;
+    ID3D11Texture2D* tex = nullptr;
+    D3D11_TEXTURE2D_DESC desc{};
+    const bool isTexture = SUCCEEDED(resource->QueryInterface(
+        __uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&tex)));
+    if (isTexture)
+        tex->GetDesc(&desc);
+    if (tex)
+        tex->Release();
+    resource->Release();
+    if (!isTexture)
+        return;
+
+    struct SeenTarget { UINT w, h; UINT format, bind; };
+    static SeenTarget seen[12]{};
+    static unsigned seenCount = 0;
+    const UINT descFormat = static_cast<UINT>(desc.Format);
+    for (unsigned i = 0; i < seenCount; ++i)
+        if (seen[i].w == desc.Width && seen[i].h == desc.Height &&
+            seen[i].format == descFormat && seen[i].bind == desc.BindFlags)
+            return; // already logged this exact target shape
+
+    D3D11_VIEWPORT vp{};
+    UINT vpCount = 1;
+    context->RSGetViewports(&vpCount, &vp);
+
+    const UINT bbW = g_gameBackbufferDescValid ? g_gameBackbufferDesc.Width : 0;
+    const UINT bbH = g_gameBackbufferDescValid ? g_gameBackbufferDesc.Height : 0;
+    LOG("FSRPROBE: slot0 RT %ux%u fmt=%u bind=0x%X | viewport %.0fx%.0f at (%.0f,%.0f) "
+        "| backbuffer %ux%u | rtCount=%u",
+        desc.Width, desc.Height, descFormat, desc.BindFlags,
+        vpCount ? vp.Width : 0.0f, vpCount ? vp.Height : 0.0f,
+        vpCount ? vp.TopLeftX : 0.0f, vpCount ? vp.TopLeftY : 0.0f,
+        bbW, bbH, count);
+
+    if (seenCount < 12)
+        seen[seenCount++] = {desc.Width, desc.Height, descFormat, desc.BindFlags};
+}
+
 bool VR_RedirectRenderTargets(ID3D11DeviceContext* context, UINT count,
                               ID3D11RenderTargetView* const* input,
                               ID3D11RenderTargetView** output)
 {
+    ProbeFsrTargets(context, count, input);
 #if HALOMCCVR_EXPERIMENTAL_ODST_BRINGUP
     auto& hudRoute = g_nativeHudEyeRoute;
     if (hudRoute.bypassOmRedirect)

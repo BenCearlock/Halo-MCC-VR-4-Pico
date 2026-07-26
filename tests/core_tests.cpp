@@ -3279,7 +3279,7 @@ int main()
         "two_hand_toggle", "left_hand_forward_m", "two_hand_zone_right_m",
         "left_grip_forward_m", "arm_ik", "floating_hands",
         "right_shoulder_drop", "shoulder_level", "body_wip", "weapon_probe",
-        "hud_probe", "bullet_probe", "right_eye_first"
+        "hud_probe", "fsr_probe", "bullet_probe", "right_eye_first"
     };
     for (const char* key : universalKeys)
     {

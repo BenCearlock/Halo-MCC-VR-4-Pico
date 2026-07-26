@@ -285,6 +285,16 @@ struct Config
     // per-element visibility flags. Log-only; changes nothing.
     bool hud_probe = false;
 
+    // DIAGNOSTIC (off by default; set fsr_probe=1 in the cfg to investigate
+    // MCC's built-in FSR). Log-only: on each distinct slot-0 render target MCC
+    // binds, records its width/height/format/bind-flags and the current
+    // viewport. When MCC's FSR is toggled on/off, a new line reveals whether FSR
+    // makes the scene render into a SMALLER target (so the mod must capture the
+    // pre-upscale image) or changes the VIEWPORT rect (so the mod's projection
+    // assumptions break). Changes nothing; it only observes. See
+    // docs/RESOLUTION-FSR-INVESTIGATION.md.
+    bool fsr_probe = false;
+
     // DIAGNOSTIC (off by default; set bullet_probe=1 in the cfg for the
     // fire-hook hunt). On each shot, logs the camera (where Halo spawns your
     // bullet) vs the gun muzzle world position, to measure the "bullets from

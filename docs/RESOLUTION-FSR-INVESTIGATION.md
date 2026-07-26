@@ -242,7 +242,17 @@ Evidence logs:
   and viewport? A read-only probe logging the scene-color desc (size/format) and
   bound viewport when FSR is toggled on/off would reveal whether FSR shrinks the
   render target (so the mod must capture the pre-upscale target) or changes the
-  viewport rect (so the mod's projection assumptions break). The mod already sees
+  viewport rect (so the mod's projection assumptions break).
+  **BUILT 2026-07-26 (`fsr_probe`, log-only, off by default).**
+  `ProbeFsrTargets` in `src/dll/vr.cpp` runs at the top of
+  `VR_RedirectRenderTargets` (render thread only, allocation/lock-free, fixed
+  12-slot static). It logs each DISTINCT slot-0 render target MCC binds --
+  `FSRPROBE: slot0 RT WxH fmt=.. bind=0x.. | viewport WxH at (x,y) | backbuffer
+  WxH | rtCount=..`. Toggling MCC FSR should emit a new line if FSR introduces a
+  smaller pre-upscale target or a changed viewport. Set `fsr_probe = 1` in
+  `halomccvr.cfg` (file-only; no F1 toggle). Capture with the exact same DLL
+  hash, FSR Off then On, Halo 3 first then ODST. Headset/log capture pending; no
+  capture-behavior change ships until the transaction is proven. The mod already sees
   the depth-stencil and RTV in `OMSetRenderTargets` → `VR_RedirectRenderTargets`
   and logs swapchain resizes, so most of the instrumentation hooks already exist.
   The probe must use fixed storage in the D3D hot hooks and emit the completed
