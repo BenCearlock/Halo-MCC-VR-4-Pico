@@ -10664,38 +10664,22 @@ namespace
                     1, std::memory_order_relaxed);
                 return false;
             }
-            // local = R_stock^T * (position - stock.translation)
-            float local[3];
-            ReachRotateTranspose(stock.rotation, delta, local);
-            // position' = moved.translation + R_moved * local
-            float world[3];
-            ReachRotate(moved.rotation, local, world);
+            // Translation only, and deliberately so. The anchor is now
+            // head -> gun, not weapon -> weapon, so rotating by
+            // R_moved * R_head^T would spin the flash by the difference between
+            // where the player looks and where they point - visible garbage.
+            // The flash's own orientation already comes from the engine's
+            // weapon, which controller aim steers down the controller ray, so
+            // it is kept exactly as resolved. Only the position moves, off the
+            // head and onto the gun.
+            (void)rotation;
             const float newPosition[3] = {
-                moved.translation[0] + world[0],
-                moved.translation[1] + world[1],
-                moved.translation[2] + world[2]};
-            // R' = R_moved * R_stock^T * R_marker
-            float rebuilt[9];
-            for (int row = 0; row < 3; ++row)
-            {
-                float column[3] = {rotation[row], rotation[row + 3],
-                                   rotation[row + 6]};
-                float localAxis[3];
-                ReachRotateTranspose(stock.rotation, column, localAxis);
-                float worldAxis[3];
-                ReachRotate(moved.rotation, localAxis, worldAxis);
-                rebuilt[row] = worldAxis[0];
-                rebuilt[row + 3] = worldAxis[1];
-                rebuilt[row + 6] = worldAxis[2];
-            }
-            for (int i = 0; i < 9; ++i)
-                if (!isfinite(rebuilt[i]))
-                    return false;
+                position[0] + (moved.translation[0] - stock.translation[0]),
+                position[1] + (moved.translation[1] - stock.translation[1]),
+                position[2] + (moved.translation[2] - stock.translation[2])};
             for (int i = 0; i < 3; ++i)
                 if (!isfinite(newPosition[i]))
                     return false;
-            for (int i = 0; i < 9; ++i)
-                rotation[i] = rebuilt[i];
             position[0] = newPosition[0];
             position[1] = newPosition[1];
             position[2] = newPosition[2];
@@ -13303,9 +13287,21 @@ namespace
                 // and `alignedRight` is where the player actually sees it. The
                 // muzzle flash resolves against the former; re-parenting it
                 // between the two puts it on the gun with no offset.
-                ReachPublishWeaponAnchor(
-                    context.untouchedLive[context.layout.rightWristSource],
-                    alignedRight, g_reachCamera.generation);
+                // MUST be centerRoot, not untouchedLive[rightWristSource].
+                // The live-graph bone is in the first-person skeleton's LOCAL
+                // space; effect matrices are in world space. Comparing them put
+                // the nearest approach at 75,842 mm (7478cb7 probe) - not a
+                // near miss, two different coordinate systems. centerRoot and
+                // alignedRight are both absolute world poses supplied by the
+                // Reach adapter, so distances between them and an effect matrix
+                // are meaningful. centerRoot sits at the player's head, which
+                // is exactly where the stuck flash renders.
+                if (context.targets.centerRootValid)
+                {
+                    ReachPublishWeaponAnchor(
+                        context.targets.centerRoot, alignedRight,
+                        g_reachCamera.generation);
+                }
                 const bool reconstructed=ReconstructVisiblePaletteSource(
                     tag,fp,*root,source,replacement,&targets,
                     context.untouchedLive);
