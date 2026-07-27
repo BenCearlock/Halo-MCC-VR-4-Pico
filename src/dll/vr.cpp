@@ -6283,6 +6283,33 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
                         const bool authoredReticleThisFrame =
                             g_authoredReticleReady &&
                             g_authoredReticleSerial == g_preparedFrame.serial;
+#if HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE
+                        // Reachability proof for the whole block below. If the
+                        // quad heartbeat is silent while THIS is alive, the
+                        // difference is the `reachTitle` test; if both are
+                        // silent, the compositor is not reaching Reach's
+                        // authored path at all and every conclusion drawn from
+                        // that silence is void.
+                        {
+                            static uint64_t lastAliveMs = 0;
+                            const uint64_t aliveNow = GetTickCount64();
+                            if (aliveNow - lastAliveMs >= 2000)
+                            {
+                                lastAliveMs = aliveNow;
+                                LOG("REACHHUD: compositor alive "
+                                    "(reachTitle=%d reachImages=%d "
+                                    "ownsReach=%d authoredThisFrame=%d "
+                                    "heldArt=%d key=%016llX)",
+                                    reachTitle ? 1 : 0,
+                                    reachImages ? 1 : 0,
+                                    Game_OwnsReachAuthoredReticle() ? 1 : 0,
+                                    authoredReticleThisFrame ? 1 : 0,
+                                    g_reticleContainsAuthored ? 1 : 0,
+                                    static_cast<unsigned long long>(
+                                        Game_GetAuthoredCrosshairKey()));
+                            }
+                        }
+#endif
                         const bool reachAuthoredReticleThisFrame =
                             reachTitle && reachImages &&
                             authoredReticleThisFrame &&
@@ -6483,8 +6510,22 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
                         // the compositor thread that already logs status lines.
                         if (reachTitle)
                         {
+                            // Heartbeat as well as state change. Twice this
+                            // point produced ZERO lines, which was ambiguous
+                            // between "the decision never changed" and "this
+                            // code never runs" - and a conclusion was drawn
+                            // from it anyway. A periodic line removes the
+                            // ambiguity: silence now means only that this
+                            // point is unreachable.
                             static bool loggedSubmitted = true;
-                            if (reticleQuadSubmitted != loggedSubmitted)
+                            static uint64_t lastHeartbeatMs = 0;
+                            const uint64_t nowMs = GetTickCount64();
+                            const bool heartbeat =
+                                nowMs - lastHeartbeatMs >= 2000;
+                            if (heartbeat)
+                                lastHeartbeatMs = nowMs;
+                            if (reticleQuadSubmitted != loggedSubmitted ||
+                                heartbeat)
                             {
                                 loggedSubmitted = reticleQuadSubmitted;
                                 LOG("REACHHUD: crosshair quad %s "
