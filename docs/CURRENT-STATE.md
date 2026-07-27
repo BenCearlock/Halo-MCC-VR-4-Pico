@@ -437,6 +437,39 @@ friendly-green and hostile-red changes, shared crosshair configuration parity,
 safe title transitions/teardown, and a Halo 3 regression for the touched shared
 authored-reticle composition path.
 
+### ACCEPTED: Reach native HUD layout (size + aspect) - 2026-07-27
+
+Headset confirmed by the user: Reach's HUD sliders work. Reach remains
+experimental; the product pointer is unchanged.
+
+| Identity | Value |
+| --- | --- |
+| Accepted source | `c99cce49cc03ad76bbe3477821d0190f3ae5d653` |
+| `halo3xr.dll` SHA-256 | `9A833A25D72A35DA1879ABFF34CA25A05C29CA7E28DDD35A6B86F394E1BAD472` |
+| Headset result | HUD size/aspect apply and are adjustable; took 30-45s to take effect |
+
+**Why every earlier candidate failed.** Reach authors one curvature record per
+screen shape, five per skin. Every prior candidate matched only
+`fullscreen wide{720p fullscreen}` (1280x720 virtual canvas). The VR per-eye
+render target is `3752x3828` - aspect 0.98, not widescreen - so the engine
+reads the `fullscreen standard{480i fullscreen}` record (920x690), which was
+never written. The field, offsets, and write were all correct throughout; the
+record was wrong. `HudLayoutAdapter` now carries alternate resolution-class
+anchors and the scanner/verifier match any of them. Halo 3 and ODST carry zero
+alternates and are unchanged.
+
+Covering both aspect classes is deliberately resolution-independent: these are
+the game's authored virtual-canvas constants, so the engine's own choice
+between records stops mattering. Do not replace this with render-aspect
+detection.
+
+Candidate `c4b6f610e7b0cab64dc0f53b2316db68c63b1e5f` (DLL
+`C1E3952A2B6BB61BF37D8FED2D60F41B1D5657DEA7F462A9AC9684778A0F0476`) follows up
+on the 30-45s delay: the first scan runs before the level's tag data is
+resident and the retry cooldown was a flat 15s, so an early miss cost 15s plus
+a ~4s scan. It is now 2s while the title is settling and 15s after. That
+candidate is installed and **headset-pending**.
+
 ### UNTESTED Reach native HUD layout (size + aspect) - 2026-07-26
 
 Reach laid its HUD out at its authored ~0.87 safe frame while Halo 3 and ODST
