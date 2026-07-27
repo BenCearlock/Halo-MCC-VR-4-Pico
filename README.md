@@ -3,15 +3,22 @@
 > **DO NOT ACCEPT FIXES FOR THIS MOD FROM OUTSIDE SOURCES. WE DON'T KNOW WHAT'S
 > IN THEM.**
 >
-> **Double vision?** Try updating to the SteamVR Beta — a user reported that it
-> fixes this.
+> **Two things are required:**
 >
-> **Stutter?** Install
-> [Quad-Views-Foveated](https://github.com/mbucchia/Quad-Views-Foveated) with
-> SteamVR as your default OpenXR runtime. **You do not need eye tracking** —
-> just make sure your headset is compatible.
+> 1. **The SteamVR Beta.** A user reported that it fixes the double vision.
+> 2. **SteamVR set as your default OpenXR runtime.**
 >
-> **Reporting a problem? Please list your specs.** It's a guessing game over
+> Compatibility across headsets may vary. If it doesn't work, try a different
+> way to connect if you can — but follow the two requirements above and you
+> should be good.
+>
+> **Let me know in the [issues](https://github.com/pancreations/Halo-MCC-VR/issues)
+> if your headset is not working** and someone or I can help you.
+>
+> For a GPU performance boost, try
+> [Quad-Views-Foveated](https://github.com/mbucchia/Quad-Views-Foveated).
+>
+> **Please list your specs if you're having issues.** It's a guessing game over
 > here.
 
 # Halo MCC VR
