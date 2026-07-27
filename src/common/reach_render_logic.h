@@ -101,6 +101,46 @@ inline constexpr int ReachClassifyObserverCameraReturn(uintptr_t returnRva)
     return -1;
 }
 
+// Reach's rain, and why it swings with head AND hand in VR.
+//
+// The rain particle renderer is retail 0x00288D60 (.pdata bounds
+// 0x00288D60-0x00289367), dispatched from player_view_render at 0x0026CCC3
+// behind the render_rain_particles debug var (0x00B4444C, entry 0x00B40FF8).
+//
+// It reads the TOP-OF-STACK render workspace's SECONDARY compact camera:
+// position at workspace+0x154, forward at workspace+0x160 - i.e.
+// kReachSecondaryCompactOffset plus the compact camera's own +0x00/+0x0C. It
+// resolves that workspace exactly the way the engine does, from the camera
+// stack: depth at 0x00B43ABC, pointer array at 0x00C878A8. During
+// player_view_render the top of stack is 0x00C9FAE0, the default workspace.
+//
+// Then, measured at 0x00288DBA-0x00288E43, it computes
+//
+//     centre[i] = position[i] + forward[i] * (rainVolumeSize * 0.45f)
+//
+// and uploads that as the rain volume centre. THAT is the whole defect. In flat
+// Reach the volume simply sits in front of the one camera and nobody notices.
+// In VR, workspace+0x154 holds the mod's own per-eye camera, whose forward is
+// head-look composed on top of the hand-steered observer camera - so the entire
+// rain field translates with every head rotation AND every hand rotation.
+//
+// The correction zeroes ONLY that forward, for the duration of that one call,
+// so the volume centres on the camera position and stops rotating with the
+// view. Position tracking is retained: the rain must still follow the player.
+//
+// The plain prologue of 0x00288D60 matches 3 times and must NOT be used as a
+// signature. The interior pattern below is measured UNIQUE (exactly one match,
+// at 0x00288D9C); the entry is that match minus 0x3C.
+//
+// ABI, read from the entry and the dispatch site: the function consumes a
+// single float in xmm2 (saved to xmm10 at 0x00288DA3, loaded by the caller at
+// 0x0026CCBE) and reads no integer argument register, so a detour declared with
+// two pass-through integer slots and a float third argument preserves the
+// register state exactly.
+inline constexpr uintptr_t kReachRainParticleRenderRva = 0x00288D60;
+inline constexpr uintptr_t kReachRainRenderSigEntryOffset = 0x3C;
+inline constexpr uintptr_t kReachCompactCameraForwardOffset = 0x0C;
+
 // Reach's effect-location node-matrix resolver, and the second muzzle flash.
 //
 // The player's screenshot shows TWO muzzle elements: one correctly on the

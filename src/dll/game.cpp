@@ -10065,6 +10065,7 @@ namespace
         void* hudDrawWidgetTarget = nullptr;
         void* observerCameraTarget = nullptr;
         void* effectLocationTarget = nullptr;
+        void* rainRenderTarget = nullptr;
     } g_reachCamera;
     bool RestoreReachNativeWeaponIkBypass();
     static_assert(std::atomic<int>::is_always_lock_free);
@@ -10323,6 +10324,135 @@ namespace
     // five-argument chud_draw_widget transaction. Select only class 2 and
     // reuse Halo 3/ODST's authored-widget capture. No procedural reticle,
     // widget-name fallback, or mixed flat-crosshair mode exists.
+    // ---- Reach rain: stop the volume swinging with the view ----------------
+    // See kReachRainParticleRenderRva for the derivation. The renderer centres
+    // the whole rain volume at position + forward * (size * 0.45), and in VR
+    // that forward carries both head-look and hand aim, so the entire rain
+    // field rotates with the player. Zeroing the forward for the duration of
+    // this one call centres the volume on the camera instead, which keeps the
+    // rain following the player's POSITION while decoupling it from rotation.
+    //
+    // Scoped save/substitute/restore around exactly one engine call on the
+    // render thread, with __finally so an exception cannot leave the workspace
+    // modified. This is not the banned "scoped camera write": that rule is
+    // about splitting head-look between frames, and this touches a value the
+    // rain renderer is the only documented consumer of during its own call.
+    const char* kReachRainRenderSig =
+        "48 63 05 ?? ?? ?? ?? 44 0F 28 D2 85 C0 78 0D 48 8D 1D ?? ?? ?? ?? "
+        "48 8B 1C C3 EB 02 33 DB";
+    using ReachRainRenderFn = void(__fastcall*)(uintptr_t, uintptr_t, float);
+    ReachRainRenderFn g_reachOrigRainRender = nullptr;
+    std::atomic<uint32_t> g_reachRainDecoupled{0};
+    std::atomic<uint32_t> g_reachRainSkipped{0};
+
+    // Resolve the workspace the rain renderer itself will use, the same way it
+    // does: camera-stack depth indexes the camera-stack pointer array.
+    uintptr_t ReachResolveTopCameraWorkspace()
+    {
+        const uintptr_t base = g_reachCamera.base;
+        if (!base)
+            return 0;
+        __try
+        {
+            const int32_t depth = *reinterpret_cast<const int32_t*>(
+                base + kReachCameraStackDepthRva);
+            if (depth < 0 || depth > 64)
+                return 0;
+            const uintptr_t workspace = *reinterpret_cast<const uintptr_t*>(
+                base + kReachCameraStackPointersRva +
+                static_cast<uintptr_t>(depth) * sizeof(uintptr_t));
+            if (workspace < base || workspace >= base + g_reachCamera.size)
+                return 0;
+            return workspace;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            return 0;
+        }
+    }
+
+    // Guarded save-and-zero of the workspace forward. Separate function so no
+    // __try/__except is nested inside the detour's __try/__finally - that
+    // nesting crashed the MSVC front end outright (CL.exe 0xC0000005).
+    __declspec(noinline) bool ReachRainZeroForward(
+        float* forward, float* saved)
+    {
+        __try
+        {
+            saved[0] = forward[0];
+            saved[1] = forward[1];
+            saved[2] = forward[2];
+            if (!isfinite(saved[0]) || !isfinite(saved[1]) ||
+                !isfinite(saved[2]))
+            {
+                return false;
+            }
+            forward[0] = 0.0f;
+            forward[1] = 0.0f;
+            forward[2] = 0.0f;
+            return true;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            return false;
+        }
+    }
+
+    __declspec(noinline) void ReachRainRestoreForward(
+        float* forward, const float* saved)
+    {
+        __try
+        {
+            forward[0] = saved[0];
+            forward[1] = saved[1];
+            forward[2] = saved[2];
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+        }
+    }
+
+    __declspec(noinline) void __fastcall ReachRainRenderDetour(
+        uintptr_t passthroughA, uintptr_t passthroughB, float intensity)
+    {
+        g_reachCamera.activeCallbacks.fetch_add(1, std::memory_order_acq_rel);
+        float* forward = nullptr;
+        float savedForward[3] = {0.0f, 0.0f, 0.0f};
+        __try
+        {
+            ReachRainRenderFn original = g_reachOrigRainRender;
+            if (!original)
+                return;
+            if (g_reachCamera.armed.load(std::memory_order_acquire) &&
+                g_enabled.load(std::memory_order_acquire))
+            {
+                const uintptr_t workspace = ReachResolveTopCameraWorkspace();
+                if (workspace)
+                {
+                    float* candidate = reinterpret_cast<float*>(
+                        workspace + kReachSecondaryCompactOffset +
+                        kReachCompactCameraForwardOffset);
+                    if (ReachRainZeroForward(candidate, savedForward))
+                    {
+                        forward = candidate;
+                        g_reachRainDecoupled.fetch_add(
+                            1, std::memory_order_relaxed);
+                    }
+                }
+                if (!forward)
+                    g_reachRainSkipped.fetch_add(1, std::memory_order_relaxed);
+            }
+            original(passthroughA, passthroughB, intensity);
+        }
+        __finally
+        {
+            if (forward)
+                ReachRainRestoreForward(forward, savedForward);
+            g_reachCamera.activeCallbacks.fetch_sub(
+                1, std::memory_order_acq_rel);
+        }
+    }
+
     // ---- Reach second muzzle flash -----------------------------------------
     // Puts the face-stuck muzzle element onto the controller-held gun, beside
     // the one that already tracks it. See kReachEffectLocationResolverRva for
@@ -10404,9 +10534,34 @@ namespace
                 original(effect, nodeDesignator, outMatrix);
                 return;
             }
-            const ReachEffectFpDecision decision =
+            ReachEffectFpDecision decision =
                 ReachDecideEffectLocation(
                     fpUserByte, static_cast<unsigned int>(nodeDesignator));
+            // DISABLED 2026-07-27 after a headset failure, kept for evidence.
+            //
+            // This redirect fired 26,576 times in 30 s of shooting and the
+            // face-stuck muzzle flash did not move at all (REACHFX line,
+            // candidate 6c4e796). That is conclusive: the flash the player sees
+            // is not placed through this resolver's world path, so the redirect
+            // buys nothing while relocating tens of thousands of unrelated
+            // first-person weapon effect placements per half minute - exactly
+            // the kind of unproven side effect that produced the rejected
+            // projectile-origin result earlier in this project.
+            //
+            // HREK tag data says why the model was wrong: the muzzle flash is a
+            // particle_system_definition_block_new gated by the static
+            // effect_camera_modes enum (1 = only in first person, 2 = only in
+            // third person) at particle-system element +0x1E, not an
+            // effect_part placed at a marker location. The face-stuck element
+            // is almost certainly the THIRD-PERSON set, which never renders
+            // during real first-person play.
+            //
+            // The counters above stay live so the next candidate can still see
+            // what this path does. Re-enabling this requires new evidence that
+            // the flash actually resolves here.
+            constexpr bool kReachMuzzleRedirectEnabled = false;
+            if (!kReachMuzzleRedirectEnabled)
+                decision.redirect = false;
             if (!decision.redirect)
             {
                 // Record WHY, so one run distinguishes the three ways this can
@@ -13418,7 +13573,7 @@ namespace
     bool ScanForReachDetourIngress(bool& busy)
     {
         static bool rangesResolved = false;
-        static ReachDetourCodeRange ranges[8]{};
+        static ReachDetourCodeRange ranges[9]{};
         if (!rangesResolved)
         {
             const void* functions[] = {
@@ -13430,6 +13585,7 @@ namespace
                 reinterpret_cast<const void*>(&ReachHudDrawWidgetDetour),
                 reinterpret_cast<const void*>(&ReachObserverCameraDetour),
                 reinterpret_cast<const void*>(&ReachEffectLocationDetour),
+                reinterpret_cast<const void*>(&ReachRainRenderDetour),
             };
             static_assert(_countof(functions) == _countof(ranges));
             bool resolved = true;
@@ -13451,6 +13607,7 @@ namespace
             g_reachCamera.hudDrawWidgetTarget,
             g_reachCamera.observerCameraTarget,
             g_reachCamera.effectLocationTarget,
+            g_reachCamera.rainRenderTarget,
         };
         void* const trampolines[] = {
             reinterpret_cast<void*>(g_reachOrigMainRenderView),
@@ -13461,6 +13618,7 @@ namespace
             reinterpret_cast<void*>(g_reachOrigHudDrawWidget),
             reinterpret_cast<void*>(g_reachOrigObserverCamera),
             reinterpret_cast<void*>(g_reachOrigEffectLocation),
+            reinterpret_cast<void*>(g_reachOrigRainRender),
         };
         static_assert(_countof(targets) == _countof(ranges));
         static_assert(_countof(trampolines) == _countof(ranges));
@@ -13555,6 +13713,7 @@ namespace
     {
         bool disabledAll = true;
         void* const targets[] = {
+            g_reachCamera.rainRenderTarget,
             g_reachCamera.effectLocationTarget,
             g_reachCamera.observerCameraTarget,
             g_reachCamera.hudDrawWidgetTarget,
@@ -13580,6 +13739,22 @@ namespace
             return false;
 
         bool removedAll = true;
+        if (g_reachCamera.rainRenderTarget)
+        {
+            const MH_STATUS status =
+                MH_RemoveHook(g_reachCamera.rainRenderTarget);
+            if (status == MH_OK || status == MH_ERROR_NOT_CREATED)
+            {
+                g_reachCamera.rainRenderTarget = nullptr;
+                g_reachOrigRainRender = nullptr;
+            }
+            else
+            {
+                removedAll = false;
+                LOG("Reach rain cleanup: remove failed for %p (%d)",
+                    g_reachCamera.rainRenderTarget, static_cast<int>(status));
+            }
+        }
         if (g_reachCamera.effectLocationTarget)
         {
             const MH_STATUS status =
@@ -13783,6 +13958,7 @@ namespace
         g_reachCamera.hudDrawWidgetTarget = nullptr;
         g_reachCamera.observerCameraTarget = nullptr;
         g_reachCamera.effectLocationTarget = nullptr;
+        g_reachCamera.rainRenderTarget = nullptr;
         g_reachCamera.moduleReference = nullptr;
         g_reachCamera.base = 0;
         g_reachCamera.size = 0;
@@ -14298,6 +14474,45 @@ namespace
                 "nothing else affected",
                 static_cast<unsigned long long>(
                     kReachRenderCameraFromObserverRva));
+        // Optional and independent: the rain volume. Located by a UNIQUE
+        // interior signature because this function's plain prologue matches
+        // three times in the module; the entry is the match minus 0x3C, and it
+        // is cross-checked against the expected RVA before use.
+        void* rainRender = nullptr;
+        bool rainRenderCreated = false;
+        {
+            const uintptr_t rainHit = sig::Find(base, size, kReachRainRenderSig);
+            const bool rainUnique = rainHit &&
+                !sig::Find(rainHit + 1, base + size - rainHit - 1,
+                           kReachRainRenderSig);
+            if (!rainUnique)
+            {
+                LOG("Reach rain: renderer signature %s; the rain keeps "
+                    "swinging with the view, nothing else affected",
+                    rainHit ? "ambiguous" : "missing");
+            }
+            else
+            {
+                const uintptr_t entry =
+                    rainHit - kReachRainRenderSigEntryOffset;
+                if (entry - base != kReachRainParticleRenderRva)
+                    LOG("Reach rain: renderer resolved to haloreach.dll+0x%llX "
+                        "(expected 0x%llX); using the resolved address",
+                        static_cast<unsigned long long>(entry - base),
+                        static_cast<unsigned long long>(
+                            kReachRainParticleRenderRva));
+                rainRender = reinterpret_cast<void*>(entry);
+                rainRenderCreated = fpCameraCreated && MH_CreateHook(
+                        rainRender,
+                        reinterpret_cast<void*>(&ReachRainRenderDetour),
+                        reinterpret_cast<void**>(
+                            &g_reachOrigRainRender)) == MH_OK;
+                if (fpCameraCreated && !rainRenderCreated)
+                    LOG("Reach rain: renderer hook create FAILED at "
+                        "haloreach.dll+0x%llX",
+                        static_cast<unsigned long long>(entry - base));
+            }
+        }
         // Optional and independent again: the second muzzle flash. The
         // first-person marker query is DECODED from the resolver's own tail
         // jump rather than hardcoded, which also verifies we matched the right
@@ -14357,6 +14572,7 @@ namespace
             bool hudDrawWidgetRetained=hudDrawWidgetCreated;
             bool observerCameraRetained=observerCameraCreated;
             bool effectLocationRetained=effectLocationCreated;
+            bool rainRenderRetained=rainRenderCreated;
             auto removeCreated=[&](bool created,void* target,bool& retained) {
                 if (!created) return;
                 const MH_STATUS status=MH_RemoveHook(target);
@@ -14365,6 +14581,8 @@ namespace
                 else
                     cleanupOk=false;
             };
+            removeCreated(rainRenderCreated,rainRender,
+                          rainRenderRetained);
             removeCreated(effectLocationCreated,effectLocation,
                           effectLocationRetained);
             removeCreated(observerCameraCreated,observerCamera,
@@ -14390,6 +14608,7 @@ namespace
                 g_reachOrigEffectLocation=nullptr;
                 g_reachEffectFpMarkerQuery=nullptr;
             }
+            if (!rainRenderRetained) g_reachOrigRainRender=nullptr;
             if (cleanupOk)
             {
                 FreeLibrary(moduleReference);
@@ -14414,6 +14633,8 @@ namespace
                     observerCameraRetained?observerCamera:nullptr;
                 g_reachCamera.effectLocationTarget=
                     effectLocationRetained?effectLocation:nullptr;
+                g_reachCamera.rainRenderTarget=
+                    rainRenderRetained?rainRender:nullptr;
                 g_reachCamera.armed.store(false,std::memory_order_release);
                 g_reachCamera.teardownRequested.store(
                     true,std::memory_order_release);
@@ -14447,6 +14668,10 @@ namespace
             observerCameraCreated ? observerCamera : nullptr;
         g_reachCamera.effectLocationTarget =
             effectLocationCreated ? effectLocation : nullptr;
+        g_reachCamera.rainRenderTarget =
+            rainRenderCreated ? rainRender : nullptr;
+        g_reachRainDecoupled.store(0, std::memory_order_relaxed);
+        g_reachRainSkipped.store(0, std::memory_order_relaxed);
         g_reachMuzzleRedirects.store(0, std::memory_order_relaxed);
         g_reachMuzzleReadFailures.store(0, std::memory_order_relaxed);
         g_reachMuzzleWorldNoFpUser.store(0, std::memory_order_relaxed);
@@ -14581,6 +14806,19 @@ namespace
                 "effects will resolve on the gun",
                 static_cast<unsigned long long>(
                     kReachEffectLocationResolverRva));
+        }
+        if (rainRenderCreated && MH_EnableHook(rainRender) != MH_OK)
+        {
+            LOG("Reach rain: renderer hook enable failed; the rain keeps "
+                "swinging with the view, nothing else affected");
+            MH_RemoveHook(rainRender);
+            g_reachCamera.rainRenderTarget = nullptr;
+            g_reachOrigRainRender = nullptr;
+        }
+        else if (rainRenderCreated)
+        {
+            LOG("Reach rain: renderer hook active; the rain volume will centre "
+                "on the camera instead of swinging along its forward vector");
         }
         // Optional and fail-open: kill_reticle only. If this cannot be resolved
         // exactly, Reach keeps its stock crosshair and nothing else changes.
