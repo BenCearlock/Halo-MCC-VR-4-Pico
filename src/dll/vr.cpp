@@ -6277,11 +6277,34 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
                         // released image stays valid and the quad keeps showing
                         // it. Halo 3 and ODST are untouched.
                         static uint64_t s_lastUploadedReachKey = 0;
+                        static uint64_t s_lastUploadFrame = 0;
+                        static uint64_t s_uploadsDone = 0;
+                        static uint64_t s_uploadsSkipped = 0;
+                        static uint64_t s_lastUploadLogMs = 0;
                         const uint64_t reachCrosshairKey = reachTitle
                             ? Game_GetReachAuthoredCrosshairKey() : 0;
-                        const bool reachArtAlreadyPublished =
+                        // Measured: publishing the art costs ~4-5ms of the
+                        // render window, which is the difference between
+                        // fitting a 120Hz budget (8.33ms) and missing it and
+                        // halving to 60. The art is static between weapon and
+                        // state changes, so an unchanged key means the image
+                        // already in the swapchain is still correct.
+                        //
+                        // The frame cap is a floor on that saving: even if the
+                        // key were to churn, the blocking swapchain wait can
+                        // then happen at most once every few frames instead of
+                        // every single one.
+                        constexpr uint64_t kReachUploadMinFrameGap = 6;
+                        const bool reachKeyUnchanged =
                             reachTitle && reachCrosshairKey != 0 &&
                             reachCrosshairKey == s_lastUploadedReachKey;
+                        const bool reachUploadTooSoon =
+                            reachTitle && s_lastUploadFrame != 0 &&
+                            g_preparedFrame.serial >= s_lastUploadFrame &&
+                            g_preparedFrame.serial - s_lastUploadFrame <
+                                kReachUploadMinFrameGap;
+                        const bool reachArtAlreadyPublished =
+                            reachKeyUnchanged || reachUploadTooSoon;
                         const bool shouldUploadAuthoredReticle =
                             authoredReticleThisFrame && reticleUploadAdmitted &&
                             !reachArtAlreadyPublished;
@@ -6290,6 +6313,8 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
                             UploadAuthoredReticle(false))
                         {
                             s_lastUploadedReachKey = reachCrosshairKey;
+                            s_lastUploadFrame = g_preparedFrame.serial;
+                            ++s_uploadsDone;
                         }
                         else if (shouldUploadAuthoredReticle)
                         {
@@ -6308,6 +6333,26 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
                                 LOG("authored reticle upload FAILED; the VR "
                                     "reticle is showing its procedural art "
                                     "this frame instead of the game's widget");
+                        }
+                        if (reachTitle)
+                        {
+                            if (reachArtAlreadyPublished)
+                                ++s_uploadsSkipped;
+                            const uint64_t nowMs = GetTickCount64();
+                            if (nowMs - s_lastUploadLogMs >= 2000)
+                            {
+                                s_lastUploadLogMs = nowMs;
+                                LOG("Reach reticle upload: %llu uploaded, %llu "
+                                    "skipped in the last window (key %llX)",
+                                    static_cast<unsigned long long>(
+                                        s_uploadsDone),
+                                    static_cast<unsigned long long>(
+                                        s_uploadsSkipped),
+                                    static_cast<unsigned long long>(
+                                        reachCrosshairKey));
+                                s_uploadsDone = 0;
+                                s_uploadsSkipped = 0;
+                            }
                         }
                         const bool liveReachOwnerAfterUpload =
                             !reachTitle || Game_OwnsReachAuthoredReticle();
