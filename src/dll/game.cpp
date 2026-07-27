@@ -11624,6 +11624,21 @@ namespace
     // the worker's confirmation log line.
     std::atomic<bool> g_reachCineCutRealign{false};
     std::atomic<uint32_t> g_reachCineCutCount{0};
+    // Of those cuts, the ones the cinematic-globals stamp missed and only the
+    // authored-camera discontinuity test caught. Reported alongside the total so
+    // a headset log shows which detector is carrying the cutscene.
+    std::atomic<uint32_t> g_reachCineCutPoseCount{0};
+
+    // A Reach shot cut is a discontinuous jump of the authored cinematic camera.
+    // These bounds separate that jump from every legitimate authored move: the
+    // fastest sustained cinematic whip pan is well under 200 deg/sec, which is
+    // ~1.7 deg on a 120 Hz frame and ~7 deg even across a 33 ms hitch, and the
+    // fastest camera-follow moves (vehicle chase shots) travel under 1 world
+    // unit per frame under the same hitch. Anything past these is a cut, not
+    // motion. Both are deliberately loose: a missed cut leaves the previous
+    // shot's facing (today's bug), while a false one snaps the view mid-shot.
+    constexpr float kReachCineCutYawRadians = 0.35f;        // ~20 degrees
+    constexpr float kReachCineCutJumpUnitsSq = 4.0f;        // 2 world units
 
 
     bool ReachApplyHeadLook(
@@ -11885,6 +11900,11 @@ namespace
         uint32_t cutPrevStamp = 0;
         bool cutPrevVisible = false;
         bool cutPrevValid = false;
+        // Previous frame's authored camera pose, kept only while a cinematic is
+        // running, for the shot-cut discontinuity test below.
+        float cutPrevPos[3] = {};
+        float cutPrevFwd[3] = {};
+        bool cutPrevPoseValid = false;
     };
     ReachCineProbeState g_reachCineProbe;
 
@@ -12075,27 +12095,91 @@ namespace
             }
         }
         // Authored camera-cut detection (probe-proven, headset log
-        // 2026-07-27 00:43-00:48): cinematic-globals +0x28 is the current
-        // shot's start stamp - it changes at every authored cut, including
-        // cuts without a fade, and holds still through ordinary gameplay -
-        // and the byte at +0x26 rises exactly when a fade-to-black ends.
-        // Either edge is an authored discontinuity of the stock camera, so
-        // request the yaw realign ReachApplyHeadLook performs this same
-        // frame. The sampler ran at function entry on this thread, so bufA
-        // is this frame's coherent copy. Fail-open: an unarmed probe means
-        // no realign - stock behavior - never a wrong one.
+        // 2026-07-27 00:43-00:48): cinematic-globals +0x28 is an authored shot
+        // stamp that holds still through ordinary gameplay, and the byte at
+        // +0x26 rises exactly when a fade-to-black ends. Either edge is an
+        // authored discontinuity, so request the yaw realign ReachApplyHeadLook
+        // performs this same frame. The sampler ran at function entry on this
+        // thread, so bufA is this frame's coherent copy. Fail-open: an unarmed
+        // probe means no realign - stock behavior - never a wrong one.
+        //
+        // +0x28 alone is NOT sufficient. It was accepted as an every-cut marker
+        // on the strength of a session that only watched cutscene starts and
+        // ends; the 2026-07-27 08:12-08:14 log then showed it moving just twice
+        // across a 65-second cutscene, and the user confirmed in-headset that
+        // the first shot orients but every later shot does not. The camera
+        // discontinuity test below is what covers the shots it misses.
         if (g_reachCineProbe.armed.load(std::memory_order_acquire))
         {
+            const uint32_t stateWord = g_reachCineProbe.bufA[0x24 / 4];
             const uint32_t shotStamp = g_reachCineProbe.bufA[0x28 / 4];
-            const bool screenVisible =
-                ((g_reachCineProbe.bufA[0x24 / 4] >> 16) & 0xFFu) != 0;
-            if (g_reachCineProbe.cutPrevValid && screenVisible &&
+            const bool screenVisible = ((stateWord >> 16) & 0xFFu) != 0;
+            // Byte +0x24 is the cinematic-in-progress flag, from the same
+            // headset log that proved +0x26 and +0x28: it reads 0 in the menu
+            // and during ordinary play, rises to 1 for the whole cutscene, and
+            // drops back to 0 on the frame the cutscene hands back to gameplay.
+            const bool cinematicRunning = (stateWord & 0xFFu) != 0;
+            bool cut = g_reachCineProbe.cutPrevValid && screenVisible &&
                 (shotStamp != g_reachCineProbe.cutPrevStamp ||
-                 !g_reachCineProbe.cutPrevVisible))
+                 !g_reachCineProbe.cutPrevVisible);
+
+            // The stamp above only moves at some authored boundaries - a
+            // headset log (2026-07-27 08:12-08:14) showed it changing twice
+            // across a 65-second cutscene that plainly cut far more often, so
+            // every shot in between kept the previous shot's facing. Detect the
+            // cut from the authored camera instead: within a shot the cinematic
+            // camera moves continuously, and at a cut it jumps. stockCompact is
+            // the pristine engine camera for this frame (the head transform
+            // below writes headCenter, never this), so during a cinematic it is
+            // the authored pose and nothing else. Gated on cinematicRunning so
+            // this can never fire during play, where the same camera legitimately
+            // jumps on snap turn, respawn, and vehicle entry.
+            const float* stockPos =
+                reinterpret_cast<const float*>(stockCompact + 0x00);
+            const float* stockFwd =
+                reinterpret_cast<const float*>(stockCompact + 0x0C);
+            bool poseUsable = cinematicRunning && screenVisible;
+            for (int i = 0; poseUsable && i < 3; ++i)
+            {
+                if (!isfinite(stockPos[i]) || !isfinite(stockFwd[i]))
+                    poseUsable = false;
+            }
+            if (poseUsable &&
+                (stockFwd[0] * stockFwd[0] + stockFwd[1] * stockFwd[1]) <= 1e-8f)
+            {
+                poseUsable = false;
+            }
+            if (poseUsable && g_reachCineProbe.cutPrevPoseValid && !cut)
+            {
+                const float yawDelta = fabsf(WrapPi(
+                    atan2f(stockFwd[1], stockFwd[0]) -
+                    atan2f(g_reachCineProbe.cutPrevFwd[1],
+                           g_reachCineProbe.cutPrevFwd[0])));
+                const float dx = stockPos[0] - g_reachCineProbe.cutPrevPos[0];
+                const float dy = stockPos[1] - g_reachCineProbe.cutPrevPos[1];
+                const float dz = stockPos[2] - g_reachCineProbe.cutPrevPos[2];
+                if (yawDelta > kReachCineCutYawRadians ||
+                    (dx * dx + dy * dy + dz * dz) > kReachCineCutJumpUnitsSq)
+                {
+                    cut = true;
+                    g_reachCineCutPoseCount.fetch_add(
+                        1, std::memory_order_relaxed);
+                }
+            }
+            if (cut)
             {
                 g_reachCineCutRealign.store(true, std::memory_order_release);
                 g_reachCineCutCount.fetch_add(1, std::memory_order_relaxed);
             }
+
+            if (poseUsable)
+            {
+                memcpy(g_reachCineProbe.cutPrevPos, stockPos,
+                       sizeof(g_reachCineProbe.cutPrevPos));
+                memcpy(g_reachCineProbe.cutPrevFwd, stockFwd,
+                       sizeof(g_reachCineProbe.cutPrevFwd));
+            }
+            g_reachCineProbe.cutPrevPoseValid = poseUsable;
             g_reachCineProbe.cutPrevStamp = shotStamp;
             g_reachCineProbe.cutPrevVisible = screenVisible;
             g_reachCineProbe.cutPrevValid = true;
@@ -16020,6 +16104,7 @@ namespace
         {
             g_reachCineProbe.armed.store(false, std::memory_order_release);
             g_reachCineProbe.cutPrevValid = false;
+            g_reachCineProbe.cutPrevPoseValid = false;
             return;
         }
         if (g_reachCineProbe.attemptedGeneration.load(
@@ -16027,6 +16112,7 @@ namespace
             return;
         g_reachCineProbe.armed.store(false, std::memory_order_release);
         g_reachCineProbe.cutPrevValid = false;
+        g_reachCineProbe.cutPrevPoseValid = false;
         g_reachCineProbe.attemptedGeneration.store(
             generation, std::memory_order_release);
 
@@ -16285,7 +16371,8 @@ namespace
         {
             lastCutCount = cutCount;
             LOG("Reach cutscene facing: realigned to the authored camera "
-                "(cut %u)", cutCount);
+                "(cut %u, %u of them from the camera-jump test)", cutCount,
+                g_reachCineCutPoseCount.load(std::memory_order_relaxed));
         }
         ReachChudDiagnosticTick(now);
 
