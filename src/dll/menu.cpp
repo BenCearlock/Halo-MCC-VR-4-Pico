@@ -411,7 +411,8 @@ namespace
         changed |= ImGui::SliderFloat("Gun forward offset (m)", &g_config.gun_forward_m, -0.3f, 0.5f, "%.2f");
         ImGui::TextDisabled("Slides gun/arms along your aim. Negative seats the gun back in your fist.");
         changed |= ImGui::SliderFloat("Muzzle height (m)", &g_config.muzzle_height_m, -0.3f, 0.3f, "%.2f");
-        ImGui::TextDisabled("Halo Reach: raises the muzzle flash / bullet spawn up the gun's own axis.");
+        ImGui::TextDisabled("HALO REACH ONLY for now - Halo 3 and ODST support is coming soon.");
+        ImGui::TextDisabled("Raises the muzzle flash / bullet spawn up the gun's own axis.");
         ImGui::TextDisabled("Where rounds LAND is unchanged. 0.11 is about four inches.");
         ImGui::Spacing();
         ImGui::Separator();
