@@ -10064,6 +10064,7 @@ namespace
         void* fpCameraTarget = nullptr;
         void* hudDrawWidgetTarget = nullptr;
         void* observerCameraTarget = nullptr;
+        void* effectLocationTarget = nullptr;
     } g_reachCamera;
     bool RestoreReachNativeWeaponIkBypass();
     static_assert(std::atomic<int>::is_always_lock_free);
@@ -10322,6 +10323,94 @@ namespace
     // five-argument chud_draw_widget transaction. Select only class 2 and
     // reuse Halo 3/ODST's authored-widget capture. No procedural reticle,
     // widget-name fallback, or mixed flat-crosshair mode exists.
+    // ---- Reach second muzzle flash -----------------------------------------
+    // Puts the face-stuck muzzle element onto the controller-held gun, beside
+    // the one that already tracks it. See kReachEffectLocationResolverRva for
+    // the full disassembly and why effect[0x50] is a sound discriminator.
+    //
+    // This deliberately does NOT hook the object marker query 0x00471C30 or
+    // 0x0047044C. Those are genuinely shared with the projectile chain, and a
+    // previous candidate that moved a shared marker consumer produced the
+    // rejected "projectile origin too far right and rearward" result. This
+    // redirects only the resolver's own first-person branch, for effects that
+    // already declare a first-person weapon user.
+    using ReachEffectLocationFn =
+        void(__fastcall*)(void*, uintptr_t, void*);
+    using ReachEffectFpMarkerFn =
+        void(__fastcall*)(int, int, unsigned int, void*);
+    ReachEffectLocationFn g_reachOrigEffectLocation = nullptr;
+    ReachEffectFpMarkerFn g_reachEffectFpMarkerQuery = nullptr;
+    std::atomic<uint32_t> g_reachMuzzleRedirects{0};
+    std::atomic<uint32_t> g_reachMuzzleReadFailures{0};
+
+    // Guarded read of the two effect fields the decision needs.
+    bool ReachReadEffectFpFields(
+        const void* effect, unsigned char& fpUserByte, int& objectIndex)
+    {
+        __try
+        {
+            const unsigned char* bytes =
+                static_cast<const unsigned char*>(effect);
+            fpUserByte = bytes[kReachEffectFpUserByteOffset];
+            objectIndex = *reinterpret_cast<const int*>(
+                bytes + kReachEffectObjectIndexOffset);
+            return true;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            return false;
+        }
+    }
+
+    __declspec(noinline) void __fastcall ReachEffectLocationDetour(
+        void* effect, uintptr_t nodeDesignator, void* outMatrix)
+    {
+        g_reachCamera.activeCallbacks.fetch_add(1, std::memory_order_acq_rel);
+        __try
+        {
+            ReachEffectLocationFn original = g_reachOrigEffectLocation;
+            if (!original)
+                return;
+            ReachEffectFpMarkerFn fpQuery = g_reachEffectFpMarkerQuery;
+            if (!fpQuery || !effect || !outMatrix ||
+                !g_reachCamera.armed.load(std::memory_order_acquire) ||
+                !g_enabled.load(std::memory_order_acquire))
+            {
+                original(effect, nodeDesignator, outMatrix);
+                return;
+            }
+            unsigned char fpUserByte = 0;
+            int objectIndex = 0;
+            if (!ReachReadEffectFpFields(effect, fpUserByte, objectIndex))
+            {
+                g_reachMuzzleReadFailures.fetch_add(
+                    1, std::memory_order_relaxed);
+                original(effect, nodeDesignator, outMatrix);
+                return;
+            }
+            const ReachEffectFpDecision decision =
+                ReachDecideEffectLocation(
+                    fpUserByte, static_cast<unsigned int>(nodeDesignator));
+            if (!decision.redirect)
+            {
+                original(effect, nodeDesignator, outMatrix);
+                return;
+            }
+            // Exactly the call the engine's own first-person branch makes,
+            // with the arguments it builds, so the world copy of this weapon
+            // effect lands on the first-person weapon beside the one that
+            // already tracks the controller.
+            fpQuery(decision.userIndex, objectIndex, decision.markerIndex,
+                    outMatrix);
+            g_reachMuzzleRedirects.fetch_add(1, std::memory_order_relaxed);
+        }
+        __finally
+        {
+            g_reachCamera.activeCallbacks.fetch_sub(
+                1, std::memory_order_acq_rel);
+        }
+    }
+
     // ---- Reach observer-camera re-parenting --------------------------------
     // Takes the rain, objective markers and character name tags OFF the hand.
     // They are not a HUD "layer" - they are every consumer of Reach's observer
@@ -13286,7 +13375,7 @@ namespace
     bool ScanForReachDetourIngress(bool& busy)
     {
         static bool rangesResolved = false;
-        static ReachDetourCodeRange ranges[7]{};
+        static ReachDetourCodeRange ranges[8]{};
         if (!rangesResolved)
         {
             const void* functions[] = {
@@ -13297,6 +13386,7 @@ namespace
                 reinterpret_cast<const void*>(&ReachFpCameraRebuildDetour),
                 reinterpret_cast<const void*>(&ReachHudDrawWidgetDetour),
                 reinterpret_cast<const void*>(&ReachObserverCameraDetour),
+                reinterpret_cast<const void*>(&ReachEffectLocationDetour),
             };
             static_assert(_countof(functions) == _countof(ranges));
             bool resolved = true;
@@ -13317,6 +13407,7 @@ namespace
             g_reachCamera.fpCameraTarget,
             g_reachCamera.hudDrawWidgetTarget,
             g_reachCamera.observerCameraTarget,
+            g_reachCamera.effectLocationTarget,
         };
         void* const trampolines[] = {
             reinterpret_cast<void*>(g_reachOrigMainRenderView),
@@ -13326,6 +13417,7 @@ namespace
             reinterpret_cast<void*>(g_reachOrigFpCameraRebuild),
             reinterpret_cast<void*>(g_reachOrigHudDrawWidget),
             reinterpret_cast<void*>(g_reachOrigObserverCamera),
+            reinterpret_cast<void*>(g_reachOrigEffectLocation),
         };
         static_assert(_countof(targets) == _countof(ranges));
         static_assert(_countof(trampolines) == _countof(ranges));
@@ -13420,6 +13512,7 @@ namespace
     {
         bool disabledAll = true;
         void* const targets[] = {
+            g_reachCamera.effectLocationTarget,
             g_reachCamera.observerCameraTarget,
             g_reachCamera.hudDrawWidgetTarget,
             g_reachCamera.outerTarget,
@@ -13444,6 +13537,24 @@ namespace
             return false;
 
         bool removedAll = true;
+        if (g_reachCamera.effectLocationTarget)
+        {
+            const MH_STATUS status =
+                MH_RemoveHook(g_reachCamera.effectLocationTarget);
+            if (status == MH_OK || status == MH_ERROR_NOT_CREATED)
+            {
+                g_reachCamera.effectLocationTarget = nullptr;
+                g_reachOrigEffectLocation = nullptr;
+                g_reachEffectFpMarkerQuery = nullptr;
+            }
+            else
+            {
+                removedAll = false;
+                LOG("Reach muzzle cleanup: remove failed for %p (%d)",
+                    g_reachCamera.effectLocationTarget,
+                    static_cast<int>(status));
+            }
+        }
         if (g_reachCamera.observerCameraTarget)
         {
             const MH_STATUS status =
@@ -13628,6 +13739,7 @@ namespace
         g_reachCamera.fpCameraTarget = nullptr;
         g_reachCamera.hudDrawWidgetTarget = nullptr;
         g_reachCamera.observerCameraTarget = nullptr;
+        g_reachCamera.effectLocationTarget = nullptr;
         g_reachCamera.moduleReference = nullptr;
         g_reachCamera.base = 0;
         g_reachCamera.size = 0;
@@ -14143,6 +14255,53 @@ namespace
                 "nothing else affected",
                 static_cast<unsigned long long>(
                     kReachRenderCameraFromObserverRva));
+        // Optional and independent again: the second muzzle flash. The
+        // first-person marker query is DECODED from the resolver's own tail
+        // jump rather than hardcoded, which also verifies we matched the right
+        // function - a wrong match cannot produce a valid E9 there.
+        void* effectLocation = reinterpret_cast<void*>(
+            base + kReachEffectLocationResolverRva);
+        bool effectLocationCreated = false;
+        {
+            const uintptr_t jumpSite =
+                base + kReachEffectLocationResolverRva +
+                kReachEffectLocationFpJumpOffset;
+            uintptr_t fpQuery = 0;
+            if (*reinterpret_cast<const uint8_t*>(jumpSite) == 0xE9)
+                fpQuery = sig::RipTarget(jumpSite + 1, jumpSite + 5);
+            if (fpQuery < base || fpQuery >= base + size)
+            {
+                LOG("Reach muzzle: first-person marker query did not decode "
+                    "from the resolver tail jump; the second muzzle flash "
+                    "stays at the face, nothing else affected");
+            }
+            else if (fpCameraCreated)
+            {
+                g_reachEffectFpMarkerQuery =
+                    reinterpret_cast<ReachEffectFpMarkerFn>(fpQuery);
+                effectLocationCreated = MH_CreateHook(
+                    effectLocation,
+                    reinterpret_cast<void*>(&ReachEffectLocationDetour),
+                    reinterpret_cast<void**>(
+                        &g_reachOrigEffectLocation)) == MH_OK;
+                if (!effectLocationCreated)
+                {
+                    g_reachEffectFpMarkerQuery = nullptr;
+                    LOG("Reach muzzle: effect-location hook create FAILED at "
+                        "haloreach.dll+0x%llX",
+                        static_cast<unsigned long long>(
+                            kReachEffectLocationResolverRva));
+                }
+                else
+                {
+                    LOG("Reach muzzle: first-person marker query decoded to "
+                        "haloreach.dll+0x%llX (expected 0x%llX)",
+                        static_cast<unsigned long long>(fpQuery - base),
+                        static_cast<unsigned long long>(
+                            kReachEffectFpMarkerQueryRva));
+                }
+            }
+        }
         if (!innerCreated || !outerCreated ||
             !fpInterpolateCreated || !fpPaletteCreated || !fpCameraCreated)
         {
@@ -14154,6 +14313,7 @@ namespace
             bool fpCameraRetained=fpCameraCreated;
             bool hudDrawWidgetRetained=hudDrawWidgetCreated;
             bool observerCameraRetained=observerCameraCreated;
+            bool effectLocationRetained=effectLocationCreated;
             auto removeCreated=[&](bool created,void* target,bool& retained) {
                 if (!created) return;
                 const MH_STATUS status=MH_RemoveHook(target);
@@ -14162,6 +14322,8 @@ namespace
                 else
                     cleanupOk=false;
             };
+            removeCreated(effectLocationCreated,effectLocation,
+                          effectLocationRetained);
             removeCreated(observerCameraCreated,observerCamera,
                           observerCameraRetained);
             removeCreated(hudDrawWidgetCreated,hudDrawWidget,
@@ -14180,6 +14342,11 @@ namespace
             if (!fpCameraRetained) g_reachOrigFpCameraRebuild=nullptr;
             if (!hudDrawWidgetRetained) g_reachOrigHudDrawWidget=nullptr;
             if (!observerCameraRetained) g_reachOrigObserverCamera=nullptr;
+            if (!effectLocationRetained)
+            {
+                g_reachOrigEffectLocation=nullptr;
+                g_reachEffectFpMarkerQuery=nullptr;
+            }
             if (cleanupOk)
             {
                 FreeLibrary(moduleReference);
@@ -14202,6 +14369,8 @@ namespace
                     hudDrawWidgetRetained?hudDrawWidget:nullptr;
                 g_reachCamera.observerCameraTarget=
                     observerCameraRetained?observerCamera:nullptr;
+                g_reachCamera.effectLocationTarget=
+                    effectLocationRetained?effectLocation:nullptr;
                 g_reachCamera.armed.store(false,std::memory_order_release);
                 g_reachCamera.teardownRequested.store(
                     true,std::memory_order_release);
@@ -14233,6 +14402,10 @@ namespace
             hudDrawWidgetCreated ? hudDrawWidget : nullptr;
         g_reachCamera.observerCameraTarget =
             observerCameraCreated ? observerCamera : nullptr;
+        g_reachCamera.effectLocationTarget =
+            effectLocationCreated ? effectLocation : nullptr;
+        g_reachMuzzleRedirects.store(0, std::memory_order_relaxed);
+        g_reachMuzzleReadFailures.store(0, std::memory_order_relaxed);
         for (int site = 0; site < 6; ++site)
         {
             g_reachObserverCameraSiteHits[site].store(
@@ -14342,6 +14515,24 @@ namespace
                 "will follow the head only",
                 static_cast<unsigned long long>(
                     kReachRenderCameraFromObserverRva));
+        }
+        if (effectLocationCreated &&
+            MH_EnableHook(effectLocation) != MH_OK)
+        {
+            LOG("Reach muzzle: effect-location hook enable failed; the second "
+                "muzzle flash stays at the face, nothing else affected");
+            MH_RemoveHook(effectLocation);
+            g_reachCamera.effectLocationTarget = nullptr;
+            g_reachOrigEffectLocation = nullptr;
+            g_reachEffectFpMarkerQuery = nullptr;
+        }
+        else if (effectLocationCreated)
+        {
+            LOG("Reach muzzle: effect-location hook active at "
+                "haloreach.dll+0x%llX; world locations of first-person weapon "
+                "effects will resolve on the gun",
+                static_cast<unsigned long long>(
+                    kReachEffectLocationResolverRva));
         }
         // Optional and fail-open: kill_reticle only. If this cannot be resolved
         // exactly, Reach keeps its stock crosshair and nothing else changes.

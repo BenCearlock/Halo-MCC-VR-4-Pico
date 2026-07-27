@@ -101,6 +101,90 @@ inline constexpr int ReachClassifyObserverCameraReturn(uintptr_t returnRva)
     return -1;
 }
 
+// Reach's effect-location node-matrix resolver, and the second muzzle flash.
+//
+// The player's screenshot shows TWO muzzle elements: one correctly on the
+// controller-held gun, one stuck at the face. HREK explains why there are two:
+// effect_build_locations is ADDITIVE, not exclusive - an object-marker search
+// runs first and unconditionally, and the first-person search is APPENDED into
+// the same array using the SAME marker name. So one effect legitimately emits
+// both a world location and a first-person location. The first-person one
+// follows the controller because the mod already drives the FP weapon; the
+// world one resolves against the stock, head-anchored sim weapon.
+//
+// Retail 0x00120EC4-0x00120FD8 is that resolver (homolog of HREK 0x36AB70,
+// identified by HREK's own effects.cpp asserts 7630/7638/7649/7650).
+// Disassembled in full; the branch is:
+//
+//   (int16)designator > -2                  -> WORLD path, calls 0x00471C30
+//   else if (effect[0x50] & 0x0F) == 0      -> WORLD path (no FP user)
+//   else if (effect[0x50] & 0xF0) == 0xF0   -> return, draws nothing
+//   else                                    -> FIRST-PERSON path, tail-jmp
+//        FpMarkerQuery(userIndex = (int8)effect[0x50] >> 4,
+//                      objectIndex = effect[0x3C],
+//                      markerIndex = designator & 0x7FFF,
+//                      outMatrix)
+//
+// THE DISCRIMINATOR EXISTS, contrary to an earlier analysis that called this
+// unhookable. effect[0x50] is first_person_weapon_user_mask (bits 0-3) and
+// first_person_weapon_output_user_index (bits 4-7, 0xF = none). Those bits are
+// a property of the EFFECT, not of the location, so they identify a
+// first-person weapon effect regardless of which location is being resolved.
+// A damage effect, explosion, or object/character spawn carries mask 0 and is
+// therefore never touched.
+//
+// Both call sites in the world path (+0xBC and +0xE0) call 0x00471C30, the
+// object marker query that IS shared with the projectile chain - which is why
+// this fix redirects the resolver's own FP branch instead of touching 0x471C30
+// or 0x0047044C (157 callers) at all.
+//
+// Measured in the pinned module: the 26-byte prologue is UNIQUE (exactly one
+// match), and the tail jump at +0x46 decodes to the first-person marker query,
+// so that address is derived from the match rather than hardcoded.
+inline constexpr uintptr_t kReachEffectLocationResolverRva = 0x00120EC4;
+inline constexpr uintptr_t kReachEffectLocationFpJumpOffset = 0x46;
+inline constexpr uintptr_t kReachEffectFpMarkerQueryRva = 0x002B0A58;
+inline constexpr uintptr_t kReachEffectFpUserByteOffset = 0x50;
+inline constexpr uintptr_t kReachEffectObjectIndexOffset = 0x3C;
+
+// Pure and unit-testable: does this (effect fp byte, node designator) pair name
+// a world location belonging to a first-person weapon effect? Only that pair is
+// redirected onto the first-person weapon.
+struct ReachEffectFpDecision
+{
+    bool redirect = false;
+    int userIndex = -1;
+    unsigned int markerIndex = 0;
+};
+
+inline constexpr ReachEffectFpDecision ReachDecideEffectLocation(
+    unsigned char fpUserByte, unsigned int nodeDesignator)
+{
+    ReachEffectFpDecision decision{};
+    const short designator = static_cast<short>(nodeDesignator & 0xFFFFu);
+    // Only a genuine world marker index is redirected.
+    //
+    // designator <= -2 is already a first-person location - the engine's own
+    // branch handles it. designator == -1 is the engine's "no marker at all"
+    // case: the world path detects it (cmp ax, r10w / cmove r8w, ax) and
+    // resolves the object origin instead of a marker. Feeding that to the
+    // first-person marker query would ask for marker 0x7FFF, which is not the
+    // same thing at all. Both stay with the engine.
+    if (designator < 0)
+        return decision;
+    // Not a first-person weapon effect at all.
+    if ((fpUserByte & 0x0Fu) == 0u)
+        return decision;
+    // No first-person output user; the engine would draw nothing on its own
+    // FP path, so do not invent one here.
+    if ((fpUserByte & 0xF0u) == 0xF0u)
+        return decision;
+    decision.redirect = true;
+    decision.userIndex = static_cast<signed char>(fpUserByte) >> 4;
+    decision.markerIndex = nodeDesignator & 0x7FFFu;
+    return decision;
+}
+
 inline constexpr uintptr_t kReachNativePauseOwnerRva = 0x0000F5AD;
 inline constexpr uintptr_t kReachNativePauseFlagRva = 0x00C1A0E2;
 inline constexpr size_t kReachNativePauseOwnerSigLength = 45;

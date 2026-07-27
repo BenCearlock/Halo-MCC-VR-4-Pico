@@ -3924,6 +3924,35 @@ int main()
             "The six observer-camera return addresses are all distinct");
     }
 
+    // Reach second muzzle flash: only a WORLD location on an effect that
+    // declares a first-person weapon user is redirected onto the gun. Getting
+    // this wrong would relocate damage or object-spawn points.
+    {
+        // fp mask 1, output user 0 -> a real first-person weapon effect.
+        const ReachEffectFpDecision world =
+            ReachDecideEffectLocation(0x01, 0x0007);
+        Check(world.redirect && world.userIndex == 0 &&
+              world.markerIndex == 0x0007,
+            "A world location on a first-person weapon effect is redirected");
+        const ReachEffectFpDecision alreadyFp =
+            ReachDecideEffectLocation(0x01, 0x8007);
+        Check(!alreadyFp.redirect,
+            "A location already flagged first-person is left to the engine");
+        Check(!ReachDecideEffectLocation(0x00, 0x0007).redirect,
+            "An effect with no first-person weapon user is never redirected");
+        Check(!ReachDecideEffectLocation(0xF1, 0x0007).redirect,
+            "An effect whose first-person output user is 'none' is not "
+            "redirected");
+        Check(!ReachDecideEffectLocation(0x01, 0xFFFE).redirect &&
+              !ReachDecideEffectLocation(0x01, 0xFFFF).redirect,
+            "The engine's own -2/-1 designator cases are left untouched");
+        const ReachEffectFpDecision user2 =
+            ReachDecideEffectLocation(0x21, 0x0123);
+        Check(user2.redirect && user2.userIndex == 2 &&
+              user2.markerIndex == 0x0123,
+            "The first-person output user index is decoded from the high nibble");
+    }
+
     if (g_failures == 0)
         std::cout << "HaloMCCVR core tests passed\n";
     return g_failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
