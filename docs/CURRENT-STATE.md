@@ -513,7 +513,33 @@ code-first attempts missed it.
 - **Subtitles need a readable plane** (they are the interface text layer, not
   a CHUD widget - see below).
 
-### UNTESTED: Reach native pause state - 2026-07-27
+### ACCEPTED: Reach native pause state - 2026-07-27
+
+Headset confirmed by the user: "I tested it, and it worked." Reach remains
+experimental; the product pointer is unchanged.
+
+| Identity | Value |
+| --- | --- |
+| Accepted source | `bc74d6345fbf64a1ab6f1ffc6c9e07378a3fadfb` |
+| `halo3xr.dll` SHA-256 | `26A91813CDCA5D4A718E224DCA293AB5D5360CE1B59E11507996D769FA19A398` |
+| Branch | `reach/frame-skip` |
+
+Reach now publishes `RuntimeMode::Paused`, switches to the head-locked 2D view
+on the pause edge and restores stereo on unpause, keeping its camera core armed
+throughout (Halo 3's shape, deliberately not ODST's teardown).
+
+The flag was found by observing the running game, not by reading the binary,
+and the parallel HREK pass afterwards explained why nothing else would have
+worked: Reach stores pause as a 16-bit **pause-reason bitfield** at
+`game_time_globals+0x02` (TLS slot `0xA0`), not as a boolean, so Halo 3's and
+ODST's single-pause-byte shape could never have located it. It also recorded a
+trap worth keeping: testing that bitfield for "nonzero" would have FAILED in
+play, because bit 0 is a re-entrancy latch the engine sets during normal game
+time updates (retail `0x5CD21` sets, `0x5CE64` clears, reached from the
+game-time update path at `0x5C4C8`). Only bit 2 is the pause menu. The observed
+host-channel byte avoids that entirely.
+
+### Superseded UNTESTED record for the same candidate
 
 Installed on top of the accepted `716a635` state; does not advance the pointer.
 
