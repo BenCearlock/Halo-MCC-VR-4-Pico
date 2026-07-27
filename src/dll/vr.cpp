@@ -4091,7 +4091,14 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
         // short gap; otherwise the render thread alternates upload/clear and
         // pays a swapchain repaint every frame. A genuine death/loading gap
         // still clears once after this small grace window.
-        constexpr uint64_t kAuthoredReticleGraceFrames = 2;
+        // This must comfortably exceed the authored upload's frame cap. At 2,
+        // the grace expired between capped uploads, the procedural reticle was
+        // repainted over the authored art, and the next upload put it back -
+        // the two crosshairs visibly alternating at the beat frequency of the
+        // two numbers. Holding the last authored image instead is also what
+        // removes the per-frame swapchain repaint this comment warns about,
+        // which is the same cost Halo 3 and ODST pay.
+        constexpr uint64_t kAuthoredReticleGraceFrames = 24;
         const bool authoredCaptureRecent = g_authoredReticleSerial != 0 &&
             g_preparedFrame.serial >= g_authoredReticleSerial &&
             g_preparedFrame.serial - g_authoredReticleSerial <=
