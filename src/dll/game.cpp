@@ -15319,7 +15319,14 @@ namespace
         // kept rendering. So the element is NOT a third-person-only particle
         // system. Combined with the earlier eliminations this rules out the
         // entire per-mode emission gate as the source. Kept for evidence.
-        ApplyReachThirdPersonEffectSuppression(base, size);
+        // DISABLED 2026-07-27 after the decisive headset test: denying mode-1
+        // removed BOTH muzzle flashes - the face one AND the gun one. That is
+        // the proof that both are first-person-only particle systems; the
+        // difference between them is only WHERE their spawn transform comes
+        // from. A blanket denial is therefore too broad, per the player:
+        // "restore the muzzle flashes". The selective fix must retarget the
+        // stuck system's spawn transform instead of gating emission.
+        // ApplyReachThirdPersonEffectSuppression(base, size);
         if (!ApplyReachNativeWeaponIkBypass())
         {
             LOG("Reach camera install: native weapon-IK bypass failed; "
