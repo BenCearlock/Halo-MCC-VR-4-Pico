@@ -10564,6 +10564,14 @@ namespace
         BoneMatrix moved{};
     };
     ReachWeaponAnchor g_reachWeaponAnchor;
+    // Highest collection index seen per CHUD definition. HREK shows the HUD
+    // muzzle-flash collection (`warning_flashes`) is always the LAST one, and
+    // retail strips the name, so the index is the only handle. Learned rather
+    // than hardcoded because the index differs per weapon (3 on the assault
+    // rifle, 4 on magnum/dmr/sniper).
+    constexpr size_t kReachChudMaxCollectionSlots = 256;
+    std::atomic<uint8_t> g_reachChudMaxCollection[kReachChudMaxCollectionSlots]{};
+    std::atomic<uint32_t> g_reachHudFlashHidden{0};
     // Set when this palette call produced a controller-aligned weapon, so the
     // post-compose write knows there is something valid to publish into the
     // engine's live skeleton.
@@ -11061,6 +11069,8 @@ namespace
             // descriptor+3. Resolving it the way Reach does is the only way to
             // catch every piece of a crosshair: almost all drawn widgets
             // author their class as "undefined/use parent".
+            uint8_t collectionIndexForFlash = 0;
+            bool collectionIsFlash = false;
             int8_t resolvedClass = -1;
             const bool descriptorReadable = descriptor &&
                 ResolveReachChudCollectionClass(
@@ -11069,6 +11079,35 @@ namespace
             const uint8_t rawClass = static_cast<uint8_t>(resolvedClass);
             const bool isCrosshairClass = descriptorReadable &&
                 resolvedClass == kReachChudCrosshairScriptingClass;
+            // Learn this definition's highest collection index, then treat that
+            // collection as the HUD muzzle flash. Never the crosshair: the
+            // crosshair collection is index 0 in every weapon HREK shows, so a
+            // crosshair-class widget is excluded outright as a second guard.
+            if (descriptorReadable && !isCrosshairClass &&
+                SafeReadByte(
+                    reinterpret_cast<const uint8_t*>(descriptor) +
+                        kReachChudDescriptorCollectionByte,
+                    &collectionIndexForFlash))
+            {
+                std::atomic<uint8_t>& slot =
+                    g_reachChudMaxCollection[
+                        (useAlternatePath & 0xFFu) %
+                            kReachChudMaxCollectionSlots];
+                uint8_t known = slot.load(std::memory_order_relaxed);
+                while (collectionIndexForFlash > known &&
+                       !slot.compare_exchange_weak(
+                           known, collectionIndexForFlash,
+                           std::memory_order_relaxed))
+                {
+                }
+                // Require a settled maximum: only hide once this definition has
+                // shown a collection ABOVE the ammo collections, so the first
+                // frames cannot hide the bullet count while the max is still
+                // being learned.
+                const uint8_t settled = slot.load(std::memory_order_relaxed);
+                collectionIsFlash = settled >= 3 &&
+                    collectionIndexForFlash == settled;
+            }
             if (ownsStereo && isCrosshairClass)
                 g_reachFpCameraEyeScope.chudClass2Seen = true;
             // REACHHUD: atomics only, no logging on this hot hook.
@@ -11152,7 +11191,30 @@ namespace
             // the eye. Begin/End already save and restore render targets,
             // viewports and scissors, so the engine draws normally and simply
             // lands somewhere the player cannot see.
-            const bool hideFromEye =
+            // The HUD muzzle flash. It is a flat CHUD widget, not a world
+            // particle: a `blob` bitmap mirrored on both axes and scaled ~5x4,
+            // driven by "weapon ammo loaded", so it pulses at the centre of the
+            // screen on every shot and never moves with aim. That is exactly
+            // what the player reports - an animated flipbook stuck to their
+            // face, present on some weapons and not others.
+            //
+            // It lives in the `warning_flashes` collection, which HREK shows is
+            // ALWAYS THE LAST collection: assault_rifle [3/4], magnum [4/5],
+            // dmr [4/5], sniper_rifle [4/5]. `ammo_area` and
+            // `backpack_ammo_area` - the bullet count and the weapon logo - are
+            // always earlier, and the crosshair is always [0]. Hiding the
+            // highest collection index therefore cannot take the ammo, the
+            // logo, or the crosshair with it.
+            //
+            // The collection name is stripped from retail, so the index is the
+            // only handle available; the max index per definition is learned
+            // from what actually draws.
+            const bool hideHudMuzzleFlash =
+                ownsStereo && descriptorReadable && collectionIsFlash;
+            if (hideHudMuzzleFlash)
+                g_reachHudFlashHidden.fetch_add(1, std::memory_order_relaxed);
+
+            const bool hideFromEye = hideHudMuzzleFlash ||
                 action == ReachChudCrosshairAction::Suppress ||
                 action == ReachChudCrosshairAction::CaptureAuthored ||
                 action == ReachChudCrosshairAction::RejectTransaction;
@@ -11197,7 +11259,7 @@ namespace
                     // order. Folding here means the key is only ever built
                     // from widgets that actually reached the surface, on the
                     // surface that survived the clear.
-                    if (isCrosshairClass)
+                    if (isCrosshairClass && !hideHudMuzzleFlash)
                     {
                         ReachFpCameraEyeScope& scope =
                             g_reachFpCameraEyeScope;
@@ -15069,6 +15131,9 @@ namespace
         g_reachMuzzleRepaired.store(0, std::memory_order_relaxed);
         g_reachMuzzleReparented.store(0, std::memory_order_relaxed);
         g_reachLiveGraphWeaponWrites.store(0, std::memory_order_relaxed);
+        g_reachHudFlashHidden.store(0, std::memory_order_relaxed);
+        for (auto& slot : g_reachChudMaxCollection)
+            slot.store(0, std::memory_order_relaxed);
         g_reachMuzzleOutOfRange.store(0, std::memory_order_relaxed);
         g_reachMuzzleNearestMilli.store(0xFFFFFFFFu, std::memory_order_relaxed);
         g_reachMuzzleIdentityNoSibling.store(0, std::memory_order_relaxed);
@@ -15378,12 +15443,14 @@ namespace
             return;
         lastReportMs = now;
         lastTotal = total;
-        LOG("REACHFX: live-graph weapon writes %u; muzzle re-parented %u, "
+        LOG("REACHFX: HUD flash widgets hidden %u; live-graph weapon writes %u; "
+            "muzzle re-parented %u, "
             "out of range %u, "
             "nearest approach %u mm; lined up %u (no sibling yet %u); "
             "effect locations - redirected %u, world/no-fp-user %u, "
             "world/fp-output-none %u, already-first-person %u, unreadable %u "
             "(effect+0x50 low nibbles seen 0x%04X, high nibbles 0x%04X)",
+            g_reachHudFlashHidden.load(std::memory_order_relaxed),
             g_reachLiveGraphWeaponWrites.load(std::memory_order_relaxed),
             g_reachMuzzleReparented.load(std::memory_order_relaxed),
             g_reachMuzzleOutOfRange.load(std::memory_order_relaxed),
