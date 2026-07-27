@@ -565,6 +565,65 @@ The fix, now shared by all three titles:
   working.
 - Reach bullets/muzzle markers remain stock.
 
+### UNTESTED: Reach vibration + cinematic-state probe - 2026-07-27
+
+Installed on top of the baseline above; does not advance the pointer.
+
+| Identity | Value |
+| --- | --- |
+| Candidate source | `c24a89b64e25ad11fb757b4e3dcdabd72b535637` |
+| Candidate package | `out/candidates/c24a89b-reach-fp-parity-20260727-054021218Z` |
+| `halo3xr.dll` SHA-256 | `B6FD227D905FE4BA16F717DE64B08062DB9BD052B65B7E2DE7218577832E2C7D` |
+| `halo3xr_launcher.exe` SHA-256 | `B32C0001F297465C0924E18A85126D0C01F5084FEDF3F9389CA49160BFBA66BF` (unchanged) |
+| Preserved previous install | `out/deploy-backups/dcffa1c-before-c24a89b-20260727-054021914Z` |
+| Headset result | **PENDING** |
+
+**Why Reach never vibrated (root-caused from the preserved 2026-07-26 log +
+code).** Reach published no title-runtime heartbeat and its heartbeat-policy
+freshness window was zero, and `ResolveTitleRuntime` unconditionally
+disqualifies a candidate without a fresh heartbeat. Reach was therefore never
+the resolved owner: `Game_HasTitleCapability(TitleCapability_Haptics)` always
+denied, the XInput SetState hook discarded every captured rumble request, and
+the 50 ms worker republished fallback `Loading` over the present path's
+`Gameplay` - the "Runtime mode: gameplay -> loading" flap ~10x/second visible
+through whole Reach sessions. Aim and the reticle only worked because each
+carries a direct ownership bypass; haptics has no bypass.
+
+**The behavioral change (one):** the armed Reach camera block now publishes a
+`HaloReach` heartbeat per Present (homolog of Halo 3's `CamCopyHook` and
+ODST's cam-copy heartbeat), and the policy grants Reach Halo 3's 500 ms
+window. Armed Reach resolves as owner, Haptics flows through the same shared
+gates as the other titles, the runtime mode holds Gameplay (flap and its log
+spam end), and teardown expires ownership within the window.
+
+**Restored:** the peak-hold rumble latch (`SampleHapticPeak`, commit
+`4bcda82`, re-applying headset-confirmed `7e0fb71`). The current line never
+contained it - it survives only on
+`recovery/pre-github-restore-feature-20260722`; the GitHub-restore regraft
+dropped it. Without it, one-frame gunfire pulses alias to zero and rumble is
+intermittent - the exact ODST bug already fixed once. Title-agnostic: Halo 3
+and ODST need a rumble regression check with this candidate.
+
+**REACHCINE probe (log-only, fail-open).** For the remaining cutscene work.
+Pinned `haloreach.dll` registers game-state members "cinematic globals"
+(0x40 bytes) and "cinematic globals non deterministic" (0x10) at exactly one
+site, which caches per-engine-thread member pointers in the module TLS block
+(the design HREK's `__tls_set_g_cinematic_globals_allocator` symbol names).
+The unique registration signature decodes at runtime: the module TLS-index
+dword (retail RVA `0xC17B18`), member slots `[tls+0xE0]` / `[tls+0x448]`, and
+the verifying name string - nothing hardcoded. The engine-thread sampler
+snapshots both members per owned frame; the worker logs a baseline, per-dword
+changes (timer-like dwords mute themselves), and a stall report if cutscenes
+bypass the armed camera path. Field meanings are deliberately unassigned: the
+first headset cutscene run (Winter Contingency opening) labels
+in_progress/scene/shot from the `REACHCINE` lines, after which the actual
+per-cut yaw rebase (the shared `g_gameYawRef`/`g_headYawRef` mechanism Halo 3
+and ODST already use) ships as its own candidate.
+
+Acceptance for this candidate: controller rumble in Reach gameplay (gunfire,
+damage) that does not cut in and out, Halo 3 + ODST rumble regression, and a
+log capture spanning the Reach opening cutscene for the probe.
+
 ### ACCEPTED: Reach native HUD layout (size + aspect) - 2026-07-27
 
 Headset confirmed by the user: Reach's HUD sliders work. Reach remains
