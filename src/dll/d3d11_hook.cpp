@@ -2,6 +2,7 @@
 #include <d3d11.h>
 #include <dxgi1_2.h>
 #include <dxgi1_5.h>
+#include <atomic>
 #include <cstdlib>
 #include <climits>
 #include <cmath>
@@ -28,6 +29,9 @@ typedef HRESULT(STDMETHODCALLTYPE* Present1Fn)(IDXGISwapChain1*, UINT, UINT, con
 typedef HRESULT(STDMETHODCALLTYPE* ResizeBuffersFn)(IDXGISwapChain*, UINT, UINT, UINT, DXGI_FORMAT, UINT);
 typedef void(STDMETHODCALLTYPE* OMSetRenderTargetsFn)(ID3D11DeviceContext*, UINT,
     ID3D11RenderTargetView* const*, ID3D11DepthStencilView*);
+#if HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE
+typedef void(STDMETHODCALLTYPE* DrawIndexedFn)(ID3D11DeviceContext*, UINT, UINT, INT);
+#endif
 #if HALOMCCVR_EXPERIMENTAL_ODST_BRINGUP
 typedef void(STDMETHODCALLTYPE* CopyResourceFn)(ID3D11DeviceContext*,
     ID3D11Resource*, ID3D11Resource*);
@@ -37,6 +41,9 @@ static PresentFn g_origPresent = nullptr;
 static Present1Fn g_origPresent1 = nullptr;
 static ResizeBuffersFn g_origResizeBuffers = nullptr;
 static OMSetRenderTargetsFn g_origOMSetRenderTargets = nullptr;
+#if HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE
+static DrawIndexedFn g_origDrawIndexed = nullptr;
+#endif
 #if HALOMCCVR_EXPERIMENTAL_ODST_BRINGUP
 static CopyResourceFn g_origCopyResource = nullptr;
 #endif
@@ -579,6 +586,75 @@ static void STDMETHODCALLTYPE OMSetRenderTargetsHook(ID3D11DeviceContext* contex
     g_origOMSetRenderTargets(context, count, rtvs, dsv);
 }
 
+#if HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE
+// Diagnostic only, and deliberately far more conservative than the retired
+// RSSetViewports hook: this file's own history (see the OMSetRenderTargetsHook
+// comment above) records that a prior PS/VS/Draw*-hooking attempt cost ~30 fps.
+// This hook does the absolute minimum on every call - one relaxed atomic
+// load and compare, nothing else - unless it is one of a HARD-CAPPED total
+// number of samples for the whole process lifetime (not per-second: DrawIndexed
+// can be called thousands of times a frame, so any per-frame or per-second
+// throttle can still mean thousands of wasted checks). Once the budget is
+// spent the hook is a single branch forever, so it cannot degrade a long
+// session even if this candidate stays enabled by accident.
+//
+// Purpose: every static and memory-inspection method available tonight
+// converged on the same result - the chud_globals curvature-info safe frame
+// this mod writes is correct, stable, and read by nothing in the process
+// (docs/RE-notes.md, the Reach HUD layout entry). If Reach's HUD is drawn as
+// screen-space quads (proven: RSSetViewports never shows a HUD-sized rect),
+// the quad's actual screen extent has to come from SOMEWHERE - vertex data,
+// a constant buffer, or a shader immediate. Sampling the bound viewport,
+// vertex buffer stride, and index/vertex counts at a real HUD-sized draw call
+// is the most direct way left to find that path without disassembling more
+// of a stripped optimized binary blind.
+static std::atomic<int> g_reachDrawSamplesTaken{0};
+constexpr int kReachDrawSampleBudget = 64;
+
+static void LogReachHudDrawIfSmall(ID3D11DeviceContext* context,
+    UINT indexCount, UINT startIndex, INT baseVertex)
+{
+    if (g_reachDrawSamplesTaken.load(std::memory_order_relaxed) >=
+        kReachDrawSampleBudget)
+        return;
+    if (TitleAdapter_GetActiveTitle() != GameTitle::HaloReach)
+        return;
+    // A HUD element is a handful of quads, not a world mesh: reject anything
+    // that isn't index-count-shaped like 1-8 quads (6 indices each) or a
+    // small triangle fan/strip, so this cannot fire on world geometry.
+    if (indexCount == 0 || indexCount > 64)
+        return;
+
+    UINT vpCount = 1;
+    D3D11_VIEWPORT vp{};
+    context->RSGetViewports(&vpCount, &vp);
+
+    ID3D11Buffer* vb = nullptr;
+    UINT stride = 0, offset = 0;
+    context->IAGetVertexBuffers(0, 1, &vb, &stride, &offset);
+    const bool hadVb = vb != nullptr;
+    if (vb)
+        vb->Release();
+
+    if (g_reachDrawSamplesTaken.fetch_add(1, std::memory_order_relaxed) >=
+        kReachDrawSampleBudget)
+        return;
+    LOG("REACHDRAW: DrawIndexed count=%u startIndex=%u baseVertex=%d "
+        "vp=(%.1f,%.1f %.1fx%.1f) vbStride=%u hasVB=%d [sample %d/%d]",
+        indexCount, startIndex, baseVertex, vp.TopLeftX, vp.TopLeftY,
+        vp.Width, vp.Height, stride, hadVb ? 1 : 0,
+        g_reachDrawSamplesTaken.load(std::memory_order_relaxed),
+        kReachDrawSampleBudget);
+}
+
+static void STDMETHODCALLTYPE DrawIndexedHook(ID3D11DeviceContext* context,
+    UINT indexCount, UINT startIndex, INT baseVertex)
+{
+    LogReachHudDrawIfSmall(context, indexCount, startIndex, baseVertex);
+    g_origDrawIndexed(context, indexCount, startIndex, baseVertex);
+}
+#endif
+
 #if HALOMCCVR_EXPERIMENTAL_ODST_BRINGUP
 static void STDMETHODCALLTYPE CopyResourceHook(ID3D11DeviceContext* context,
     ID3D11Resource* destination, ID3D11Resource* source)
@@ -838,6 +914,15 @@ bool InstallD3D11Hooks()
 #if HALOMCCVR_EXPERIMENTAL_ODST_BRINGUP
     ok = ok && MH_CreateHook(contextVtbl[47], (void*)&CopyResourceHook,
                              (void**)&g_origCopyResource) == MH_OK;
+#endif
+#if HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE
+    // ID3D11DeviceContext::DrawIndexed is vtable slot 12. Diagnostic-only
+    // (see LogReachHudDrawIfSmall); a failed hook here degrades to no draw
+    // sampling, never blocks any title's rendering. Hard-capped sample budget,
+    // not installed as a required hook, so `ok` does not depend on it.
+    if (MH_CreateHook(contextVtbl[12], (void*)&DrawIndexedHook,
+                      (void**)&g_origDrawIndexed) != MH_OK)
+        LOG("REACHDRAW: DrawIndexed hook failed; draw sampling disabled");
 #endif
 
     IDXGISwapChain1* sc1 = nullptr;
