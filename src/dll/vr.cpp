@@ -6310,8 +6310,17 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
                             g_preparedFrame.serial >= s_lastUploadFrame &&
                             g_preparedFrame.serial - s_lastUploadFrame <
                                 kReachUploadMinFrameGap;
+                        // key 0 means this frame's capture contained no
+                        // crosshair widgets at all. Uploading then publishes a
+                        // blank image over good art, which is what made the
+                        // crosshair flash: the capture texture is cleared every
+                        // frame, so any frame whose capture was empty would
+                        // blank the swapchain until the next upload.
+                        const bool reachCaptureEmpty =
+                            reachTitle && reachCrosshairKey == 0;
                         const bool reachArtAlreadyPublished =
-                            reachKeyUnchanged || reachUploadTooSoon;
+                            reachKeyUnchanged || reachUploadTooSoon ||
+                            reachCaptureEmpty;
                         const bool shouldUploadAuthoredReticle =
                             authoredReticleThisFrame && reticleUploadAdmitted &&
                             !reachArtAlreadyPublished;

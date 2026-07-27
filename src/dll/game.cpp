@@ -10343,15 +10343,21 @@ namespace
                 action == ReachChudCrosshairAction::RejectTransaction;
             if (action == ReachChudCrosshairAction::RejectTransaction)
                 RejectReachChudParityForCurrentEye();
-            if (action == ReachChudCrosshairAction::CaptureAuthored)
+            if (isCrosshairClass && hideFromEye)
             {
                 // Fold this widget's identity in. Same weapon, same collection,
                 // same widgets -> same key -> the art is unchanged and the
-                // compositor can skip re-uploading it.
+                // compositor can skip re-uploading it. This must cover every
+                // path that actually redirects a crosshair widget, not just
+                // the CaptureAuthored action: the art is captured through the
+                // Suppress path as well, which is why the key stayed 0 and the
+                // skip never engaged.
                 ReachFpCameraEyeScope& scope = g_reachFpCameraEyeScope;
                 uint64_t k = scope.captureKey * 1099511628211ull;
                 k ^= static_cast<uint64_t>(useAlternatePath) * 0x9E3779B97F4A7C15ull;
                 k ^= static_cast<uint64_t>(widgetIndex) + 0x165667B19E3779F9ull;
+                if (!k)
+                    k = 1;  // 0 means "nothing captured"; never collide with it
                 scope.captureKey = k;
             }
             if (hideFromEye)
