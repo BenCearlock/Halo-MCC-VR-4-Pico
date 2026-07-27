@@ -3198,6 +3198,10 @@ int main()
         Check(!halo3Hud->scanMappedRegions && !odstHud->scanMappedRegions &&
                   reachHud->scanMappedRegions,
             "only Reach widens the search beyond private read-write memory");
+        Check(!halo3Hud->forceWriteEveryPass && !odstHud->forceWriteEveryPass &&
+                  reachHud->forceWriteEveryPass,
+            "only Reach reasserts every pass, because it overwrites its own "
+            "record live and a skip-when-matching write loses that race");
         Check(HudLayoutCanReacquireFromRemembered(1, 1) &&
                   HudLayoutCanReacquireFromRemembered(3, 3),
             "exact per-title remembered cardinality permits stock restoration");

@@ -1983,7 +1983,8 @@ namespace
                 sizeof(targetDestinationBits));
             if (!HudDestinationPlausible(targetDestinationBits))
                 continue;
-            if ((!hasDepth || destinationZ == targetDestinationBits) &&
+            if (!adapter->forceWriteEveryPass &&
+                (!hasDepth || destinationZ == targetDestinationBits) &&
                 h == wantHBits && v == wantVBits)
             {
                 ++live;
@@ -2129,7 +2130,13 @@ namespace
             const uint64_t lastVerify =
                 g_hudLayoutLastVerifyMs.load(
                     std::memory_order_relaxed);
-            if (g_hudAppliedBits.load(
+            // Reach recomputes and overwrites this record itself (read-back
+            // proved a fresh authored value can appear with no config change
+            // and no title reload): a once-per-second reassert loses that race
+            // for most of every second. Reasserting every Present call is the
+            // only way ours is reliably the last write before the next draw.
+            if (adapter->forceWriteEveryPass ||
+                g_hudAppliedBits.load(
                     std::memory_order_relaxed) != wantBits ||
                 g_hudAppliedAspectBits.load(
                     std::memory_order_relaxed) != wantAspectBits ||

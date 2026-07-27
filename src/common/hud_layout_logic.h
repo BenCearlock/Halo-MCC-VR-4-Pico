@@ -49,6 +49,14 @@ struct HudLayoutAdapter
     // Halo 3's tag data lives in private read-write memory. Reach's map data
     // does not have to, so its adapter may also inspect mapped regions.
     bool scanMappedRegions;
+    // Halo 3 and ODST's record is authored-static once loaded: the writer can
+    // skip a slot whose bytes already match what we want, because nothing else
+    // touches it between our passes. Reach's record is NOT static: read-back
+    // proved Reach itself recomputes and overwrites this record live (a fresh
+    // authored value appeared with no config change and no title reload), so a
+    // "matches already" skip loses the race and our value gets stomped between
+    // verify passes. Reach must write every verify pass, unconditionally.
+    bool forceWriteEveryPass;
 };
 
 inline constexpr std::array<uint8_t, kHudLayoutMaxAnchor> HudLayoutBytes(
@@ -90,6 +98,7 @@ inline constexpr HudLayoutAdapter kHalo3HudLayoutAdapter = {
     3,
     3,
     false,
+    false,
 };
 
 inline constexpr HudLayoutAdapter kOdstHudLayoutAdapter = {
@@ -110,6 +119,7 @@ inline constexpr HudLayoutAdapter kOdstHudLayoutAdapter = {
     -28,
     1,
     1,
+    false,
     false,
 };
 
@@ -173,6 +183,7 @@ inline constexpr HudLayoutAdapter kReachHudLayoutAdapter = {
     kHudLayoutNoDepthField,
     3,
     kMaxHudLayoutBlocks,
+    true,
     true,
 };
 
