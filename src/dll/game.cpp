@@ -10537,6 +10537,28 @@ namespace
         }
     }
 
+    std::atomic<uint32_t> g_reachMuzzleBodyCopiesHidden{0};
+
+    // Push a resolved effect location far below the world so nothing it spawns
+    // is visible. Guarded; leaves the matrix untouched on any read/write fault.
+    __declspec(noinline) bool ReachDisplaceEffectLocation(void* matrix)
+    {
+        __try
+        {
+            float* position = reinterpret_cast<float*>(
+                static_cast<unsigned char*>(matrix) +
+                kReachEffectMatrixPositionOffset);
+            position[0] = 0.0f;
+            position[1] = 0.0f;
+            position[2] = kReachEffectHiddenPositionZ;
+            return true;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            return false;
+        }
+    }
+
     std::atomic<uint32_t> g_reachMuzzleWorldNoFpUser{0};
     std::atomic<uint32_t> g_reachMuzzleWorldFpNone{0};
     std::atomic<uint32_t> g_reachMuzzleAlreadyFp{0};
@@ -10588,30 +10610,37 @@ namespace
                 original(effect, nodeDesignator, outMatrix);
                 return;
             }
-            // ---- line the particle systems up ------------------------------
-            // One of the muzzle particles resolves onto the gun; another comes
-            // back with the marker-not-found identity matrix and renders at the
-            // player's view. Same effect, adjacent calls. Give the failed one
-            // the transform its sibling just resolved.
-            float* out = static_cast<float*>(outMatrix);
-            if (ReachMatrixIsIdentityFallback(out))
+            // ---- take the player's own weapon effects off their body -------
+            // The first-person marker query has exactly ONE caller: this
+            // resolver's own tail jump at 0x00120F0A. Runtime counters over
+            // ~275,000 resolutions show that branch executes ZERO times, so
+            // Reach never places an effect location in first-person space -
+            // every one resolves through the object marker query onto the WORLD
+            // weapon. In flat play that is invisible because the world weapon
+            // is not drawn in first person. In VR it sits at the player's body,
+            // which is the muzzle flash welded to their face.
+            //
+            // effect[0x50] low nibble is first_person_weapon_user_mask. It is
+            // non-zero ONLY for the local player's own first-person weapon
+            // effects, and zero for every other character's weapon, every
+            // impact, and every explosion - measured: 13,998 with a mask
+            // against 262,665 without, in 30 s of firing. That is the exact
+            // discriminator, and it is why this cannot touch anyone else's
+            // muzzle flash.
+            //
+            // The flash on the controller-held gun is drawn by the first-person
+            // weapon's own render path, not by this resolver, so it is
+            // untouched. Displacing the world copy is what stock first-person
+            // play effectively does by never showing it.
+            if ((fpUserByte & 0x0Fu) != 0u &&
+                static_cast<short>(nodeDesignator & 0xFFFFu) >= 0)
             {
-                if (g_reachLastGoodValid && g_reachLastGoodEffect == effect &&
-                    ReachCopyMatrix(out, g_reachLastGoodMatrix))
+                if (ReachDisplaceEffectLocation(outMatrix))
                 {
-                    g_reachMuzzleRepaired.fetch_add(
+                    g_reachMuzzleBodyCopiesHidden.fetch_add(
                         1, std::memory_order_relaxed);
+                    return;
                 }
-                else
-                {
-                    g_reachMuzzleIdentityNoSibling.fetch_add(
-                        1, std::memory_order_relaxed);
-                }
-            }
-            else if (ReachCopyMatrix(g_reachLastGoodMatrix, out))
-            {
-                g_reachLastGoodEffect = effect;
-                g_reachLastGoodValid = true;
             }
 
             ReachEffectFpDecision decision =
