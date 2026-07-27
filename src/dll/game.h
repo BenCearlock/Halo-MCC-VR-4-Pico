@@ -36,6 +36,10 @@ bool Game_IsCameraOnlyBringup(); // private ODST camera core; no gameplay featur
 // transaction owns the active title. Used to admit its frame-bound authored
 // quad without granting unrelated shared gameplay capabilities.
 bool Game_OwnsReachAuthoredReticle();
+// Identity of the crosshair art Reach last captured. Unchanged value means the
+// authored reticle already in the swapchain is still correct and does not need
+// re-uploading this frame.
+uint64_t Game_GetReachAuthoredCrosshairKey();
 // Atomically rejects the active Reach authored-reticle transaction after a
 // frame-bound upload failure. The title worker performs verified teardown;
 // there is no procedural, transparent, or flat-crosshair substitute.

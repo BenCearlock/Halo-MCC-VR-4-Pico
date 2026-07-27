@@ -9986,6 +9986,10 @@ namespace
         bool chudParityFailed = false;
         bool chudClass2Seen = false;
         bool authoredCrosshairCaptured = false;
+        // Identity of the art captured this eye: which weapon definition,
+        // which collection, which widgets. Static art produces the same key
+        // every frame, which is what lets the per-frame upload be skipped.
+        uint64_t captureKey = 0;
         uint32_t generation = 0;
         uint32_t eye = 0;
         uint64_t preparedSerial = 0;
@@ -10202,6 +10206,10 @@ namespace
         return true;
     }
 
+    // Last art identity captured for Reach. Read by the compositor to decide
+    // whether the authored reticle actually needs re-uploading this frame.
+    std::atomic<uint64_t> g_reachAuthoredCrosshairKey{0};
+
     bool ReachOwnsHudStereoTransaction()
     {
         if (TitleAdapter_GetActiveTitle() != GameTitle::HaloReach)
@@ -10335,6 +10343,17 @@ namespace
                 action == ReachChudCrosshairAction::RejectTransaction;
             if (action == ReachChudCrosshairAction::RejectTransaction)
                 RejectReachChudParityForCurrentEye();
+            if (action == ReachChudCrosshairAction::CaptureAuthored)
+            {
+                // Fold this widget's identity in. Same weapon, same collection,
+                // same widgets -> same key -> the art is unchanged and the
+                // compositor can skip re-uploading it.
+                ReachFpCameraEyeScope& scope = g_reachFpCameraEyeScope;
+                uint64_t k = scope.captureKey * 1099511628211ull;
+                k ^= static_cast<uint64_t>(useAlternatePath) * 0x9E3779B97F4A7C15ull;
+                k ^= static_cast<uint64_t>(widgetIndex) + 0x165667B19E3779F9ull;
+                scope.captureKey = k;
+            }
             if (hideFromEye)
             {
                 if (VR_BeginAuthoredReticleCapture())
@@ -10354,7 +10373,12 @@ namespace
             if (captureStarted)
             {
                 if (VR_EndPreparedAuthoredReticleCapture())
+                {
                     g_reachFpCameraEyeScope.authoredCrosshairCaptured = true;
+                    g_reachAuthoredCrosshairKey.store(
+                        g_reachFpCameraEyeScope.captureKey,
+                        std::memory_order_release);
+                }
                 else
                     RejectReachChudParityForCurrentEye();
             }
@@ -11334,6 +11358,7 @@ namespace
                 fpCameraScope.chudParityFailed = false;
                 fpCameraScope.chudClass2Seen = false;
                 fpCameraScope.authoredCrosshairCaptured = false;
+                fpCameraScope.captureKey = 0;
                 memcpy(fpCameraScope.compact, compact,
                        sizeof(fpCameraScope.compact));
                 memcpy(fpCameraScope.derived, primaryDerived,
@@ -14394,6 +14419,11 @@ bool Game_OwnsReachAuthoredReticle()
     return false;
 #endif
 }
+uint64_t Game_GetReachAuthoredCrosshairKey()
+{
+    return g_reachAuthoredCrosshairKey.load(std::memory_order_acquire);
+}
+
 
 void Game_RejectReachAuthoredReticle(uint32_t expectedGeneration,
                                      const char* reason)

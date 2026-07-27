@@ -6266,11 +6266,32 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
                         // is why its crosshair stayed procedural even once the
                         // capture worked. The exclusion dated from when the
                         // Reach CHUD hook could not run at all.
+                        // Re-uploading the authored reticle costs an OpenXR
+                        // swapchain acquire, a BLOCKING wait, a copy and a
+                        // release - every frame, on a second swapchain, on top
+                        // of Reach's own stereo swapchain. Reach's crosshair art
+                        // is static between weapon and state changes, so that
+                        // work is almost always spent re-publishing an image
+                        // identical to the one already in the swapchain. Skip it
+                        // while the captured art's identity is unchanged; the
+                        // released image stays valid and the quad keeps showing
+                        // it. Halo 3 and ODST are untouched.
+                        static uint64_t s_lastUploadedReachKey = 0;
+                        const uint64_t reachCrosshairKey = reachTitle
+                            ? Game_GetReachAuthoredCrosshairKey() : 0;
+                        const bool reachArtAlreadyPublished =
+                            reachTitle && reachCrosshairKey != 0 &&
+                            reachCrosshairKey == s_lastUploadedReachKey;
                         const bool shouldUploadAuthoredReticle =
-                            authoredReticleThisFrame && reticleUploadAdmitted;
+                            authoredReticleThisFrame && reticleUploadAdmitted &&
+                            !reachArtAlreadyPublished;
                         bool authoredUploadFailed = false;
                         if (shouldUploadAuthoredReticle &&
-                            !UploadAuthoredReticle(false))
+                            UploadAuthoredReticle(false))
+                        {
+                            s_lastUploadedReachKey = reachCrosshairKey;
+                        }
+                        else if (shouldUploadAuthoredReticle)
                         {
                             // Never expose stale or undefined swapchain
                             // contents: repaint the chain, exactly as the
