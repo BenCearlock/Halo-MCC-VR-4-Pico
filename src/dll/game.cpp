@@ -15315,10 +15315,13 @@ namespace
             RemoveReachCameraCore();
             return false;
         }
-        // Optional and fail-open: takes the body-anchored third-person muzzle
-        // flash out. A failure here logs and continues; it must never affect
-        // the mandatory hooks or arming.
-        ApplyReachThirdPersonEffectSuppression(base, size);
+        // DISABLED 2026-07-27 after a headset test. The patch verifiably
+        // applied (log: "suppressed at haloreach.dll+0x1D4F18") and denied
+        // camera-mode-2 particle systems engine-wide, and the face-stuck flash
+        // kept rendering. So the element is NOT a third-person-only particle
+        // system. Combined with the earlier eliminations this rules out the
+        // entire per-mode emission gate as the source. Kept for evidence.
+        // ApplyReachThirdPersonEffectSuppression(base, size);
         if (!ApplyReachNativeWeaponIkBypass())
         {
             LOG("Reach camera install: native weapon-IK bypass failed; "
