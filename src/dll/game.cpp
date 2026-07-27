@@ -1252,6 +1252,18 @@ namespace
                 kTitleRuntimeHeartbeatFreshMs;
             value.freshForMs[TitleRuntimeSlotIndex(GameTitle::Halo3ODST)] =
                 kOdstCameraHardTimeoutMs + 1;
+#if HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE
+            // Reach heartbeats once per armed Present (Game_AutoVrTick), the
+            // fastest cadence of the three titles, so Halo 3's window fits.
+            // A zero window here made ResolveTitleRuntime disqualify Reach
+            // unconditionally (heartbeatFreshForMs == 0): Reach was never the
+            // resolved owner, Game_HasTitleCapability denied every shared
+            // capability (rumble stayed dead), and the worker's fallback-mode
+            // publication stomped the present path's Gameplay back to Loading
+            // every 50 ms - the "Runtime mode: gameplay -> loading" log flap.
+            value.freshForMs[TitleRuntimeSlotIndex(GameTitle::HaloReach)] =
+                kTitleRuntimeHeartbeatFreshMs;
+#endif
             return value;
         }();
         return policy;
@@ -10870,6 +10882,140 @@ namespace
         return cullCover.valid;
     }
 
+    // ---- Reach cinematic-state probe (log-only, fail-open) -----------------
+    // Evidence (2026-07-27, pinned haloreach.dll): Reach registers its
+    // cutscene game state under the official names "cinematic globals"
+    // (0x40 bytes) and "cinematic globals non deterministic" (0x10 bytes) at
+    // exactly one registration site, and that site caches a per-engine-thread
+    // pointer to each member inside the module's TLS block - the same design
+    // HREK's exported symbol __tls_set_g_cinematic_globals_allocator names.
+    // The signature below matches the registration's instruction stream; the
+    // module TLS-index location, the verifying name string, and both TLS cache
+    // slots are DECODED from the matched bytes, never hardcoded. The probe
+    // READS and LOGS only - no engine write, no VR behavior change. Which
+    // dwords mean in_progress / scene / shot is deliberately NOT assumed; the
+    // first headset cutscene run assigns them from the log. A missing or
+    // ambiguous match logs once and leaves the probe off.
+    constexpr size_t kReachCineMemberADwords = 0x40 / 4;
+    constexpr size_t kReachCineMemberBDwords = 0x10 / 4;
+    const char* kReachCineRegistrationSig =
+        "65 48 8B 0C 25 58 00 00 00 "  // mov rcx, gs:[0x58]
+        "4C 8D 35 ?? ?? ?? ?? "        // lea r14, [member-offset table]
+        "8B 15 ?? ?? ?? ?? "           // mov edx, [module TLS index] (+18)
+        "45 8D 4D 10 "
+        "89 05 ?? ?? ?? ?? "
+        "45 33 C0 "
+        "48 98 "
+        "4C 89 6C 24 38 "
+        "48 8B 1C D1 "                 // mov rbx, [rcx+rdx*8]  (TLS block)
+        "48 8D 15 ?? ?? ?? ?? "        // lea rdx, [verify name] (+49)
+        "4C 89 6C 24 30 "
+        "41 BF 28 00 00 00 "
+        "BD ?? ?? 00 00 "              // mov ebp, state-buffer base offset
+        "BF ?? ?? 00 00 "              // mov edi, member A TLS slot (+70)
+        "41 8B 0C 1F "
+        "89 0D ?? ?? ?? ?? "
+        "48 8D 0C 40 "
+        "48 03 C9 "
+        "41 8B 84 CE ?? ?? 00 00 "     // mov eax, [r14+rcx*8+table]
+        "8D 4E C4 "
+        "48 03 44 2B 20 "              // add rax, [rbx+rbp+0x20]
+        "48 89 04 1F";                 // mov [rdi+rbx], rax  (cache member A)
+    // Same function, a few instructions later: mov ecx, imm32 carrying the
+    // member B TLS slot, immediately followed by the member B cache store
+    // mov [rcx+rbx], rax. Searched only inside a bounded tail window.
+    const char* kReachCineSlotBSig = "B9 ?? ?? ?? ?? 48 89 04 19";
+    constexpr size_t kReachCineSigLength = 111;
+    constexpr const char* kReachCineVerifyName =
+        "cinematic globals non deterministic";
+
+    struct ReachCineProbeState
+    {
+        std::atomic<bool> armed{false};
+        std::atomic<uint32_t> attemptedGeneration{0};
+        uint32_t* tlsIndex = nullptr; // inside the retained Reach module
+        uint32_t slotA = 0;
+        uint32_t slotB = 0;           // 0 = member B unavailable
+        // Single-writer seqlock: the engine render thread publishes, the 50 ms
+        // worker consumes. Even seq = stable.
+        std::atomic<uint32_t> seq{0};
+        uint32_t bufA[kReachCineMemberADwords] = {};
+        uint32_t bufB[kReachCineMemberBDwords] = {};
+        std::atomic<uint32_t> sampleFailures{0};
+        // Bumped on every successful (re)arm so the worker-side log state
+        // rebaselines instead of diffing against a previous generation.
+        std::atomic<uint32_t> logReset{0};
+    };
+    ReachCineProbeState g_reachCineProbe;
+
+    // Engine render thread, once per owned outer pass. Deterministic and
+    // allocation/log-free per the hot-path rules; the SEH guard mirrors the
+    // accepted Halo 3 ReadCinematicShot TLS read.
+    void ReachCineProbeSample()
+    {
+        if (!g_reachCineProbe.armed.load(std::memory_order_acquire))
+            return;
+        uint32_t* tlsIndexPtr = g_reachCineProbe.tlsIndex;
+        if (!tlsIndexPtr)
+            return;
+        __try
+        {
+            auto** slots = reinterpret_cast<void**>(__readgsqword(0x58));
+            if (!slots)
+            {
+                g_reachCineProbe.sampleFailures.fetch_add(
+                    1, std::memory_order_relaxed);
+                return;
+            }
+            const uint32_t tlsIndex = *tlsIndexPtr;
+            if (tlsIndex >= 0x200)
+            {
+                g_reachCineProbe.sampleFailures.fetch_add(
+                    1, std::memory_order_relaxed);
+                return;
+            }
+            auto* block = reinterpret_cast<unsigned char*>(slots[tlsIndex]);
+            if (!block)
+            {
+                g_reachCineProbe.sampleFailures.fetch_add(
+                    1, std::memory_order_relaxed);
+                return;
+            }
+            auto* memberA = *reinterpret_cast<unsigned char**>(
+                block + g_reachCineProbe.slotA);
+            if (!memberA)
+            {
+                g_reachCineProbe.sampleFailures.fetch_add(
+                    1, std::memory_order_relaxed);
+                return;
+            }
+            unsigned char* memberB = nullptr;
+            if (g_reachCineProbe.slotB)
+            {
+                memberB = *reinterpret_cast<unsigned char**>(
+                    block + g_reachCineProbe.slotB);
+            }
+            const uint32_t seqBefore =
+                g_reachCineProbe.seq.load(std::memory_order_relaxed);
+            g_reachCineProbe.seq.store(
+                seqBefore + 1, std::memory_order_release);
+            memcpy(g_reachCineProbe.bufA, memberA,
+                   sizeof(g_reachCineProbe.bufA));
+            if (memberB)
+            {
+                memcpy(g_reachCineProbe.bufB, memberB,
+                       sizeof(g_reachCineProbe.bufB));
+            }
+            g_reachCineProbe.seq.store(
+                seqBefore + 2, std::memory_order_release);
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            g_reachCineProbe.sampleFailures.fetch_add(
+                1, std::memory_order_relaxed);
+        }
+    }
+
     // Adds one eye's exact OpenXR separation/cant and stamps the already
     // validated symmetric raster FOV. Missing or non-finite input fails the
     // whole transaction; there is no fixed-IPD or stale-view fallback.
@@ -10948,6 +11094,10 @@ namespace
         unsigned char* headCenter,
         unsigned char* headDerived)
     {
+        // Log-only cinematic-state sample on the engine thread that owns the
+        // per-frame camera work. If cutscenes stop this path from running, the
+        // worker-side stall report is itself the finding.
+        ReachCineProbeSample();
         if (!stockCompact || !headCenter || !headDerived ||
             !cullCover.valid || !g_reachHelpers.Ready())
         {
@@ -13937,9 +14087,250 @@ namespace
         }
         return published;
     }
+    // 50 ms worker: locate the cinematic-globals registration once per module
+    // generation and decode everything the sampler needs. Fail-open, one log
+    // line either way; never touches the camera core.
+    void ReachCineProbeColdPoll(
+        uintptr_t base, size_t size, uint32_t generation, bool soleReachTitle)
+    {
+        if (!soleReachTitle || !base || !generation)
+        {
+            g_reachCineProbe.armed.store(false, std::memory_order_release);
+            return;
+        }
+        if (g_reachCineProbe.attemptedGeneration.load(
+                std::memory_order_acquire) == generation)
+            return;
+        g_reachCineProbe.armed.store(false, std::memory_order_release);
+        g_reachCineProbe.attemptedGeneration.store(
+            generation, std::memory_order_release);
+
+        const uintptr_t hit = sig::Find(base, size, kReachCineRegistrationSig);
+        if (!hit || sig::Find(hit + 1, base + size - hit - 1,
+                              kReachCineRegistrationSig))
+        {
+            LOG("REACHCINE: registration signature %s; probe off",
+                hit ? "ambiguous" : "missing");
+            return;
+        }
+        const uintptr_t tlsIndexAddr = sig::RipTarget(hit + 18, hit + 22);
+        const uintptr_t nameAddr = sig::RipTarget(hit + 49, hit + 53);
+        const uint32_t slotA = *reinterpret_cast<const uint32_t*>(hit + 70);
+        const size_t verifyLength = strlen(kReachCineVerifyName) + 1;
+        if (tlsIndexAddr < base || tlsIndexAddr + 4 > base + size ||
+            nameAddr < base || nameAddr + verifyLength > base + size ||
+            memcmp(reinterpret_cast<const void*>(nameAddr),
+                   kReachCineVerifyName, verifyLength) != 0)
+        {
+            LOG("REACHCINE: decoded operands failed verification; probe off");
+            return;
+        }
+        if (slotA < 8 || slotA > 0x8000 || (slotA & 7) != 0)
+        {
+            LOG("REACHCINE: member A TLS slot 0x%X out of range; probe off",
+                slotA);
+            return;
+        }
+        uint32_t slotB = 0;
+        const uintptr_t tailStart = hit + kReachCineSigLength;
+        constexpr size_t kTailSpan = 0x80;
+        if (tailStart + kTailSpan <= base + size)
+        {
+            const uintptr_t tail =
+                sig::Find(tailStart, kTailSpan, kReachCineSlotBSig);
+            if (tail)
+            {
+                const uint32_t candidate =
+                    *reinterpret_cast<const uint32_t*>(tail + 1);
+                if (candidate >= 8 && candidate <= 0x8000 &&
+                    (candidate & 7) == 0 && candidate != slotA)
+                    slotB = candidate;
+            }
+        }
+
+        g_reachCineProbe.tlsIndex = reinterpret_cast<uint32_t*>(tlsIndexAddr);
+        g_reachCineProbe.slotA = slotA;
+        g_reachCineProbe.slotB = slotB;
+        g_reachCineProbe.sampleFailures.store(0, std::memory_order_relaxed);
+        g_reachCineProbe.logReset.fetch_add(1, std::memory_order_release);
+        g_reachCineProbe.armed.store(true, std::memory_order_release);
+        LOG("REACHCINE: probe armed (tls index rva 0x%llX, member slots "
+            "+0x%X/+0x%X%s); log-only",
+            static_cast<unsigned long long>(tlsIndexAddr - base), slotA, slotB,
+            slotB ? "" : " - member B unavailable");
+    }
+
+    // Worker-side diff of one probed member bank against the last values it
+    // logged. Dwords that change on eight consecutive bursts are timer-like
+    // and get muted so cut transitions stay readable.
+    void ReachCineProbeDiffBank(
+        char bank, const uint32_t* fresh, uint32_t* lastLogged,
+        uint8_t* hotBursts, uint32_t& mutedMask, size_t count,
+        unsigned& logged, unsigned& deferred)
+    {
+        for (size_t index = 0; index < count; ++index)
+        {
+            if (fresh[index] == lastLogged[index])
+            {
+                hotBursts[index] = 0;
+                continue;
+            }
+            const uint32_t bit = 1u << index;
+            if (mutedMask & bit)
+            {
+                lastLogged[index] = fresh[index];
+                continue;
+            }
+            if (hotBursts[index] < 0xFF)
+                ++hotBursts[index];
+            if (hotBursts[index] >= 8)
+            {
+                mutedMask |= bit;
+                lastLogged[index] = fresh[index];
+                LOG("REACHCINE: %c+0x%02X changes every burst; muted "
+                    "(timer-like)",
+                    bank, static_cast<unsigned>(index * 4));
+                continue;
+            }
+            if (logged >= 8)
+            {
+                ++deferred; // reported next burst
+                continue;
+            }
+            LOG("REACHCINE: %c+0x%02X %08X -> %08X",
+                bank, static_cast<unsigned>(index * 4),
+                lastLogged[index], fresh[index]);
+            lastLogged[index] = fresh[index];
+            ++logged;
+        }
+    }
+
+    // 50 ms worker: publish what the engine-thread sampler saw. All logging
+    // lives here, off the render path, throttled to 250 ms bursts.
+    void ReachCineProbeLogTick()
+    {
+        if (!g_reachCineProbe.armed.load(std::memory_order_acquire))
+            return;
+        static uint32_t seenReset = 0;
+        static uint32_t lastSeqSeen = 0;
+        static uint64_t lastSeqChangeMs = 0;
+        static bool stallReported = false;
+        static bool haveBaseline = false;
+        static uint32_t lastLoggedA[kReachCineMemberADwords] = {};
+        static uint32_t lastLoggedB[kReachCineMemberBDwords] = {};
+        static uint8_t hotBurstsA[kReachCineMemberADwords] = {};
+        static uint8_t hotBurstsB[kReachCineMemberBDwords] = {};
+        static uint32_t mutedA = 0;
+        static uint32_t mutedB = 0;
+        static uint64_t lastBurstMs = 0;
+        static uint32_t reportedFailures = 0;
+        static uint64_t lastFailureReportMs = 0;
+
+        const uint32_t reset =
+            g_reachCineProbe.logReset.load(std::memory_order_acquire);
+        if (reset != seenReset)
+        {
+            seenReset = reset;
+            lastSeqSeen = 0;
+            lastSeqChangeMs = 0;
+            stallReported = false;
+            haveBaseline = false;
+            memset(hotBurstsA, 0, sizeof(hotBurstsA));
+            memset(hotBurstsB, 0, sizeof(hotBurstsB));
+            mutedA = 0;
+            mutedB = 0;
+            reportedFailures = 0;
+        }
+
+        const uint64_t now = GetTickCount64();
+        const uint32_t failures =
+            g_reachCineProbe.sampleFailures.load(std::memory_order_relaxed);
+        if (failures != reportedFailures && now - lastFailureReportMs >= 5000)
+        {
+            reportedFailures = failures;
+            lastFailureReportMs = now;
+            LOG("REACHCINE: sampler failing (cumulative %u TLS/member read "
+                "misses)", failures);
+        }
+
+        uint32_t copyA[kReachCineMemberADwords];
+        uint32_t copyB[kReachCineMemberBDwords];
+        uint32_t stableSeq = 0;
+        bool stable = false;
+        for (int attempt = 0; attempt < 4 && !stable; ++attempt)
+        {
+            const uint32_t seqBefore =
+                g_reachCineProbe.seq.load(std::memory_order_acquire);
+            if (seqBefore & 1u)
+                continue;
+            memcpy(copyA, g_reachCineProbe.bufA, sizeof(copyA));
+            memcpy(copyB, g_reachCineProbe.bufB, sizeof(copyB));
+            std::atomic_thread_fence(std::memory_order_acquire);
+            const uint32_t seqAfter =
+                g_reachCineProbe.seq.load(std::memory_order_acquire);
+            stable = seqBefore == seqAfter;
+            stableSeq = seqBefore;
+        }
+        if (!stable)
+            return;
+
+        if (stableSeq != lastSeqSeen)
+        {
+            lastSeqSeen = stableSeq;
+            lastSeqChangeMs = now;
+            stallReported = false;
+        }
+        else
+        {
+            if (stableSeq != 0 && !stallReported && lastSeqChangeMs &&
+                now - lastSeqChangeMs > 3000)
+            {
+                stallReported = true;
+                LOG("REACHCINE: sampler stalled >3s while armed - the owned "
+                    "camera path is not running (cutscene or menu may bypass "
+                    "the armed core)");
+            }
+            return;
+        }
+
+        if (!haveBaseline)
+        {
+            haveBaseline = true;
+            memcpy(lastLoggedA, copyA, sizeof(lastLoggedA));
+            memcpy(lastLoggedB, copyB, sizeof(lastLoggedB));
+            LOG("REACHCINE: baseline A+00 %08X %08X %08X %08X %08X %08X %08X "
+                "%08X",
+                copyA[0], copyA[1], copyA[2], copyA[3], copyA[4], copyA[5],
+                copyA[6], copyA[7]);
+            LOG("REACHCINE: baseline A+20 %08X %08X %08X %08X %08X %08X %08X "
+                "%08X",
+                copyA[8], copyA[9], copyA[10], copyA[11], copyA[12], copyA[13],
+                copyA[14], copyA[15]);
+            LOG("REACHCINE: baseline B+00 %08X %08X %08X %08X",
+                copyB[0], copyB[1], copyB[2], copyB[3]);
+            return;
+        }
+
+        if (now - lastBurstMs < 250)
+            return;
+        unsigned logged = 0;
+        unsigned deferred = 0;
+        ReachCineProbeDiffBank('A', copyA, lastLoggedA, hotBurstsA, mutedA,
+                               kReachCineMemberADwords, logged, deferred);
+        ReachCineProbeDiffBank('B', copyB, lastLoggedB, hotBurstsB, mutedB,
+                               kReachCineMemberBDwords, logged, deferred);
+        if (deferred)
+            LOG("REACHCINE: %u further changes deferred to next burst",
+                deferred);
+        if (logged || deferred)
+            lastBurstMs = now;
+    }
+
     void ReachCameraCore_Poll(
         uintptr_t base, size_t size, uint32_t generation, bool soleReachTitle)
     {
+        ReachCineProbeColdPoll(base, size, generation, soleReachTitle);
+        ReachCineProbeLogTick();
         LogReachFpCameraUploadIfReady();
         LogReachFpStatusIfNew();
         const bool installed =
@@ -15066,8 +15457,22 @@ void Game_AutoVrTick()
             if (!g_reachCamera.teardownRequested.load(
                     std::memory_order_acquire))
             {
+                const uint64_t reachNowMs = GetTickCount64();
                 g_reachLastCamCopyMs.store(
-                    GetTickCount64(), std::memory_order_release);
+                    reachNowMs, std::memory_order_release);
+                // Reach's camera-liveness heartbeat, the homolog of Halo 3's
+                // CamCopyHook and ODST's cam-copy publications. Without it the
+                // shared resolver never qualifies Reach as owner (its policy
+                // window used to be zero as well), so the Haptics capability
+                // was permanently denied for Reach - captured rumble requests
+                // were discarded - and the 50 ms worker kept re-publishing the
+                // fallback Loading mode over the present path's Gameplay.
+                // Stopping on teardown/disarm expires ownership within the
+                // 500 ms freshness window, which also drops the arm-gated
+                // capabilities and stops rumble, matching the other titles.
+                if (reachGen)
+                    TitleAdapter_PublishHeartbeat(
+                        GameTitle::HaloReach, reachGen, reachNowMs);
                 HudLayoutAutoTick(HudLayoutProfile::HaloReach);
             }
         }
@@ -15582,16 +15987,15 @@ bool Game_MoveStickIsLocomotion()
         mode == RuntimeMode::Turret)
         return true;
 #if HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE
-    // Reach never reaches Gameplay through the shared RuntimeMode: no Reach
-    // lifecycle is published, so TitleAdapter_PublishMode(HaloReach, Gameplay)
-    // is rejected and g_runtimeMode stays at Loading during actual gameplay
-    // (headset log 2026-07-24 confirmed shell->unsupported->loading, no
-    // ...->gameplay). While Reach's per-eye camera is armed and head tracking is
-    // on, the game is in gameplay and the left stick drives the character, so
-    // treat it as locomotion. Scoped to Reach; Halo 3/ODST keep the pure
-    // mode-driven path unchanged. Known limit: a Reach pause menu that keeps the
-    // camera armed would also take this path (menu-stick would be treated as
-    // locomotion) -- acceptable until Reach menu-state detection exists.
+    // Since the Reach camera heartbeat (2026-07-27) the shared RuntimeMode
+    // does hold Gameplay for armed Reach, so the mode check above normally
+    // answers. This armed-core fallback stays for the bounded windows where
+    // ownership has not resolved yet (first heartbeats after arming, the
+    // <=500 ms expiry after a transition) so locomotion does not glitch to
+    // raw-stick there. Scoped to Reach; Halo 3/ODST keep the pure mode-driven
+    // path unchanged. Known limit: a Reach pause menu that keeps the camera
+    // armed reads as locomotion -- acceptable until Reach menu-state
+    // detection exists.
     if (TitleAdapter_GetActiveTitle() == GameTitle::HaloReach &&
         g_reachCamera.armed.load(std::memory_order_acquire) &&
         g_enabled.load(std::memory_order_acquire))
