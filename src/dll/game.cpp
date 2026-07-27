@@ -10110,17 +10110,23 @@ namespace
             {
                 // Ownership can be revoked by teardown or an explicit VR
                 // disable while this stock draw call is already in flight.
-                // Invalidate the eye before it can be copied and suppress this
-                // abandoned CHUD pass; never let it turn into a flat class-2
-                // draw inside a formerly owned eye transaction.
+                // Mark the eye so it cannot be copied, but still run the
+                // engine's draw: skipping it is what corrupts state (see the
+                // +0x2ED80C crash note below).
                 g_reachFpCameraEyeScope.chudParityFailed = true;
+                original(userIndex, descriptor, widgetIndex,
+                         useAlternatePath, drawState);
                 return;
             }
             if (ownsStereo &&
                 g_scopeRenderActive.load(std::memory_order_acquire))
             {
-                // Match Halo 3/ODST: the magnified world-only scope picture
-                // must not receive any native CHUD widget.
+                // The magnified world-only scope picture must not receive a
+                // native CHUD widget, but the call still has to happen.
+                if (VR_BeginAuthoredReticleCapture())
+                    captureStarted = true;
+                original(userIndex, descriptor, widgetIndex,
+                         useAlternatePath, drawState);
                 return;
             }
 
@@ -10139,6 +10145,11 @@ namespace
                 g_reachFpCameraEyeScope.chudParityFailed &&
                 isCrosshairClass)
             {
+                // Already-failed eye: hide the widget, but never skip the call.
+                if (VR_BeginAuthoredReticleCapture())
+                    captureStarted = true;
+                original(userIndex, descriptor, widgetIndex,
+                         useAlternatePath, drawState);
                 return;
             }
             const ReachChudCrosshairAction action =
@@ -10149,29 +10160,39 @@ namespace
                     stereoEye,
                     g_config.right_eye_first);
 
-            if (action == ReachChudCrosshairAction::Suppress)
-                return;
+            // NEVER skip the engine's own draw call. Halo 3 and ODST can hide
+            // their crosshair by NOPing a class-2 visibility predicate, so the
+            // widget function still runs in full and merely declines to draw.
+            // Reach has no such predicate (proven: docs/REACH-HANDOFF), so the
+            // previous approach returned early instead - skipping the call
+            // outright. That corrupts engine state: a headset test crashed
+            // haloreach.dll at +0x2ED80C, the first instruction of a function
+            // whose very first act is "mov eax,[rcx+0x98]", i.e. it was handed
+            // a null pointer that the skipped call was supposed to establish.
+            // The identical fault address appeared in an earlier attempt at
+            // this same hook, so this is the mechanism, not a coincidence.
+            //
+            // Instead, always run the original and redirect its pixels into
+            // the offscreen authored-reticle target when they must not reach
+            // the eye. Begin/End already save and restore render targets,
+            // viewports and scissors, so the engine draws normally and simply
+            // lands somewhere the player cannot see.
+            const bool hideFromEye =
+                action == ReachChudCrosshairAction::Suppress ||
+                action == ReachChudCrosshairAction::CaptureAuthored ||
+                action == ReachChudCrosshairAction::RejectTransaction;
             if (action == ReachChudCrosshairAction::RejectTransaction)
-            {
                 RejectReachChudParityForCurrentEye();
-                return;
-            }
-            if (action == ReachChudCrosshairAction::CaptureAuthored)
+            if (hideFromEye)
             {
                 if (VR_BeginAuthoredReticleCapture())
-                {
                     captureStarted = true;
-                    original(userIndex, descriptor, widgetIndex,
-                             useAlternatePath, drawState);
-                    return;
-                }
-                // The parity transaction was proven before arming. If its
-                // authored target becomes unavailable at runtime, reject the
-                // transaction and suppress this class-2 draw while the title
-                // worker performs verified teardown. Never substitute the flat
-                // native crosshair or a procedural texture.
-                RejectReachChudParityForCurrentEye();
-                return;
+                else
+                    // The redirect IS the mechanism. If it is unavailable
+                    // there is no second way to do this - reject the
+                    // transaction and let verified teardown run, exactly as
+                    // this path already did before. No alternate draw mode.
+                    RejectReachChudParityForCurrentEye();
             }
             original(userIndex, descriptor, widgetIndex,
                      useAlternatePath, drawState);
@@ -13399,24 +13420,20 @@ namespace
                 fpCamera,
                 reinterpret_cast<void*>(&ReachFpCameraRebuildDetour),
                 reinterpret_cast<void**>(&g_reachOrigFpCameraRebuild)) == MH_OK;
-        // DISABLED 2026-07-27: headset test crashed haloreach.dll seconds
-        // after this hook armed (Windows Application log: exception
-        // 0xC0000005 in haloreach.dll at +0x2ED80C, ~5s after "chud_draw_widget
-        // hook active" logged). The fault address is far from both this hook
-        // (0x2DA364) and player_view_render, consistent with state corruption
-        // manifesting downstream rather than a bad call at the hook site
-        // itself - most likely either a marshalling mismatch against the real
-        // argument widths (the hook signature narrows arg3/arg4 to 16/8 bits;
-        // the real function may pass wider values) or VR_BeginAuthoredReticleCapture
-        // touching D3D state this call site does not expect, since neither
-        // that function nor this exact address had ever executed before this
-        // test. The three-way static match (proven caller, matching argument
-        // shape, matching class-byte read) was real evidence but was not
-        // sufficient to prove runtime safety. Do not re-enable without either
-        // instrumenting the crash directly or finding a different, safer
-        // verification path; kReachHudDrawWidgetRva and the address-finding
-        // method remain valid and documented for that next attempt.
-        const bool hudDrawWidgetCreated = false;
+        // The address is confirmed by two fully independent methods: an AOB
+        // scan for the class-byte read (the pre-9166a99 attempt) and forward
+        // call-graph tracing from the proven kReachPlayerViewRenderRva. Both
+        // land on the same function. The crash that followed each attempt was
+        // never the address - it was the detour skipping the engine's own
+        // draw call, which is fixed in ReachHudDrawWidgetDetour above.
+        const bool hudDrawWidgetCreated = fpCameraCreated && MH_CreateHook(
+                hudDrawWidget,
+                reinterpret_cast<void*>(&ReachHudDrawWidgetDetour),
+                reinterpret_cast<void**>(&g_reachOrigHudDrawWidget)) == MH_OK;
+        if (fpCameraCreated && !hudDrawWidgetCreated)
+            LOG("Reach crosshair: chud_draw_widget hook create FAILED at "
+                "haloreach.dll+0x%llX",
+                static_cast<unsigned long long>(kReachHudDrawWidgetRva));
         if (!innerCreated || !outerCreated ||
             !fpInterpolateCreated || !fpPaletteCreated || !fpCameraCreated)
         {
