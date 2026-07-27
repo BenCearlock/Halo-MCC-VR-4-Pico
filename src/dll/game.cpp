@@ -10068,6 +10068,7 @@ namespace
         void* rainRenderTarget = nullptr;
     } g_reachCamera;
     bool RestoreReachNativeWeaponIkBypass();
+    bool RestoreReachThirdPersonEffectSuppression();
     static_assert(std::atomic<int>::is_always_lock_free);
     static_assert(std::atomic<uint32_t>::is_always_lock_free);
 
@@ -14357,6 +14358,12 @@ namespace
         if (!DisableAndRemoveReachHooks())
             return false;
 
+        // Put the engine's third-person effect branch back before anything
+        // else can unload the module. Optional, so a failure is logged rather
+        // than blocking teardown.
+        if (!RestoreReachThirdPersonEffectSuppression())
+            LOG("Reach muzzle: third-person effect branch could not be restored");
+
         if (!RestoreReachNativeWeaponIkBypass())
         {
             LOG("Reach camera cleanup: native weapon-IK disable could not be "
@@ -14525,6 +14532,104 @@ namespace
         }
         slot = resolved;
         return true;
+    }
+
+    // ---- suppress the third-person muzzle flash on the player's own body ----
+    // See kReachThirdPersonEffectDenyRva for the derivation. Reach's effect
+    // render pass allows a "third person only" particle system whenever the
+    // effect is not flagged as the player's own first-person weapon - and the
+    // player's own WORLD weapon is not flagged, because flat Reach never shows
+    // it. VR does, so it renders at the body.
+    //
+    // This takes the engine's own deny path for camera-mode-2 systems. Applied
+    // when the Reach core arms and restored on teardown, exactly like the
+    // native weapon-IK bypass above.
+    const char* kReachThirdPersonEffectSig =
+        "F9 41 B2 01 85 C9 74 1E 83 E9 01 74 14 83 F9 01 75 17 "
+        "45 85 F6 75 05 45 85 C0 74 0D 45 32 D2";
+    uintptr_t g_reachThirdPersonEffectPatchSite = 0;
+    bool g_reachThirdPersonEffectPatched = false;
+
+    bool ReachWriteCode(uintptr_t address, const unsigned char* bytes,
+                        size_t count)
+    {
+        DWORD previous = 0;
+        if (!VirtualProtect(reinterpret_cast<void*>(address), count,
+                            PAGE_EXECUTE_READWRITE, &previous))
+        {
+            return false;
+        }
+        bool ok = true;
+        __try
+        {
+            memcpy(reinterpret_cast<void*>(address), bytes, count);
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            ok = false;
+        }
+        DWORD restored = 0;
+        VirtualProtect(reinterpret_cast<void*>(address), count, previous,
+                       &restored);
+        if (ok)
+            FlushInstructionCache(GetCurrentProcess(),
+                                  reinterpret_cast<void*>(address), count);
+        return ok;
+    }
+
+    bool ApplyReachThirdPersonEffectSuppression(uintptr_t base, size_t size)
+    {
+        g_reachThirdPersonEffectPatchSite = 0;
+        g_reachThirdPersonEffectPatched = false;
+        const uintptr_t hit = sig::Find(base, size, kReachThirdPersonEffectSig);
+        if (!hit || sig::Find(hit + 1, base + size - hit - 1,
+                              kReachThirdPersonEffectSig))
+        {
+            LOG("Reach muzzle: third-person effect signature %s; the "
+                "body-anchored muzzle flash stays, nothing else affected",
+                hit ? "ambiguous" : "missing");
+            return false;
+        }
+        const uintptr_t site = hit + kReachThirdPersonEffectPatchOffset;
+        if (memcmp(reinterpret_cast<const void*>(site),
+                   kReachThirdPersonEffectOriginal,
+                   kReachThirdPersonEffectPatchBytes) != 0)
+        {
+            LOG("Reach muzzle: third-person deny site does not hold the "
+                "expected bytes; leaving it alone");
+            return false;
+        }
+        if (!ReachWriteCode(site, kReachThirdPersonEffectPatch,
+                            kReachThirdPersonEffectPatchBytes))
+        {
+            LOG("Reach muzzle: could not write the third-person suppression");
+            return false;
+        }
+        g_reachThirdPersonEffectPatchSite = site;
+        g_reachThirdPersonEffectPatched = true;
+        LOG("Reach muzzle: third-person-only particle systems suppressed at "
+            "haloreach.dll+0x%llX (expected 0x%llX); the body-anchored muzzle "
+            "flash stops emitting, the first-person flash on the gun is "
+            "untouched",
+            static_cast<unsigned long long>(site - base),
+            static_cast<unsigned long long>(kReachThirdPersonEffectDenyRva));
+        return true;
+    }
+
+    bool RestoreReachThirdPersonEffectSuppression()
+    {
+        if (!g_reachThirdPersonEffectPatched ||
+            !g_reachThirdPersonEffectPatchSite)
+        {
+            return true;
+        }
+        const bool ok = ReachWriteCode(
+            g_reachThirdPersonEffectPatchSite,
+            kReachThirdPersonEffectOriginal,
+            kReachThirdPersonEffectPatchBytes);
+        g_reachThirdPersonEffectPatched = false;
+        g_reachThirdPersonEffectPatchSite = 0;
+        return ok;
     }
 
     bool ApplyReachNativeWeaponIkBypass()
@@ -15210,6 +15315,10 @@ namespace
             RemoveReachCameraCore();
             return false;
         }
+        // Optional and fail-open: takes the body-anchored third-person muzzle
+        // flash out. A failure here logs and continues; it must never affect
+        // the mandatory hooks or arming.
+        ApplyReachThirdPersonEffectSuppression(base, size);
         if (!ApplyReachNativeWeaponIkBypass())
         {
             LOG("Reach camera install: native weapon-IK bypass failed; "

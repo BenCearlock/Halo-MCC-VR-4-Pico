@@ -101,6 +101,49 @@ inline constexpr int ReachClassifyObserverCameraReturn(uintptr_t returnRva)
     return -1;
 }
 
+// The muzzle flash welded to the player's view, and the engine's own switch
+// for it.
+//
+// Reach decides per particle system whether to emit, in the effect render pass
+// at 0x001D4DB4. The relevant state, read straight from the disassembly:
+//
+//   r14d = (int8)effect[0x50] & (1 << playerIndex)   my first-person weapon?
+//   r8d  = (int8)effect[0x51] & (1 << playerIndex)
+//   r9b  = (r14d != 0)
+//   camera mode = word [particleSystem + 0x1E]
+//     0 -> independent of camera mode
+//     1 -> only in first person   : allowed when r9b
+//     2 -> only in third person   : denied when r14d or r8d is set
+//
+// So a third-person-only system is allowed whenever the effect is not flagged
+// as the player's own FIRST-person weapon. The player's own WORLD weapon is not
+// flagged either, because in flat Reach you never see your own body and it does
+// not matter. In VR the world is rendered from the head and the player's own
+// world weapon is right there, so its third-person muzzle flash renders at the
+// body - fixed relative to the view, unaffected by aim, present on some weapons
+// and not others. That is the reported defect, and it is why every attempt to
+// move an effect LOCATION failed: the location was always correct.
+//
+// The intervention is the engine's own deny path. At 0x001D4F18 the mode-2 arm
+// begins `test r14d,r14d / jne deny / test r8d,r8d / je allow`; replacing the
+// first three bytes with a short jump to the deny at 0x001D4F22 makes every
+// third-person-only particle system decline to emit. Flow only reaches
+// 0x001D4F18 when camera mode is exactly 2, so modes 0 and 1 are untouched -
+// the first-person flash on the controller-held gun still emits normally.
+//
+// Located by a signature, not the RVA: the 31 bytes below span the camera-mode
+// switch and the mode-2 arm, and are measured UNIQUE (exactly one match). The
+// patch site is the match plus kReachThirdPersonEffectPatchOffset.
+inline constexpr uintptr_t kReachThirdPersonEffectDenyRva = 0x001D4F18;
+inline constexpr uintptr_t kReachThirdPersonEffectPatchOffset = 0x12;
+inline constexpr size_t kReachThirdPersonEffectPatchBytes = 3;
+// jmp +8 -> lands on the engine's own `xor r10b, r10b` deny, then a nop so the
+// replaced instruction's third byte is never a partial decode.
+inline constexpr unsigned char kReachThirdPersonEffectPatch[3] = {
+    0xEB, 0x08, 0x90};
+inline constexpr unsigned char kReachThirdPersonEffectOriginal[3] = {
+    0x45, 0x85, 0xF6};
+
 // Reach's rain, and why it swings with head AND hand in VR.
 //
 // The rain particle renderer is retail 0x00288D60 (.pdata bounds
