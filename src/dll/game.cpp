@@ -14480,6 +14480,24 @@ namespace
         // is cross-checked against the expected RVA before use.
         void* rainRender = nullptr;
         bool rainRenderCreated = false;
+        // DISABLED 2026-07-27 by the player's decision after a headset test:
+        // zeroing the rain volume's forward offset changed nothing they could
+        // see ("it's still behaving the exact same ... just remove that hook").
+        // Frame rate was explicitly confirmed unaffected, so this is removed
+        // because it does not work, not because it costs anything.
+        //
+        // The evidence stays recorded in reach_render_logic.h because it is
+        // solid and measured: 0x00288D60 really does compute
+        // centre = position + forward * (size * 0.45) from the top-of-stack
+        // workspace's secondary compact camera. The negative result is that
+        // this is NOT what the player perceives as the rain following them, so
+        // the visible rain must be driven by something else - most likely the
+        // second, still-unidentified weather draw dispatched from
+        // player_view_render at 0x0026CC8D (target 0x00168110, single caller),
+        // which is the obvious next place to look. Reach rain is a known open
+        // bug, deferred by the player.
+        constexpr bool kReachRainDecoupleEnabled = false;
+        if (kReachRainDecoupleEnabled)
         {
             const uintptr_t rainHit = sig::Find(base, size, kReachRainRenderSig);
             const bool rainUnique = rainHit &&
