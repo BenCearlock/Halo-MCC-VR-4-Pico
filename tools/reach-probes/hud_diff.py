@@ -10,17 +10,29 @@
 #
 # Never writes to the process. Uses PROCESS_VM_READ only.
 #
-# Usage:
+# Usage (two-shot, needs the game roughly still between snapshots):
 #   1. py -3 hud_diff.py snap baseline.bin      (while HUD looks normal)
 #   2. move hud_size in the F1 menu by a LARGE amount (e.g. 0.87 -> 0.30)
 #   3. py -3 hud_diff.py snap after.bin
 #   4. py -3 hud_diff.py diff baseline.bin after.bin
 #
-# diff reports every 4-byte-aligned float that changed between the two
-# snapshots and is still a plausible 0.0-2.0 scale-like value, grouped by
-# region, so a real HUD-scale field stands out from render-camera/animation
-# noise instead of being lost in it.
-import ctypes as C, struct, sys, pickle
+# Usage (poll, RECOMMENDED - isolates the exact moment of the slider move
+# instead of accumulating minutes of gameplay drift between two slow
+# snapshots):
+#   py -3 hud_diff.py poll
+#   Then just play normally and move the hud_size slider a few times whenever
+#   ready - the tool prints ONLY what changed since the last poll, a few
+#   seconds ago, not since the start. A real HUD-scale field will show up as a
+#   small, tight group of changes appearing in the same poll cycle as your
+#   slider move; gameplay motion (camera, animation, physics) shows up
+#   continuously in every cycle regardless of the slider, so it's visually
+#   obvious which is which. Ctrl+C to stop.
+#
+# diff/poll report every 4-byte-aligned float that changed and is still a
+# plausible 0.0-2.0 scale-like value, grouped by region, so a real HUD-scale
+# field stands out from render-camera/animation noise instead of being lost
+# in it.
+import ctypes as C, struct, sys, pickle, time
 from ctypes import wintypes as W
 
 GAME = "MCC-Win64-Shipping.exe"
@@ -71,9 +83,19 @@ def read(h, addr, size):
     return buf.raw[:got.value]
 
 
+# A HUD-scale scalar lives in a small config/UI-state struct or a tag-data
+# block, not a multi-megabyte world/asset heap. Capping region size keeps each
+# poll cycle fast (seconds, not a minute) and keeps world/animation/physics
+# heaps (which ARE typically huge) out of the noise entirely. 4MB was still
+# enough to hold the exact chud_globals curvature block found earlier tonight
+# (a 4194304-byte region among the hits), so this does not exclude our own
+# already-proven-correct record.
+MAX_REGION_BYTES = 4 << 20
+
+
 def scan_regions(h):
     """Yield (base, protect, type, data) for every committed private/mapped
-    readable region, skipping huge (>64MB) regions to keep this tractable."""
+    readable region up to MAX_REGION_BYTES."""
     addr = 0x10000
     mbi = MEMORY_BASIC_INFORMATION64()
     while addr < 0x7FFFFFFF0000:
@@ -85,7 +107,7 @@ def scan_regions(h):
         readable = (mbi.State == 0x1000 and
                     not (mbi.Protect & 0x101) and mbi.Protect != 0)
         interesting_type = mbi.Type in (0x20000, 0x40000)  # PRIVATE, MAPPED
-        if readable and interesting_type and 0 < size <= (64 << 20):
+        if readable and interesting_type and 0 < size <= MAX_REGION_BYTES:
             blob = read(h, base, size)
             if blob:
                 yield (base, mbi.Protect, mbi.Type, blob)
@@ -102,7 +124,7 @@ def do_snap(outpath):
         print(f"OpenProcess failed: {C.get_last_error()}")
         return 1
     print(f"attached to pid {pid}, snapshotting all private+mapped RW/RO "
-          f"regions <=64MB (this can take 30-90s)...")
+          f"regions <={MAX_REGION_BYTES>>20}MB (should take a few seconds)...")
     regions = list(scan_regions(h))
     total = sum(len(b) for _, _, _, b in regions)
     print(f"captured {len(regions)} region(s), {total/1e6:.1f} MB total")
@@ -113,15 +135,14 @@ def do_snap(outpath):
     return 0
 
 
-def do_diff(path_a, path_b):
-    with open(path_a, "rb") as f:
-        regions_a = pickle.load(f)
-    with open(path_b, "rb") as f:
-        regions_b = pickle.load(f)
-    b_by_base = {base: (prot, typ, blob) for base, prot, typ, blob in regions_b}
+def _plausible(x):
+    return -0.01 <= x <= 3.0 and (x == 0.0 or abs(x) > 1e-6)
 
-    print(f"comparing {len(regions_a)} baseline region(s) against "
-          f"{len(regions_b)} after-region(s)...")
+
+def compare(regions_a, regions_b, quiet_ok=False):
+    """Returns (reported_count, total_changed_floats); prints per-region
+    detail. quiet_ok suppresses the 'no changes' line for poll mode."""
+    b_by_base = {base: (prot, typ, blob) for base, prot, typ, blob in regions_b}
     total_changed_floats = 0
     reported = 0
     for base, prot, typ, blob_a in regions_a:
@@ -130,7 +151,6 @@ def do_diff(path_a, path_b):
             continue
         _, _, blob_b = entry
         n = min(len(blob_a), len(blob_b))
-        # 4-byte aligned float scan
         changes = []
         for off in range(0, n - 4, 4):
             wa = blob_a[off:off+4]
@@ -139,10 +159,7 @@ def do_diff(path_a, path_b):
                 continue
             fa = struct.unpack("<f", wa)[0]
             fb = struct.unpack("<f", wb)[0]
-            # plausible "scale-like" value range on BOTH sides
-            def plausible(x):
-                return -0.01 <= x <= 3.0 and (x == 0.0 or abs(x) > 1e-6)
-            if plausible(fa) and plausible(fb) and abs(fa - fb) > 0.02:
+            if _plausible(fa) and _plausible(fb) and abs(fa - fb) > 0.02:
                 changes.append((off, fa, fb))
         total_changed_floats += len(changes)
         if changes:
@@ -155,8 +172,53 @@ def do_diff(path_a, path_b):
                 print(f"    +0x{off:06X}  {fa:.4f} -> {fb:.4f}")
             if len(changes) > 40:
                 print(f"    ... and {len(changes)-40} more in this region")
-    print(f"\ntotal: {reported} region(s) with plausible scale-like changes, "
-          f"{total_changed_floats} float(s) total")
+    if reported or not quiet_ok:
+        print(f"  -> {reported} region(s), {total_changed_floats} float(s) "
+              f"changed this cycle")
+    return reported, total_changed_floats
+
+
+def do_diff(path_a, path_b):
+    with open(path_a, "rb") as f:
+        regions_a = pickle.load(f)
+    with open(path_b, "rb") as f:
+        regions_b = pickle.load(f)
+    print(f"comparing {len(regions_a)} baseline region(s) against "
+          f"{len(regions_b)} after-region(s)...")
+    compare(regions_a, regions_b)
+    return 0
+
+
+def do_poll():
+    pid = find_pid()
+    if not pid:
+        print(f"{GAME} is not running.")
+        return 1
+    h = k32.OpenProcess(PROCESS_VM_READ | PROCESS_QUERY_INFORMATION, False, pid)
+    if not h:
+        print(f"OpenProcess failed: {C.get_last_error()}")
+        return 1
+    print(f"attached to pid {pid}. Polling every ~3s; each cycle reports only "
+          f"what changed since the PREVIOUS cycle (not since start), so a "
+          f"slider move stands out from a few seconds of gameplay drift "
+          f"instead of minutes of it. Play normally; move hud_size whenever "
+          f"ready. Ctrl+C to stop.\n")
+    prev = list(scan_regions(h))
+    cycle = 0
+    try:
+        while True:
+            time.sleep(3.0)
+            cycle += 1
+            cur = list(scan_regions(h))
+            t0 = time.time()
+            print(f"[cycle {cycle}, {time.strftime('%H:%M:%S')}]", end="")
+            reported, changed = compare(prev, cur, quiet_ok=True)
+            if not reported:
+                print("  (no plausible scale-like change)")
+            prev = cur
+    except KeyboardInterrupt:
+        print("\nstopped.")
+    k32.CloseHandle(h)
     return 0
 
 
@@ -165,6 +227,8 @@ if __name__ == "__main__":
         sys.exit(do_snap(sys.argv[2]))
     elif len(sys.argv) >= 4 and sys.argv[1] == "diff":
         sys.exit(do_diff(sys.argv[2], sys.argv[3]))
+    elif len(sys.argv) >= 2 and sys.argv[1] == "poll":
+        sys.exit(do_poll())
     else:
         print(__doc__)
         sys.exit(1)
