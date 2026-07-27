@@ -66,14 +66,13 @@ first, install the new one, then re-apply your preferences through the F1 menu.
 ## Verify your download (optional)
 
 ```text
-ZIP      __ZIP_SHA256__
-DLL      __DLL_SHA256__
-Launcher __LAUNCHER_SHA256__
+ZIP      BE1C084F3F2D40CA95A22B66DF4644DF4A3576F7D2D70E001FB11B50AB4C6922
+DLL      CE43FC67A72D14B6D1D9508C4BB6D8461A7733A303CC94B5784BA0274CE64E9F
+Launcher 0433A47883AAA9516C25F1830F8DC33EB15098CABDC04EDC223250B1EFBF25F0
 ```
 
 Windows or antivirus may warn about the unsigned files; that is expected for VR
 mods. Allow the two binaries (or the `Halo_MCC_VR` folder) rather than disabling
 security. Launch only through the included launcher, with anti-cheat disabled.
 
-Source commit: `__SOURCE_COMMIT__`. Built Release x64 with Halo 3, ODST and
-Reach enabled.
+Source commit: `4b85134`. Built Release x64 with Halo 3, ODST and Reach enabled.
