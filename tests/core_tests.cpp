@@ -3953,6 +3953,44 @@ int main()
             "The first-person output user index is decoded from the high nibble");
     }
 
+    // Reach muzzle retarget: only the single odd-one-out first-person system
+    // may be moved, and only onto its siblings' shared location. The AR is the
+    // only weapon in the game matching this shape (game-wide HREK dump).
+    {
+        // AR 1st_person: round@0, smoke@0, long_brake@2, glow@0, all mode 1.
+        const unsigned short arModes[] = {1, 1, 1, 1};
+        const unsigned short arLocs[] = {0, 0, 2, 0};
+        const ReachMuzzleRetargetDecision ar =
+            ReachDecideMuzzleRetarget(arModes, arLocs, 4);
+        Check(ar.elementIndex == 2 && ar.newLocation == 0,
+            "The AR's odd first-person system is retargeted onto its "
+            "siblings' marker");
+        // AR 3rd_person: five mode-2... as mode-1 shape with one location.
+        const unsigned short thirdModes[] = {1, 1, 1, 1, 1};
+        const unsigned short thirdLocs[] = {2, 2, 2, 2, 2};
+        Check(ReachDecideMuzzleRetarget(thirdModes, thirdLocs, 5)
+                  .elementIndex < 0,
+            "An event whose systems share one location is never touched");
+        // Typical other weapon: mixed modes, all mode-1 at one marker.
+        const unsigned short otherModes[] = {0, 0, 1, 1, 1};
+        const unsigned short otherLocs[] = {1, 0, 0, 0, 0};
+        Check(ReachDecideMuzzleRetarget(otherModes, otherLocs, 5)
+                  .elementIndex < 0,
+            "Mode-0 systems at other markers never make a weapon eligible");
+        // Two odd systems -> ambiguous -> untouched.
+        const unsigned short ambModes[] = {1, 1, 1, 1};
+        const unsigned short ambLocs[] = {0, 0, 2, 3};
+        Check(ReachDecideMuzzleRetarget(ambModes, ambLocs, 4)
+                  .elementIndex < 0,
+            "Two odd first-person systems are ambiguous and never touched");
+        // Fewer than two siblings -> no majority -> untouched.
+        const unsigned short thinModes[] = {1, 1, 0};
+        const unsigned short thinLocs[] = {0, 2, 0};
+        Check(ReachDecideMuzzleRetarget(thinModes, thinLocs, 3)
+                  .elementIndex < 0,
+            "A single sibling is not a majority; nothing is moved");
+    }
+
     if (g_failures == 0)
         std::cout << "HaloMCCVR core tests passed\n";
     return g_failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;

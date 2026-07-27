@@ -101,6 +101,101 @@ inline constexpr int ReachClassifyObserverCameraReturn(uintptr_t returnRva)
     return -1;
 }
 
+// The selective muzzle retarget: move the one odd first-person particle system
+// onto the marker its siblings use.
+//
+// Game-wide fact from the full HREK weapon dump (19 firing effects): the
+// assault rifle is the ONLY weapon whose first-person event places a
+// camera-mode-1 particle system on a marker other than primary_trigger -
+// muzzle_flash_long_brake sits on 'muzzle_flash' while muzzle_flash_round,
+// muzzle_smoke and glow_soft sit on 'primary_trigger'. The three siblings
+// provably track the controller-held gun; the odd one renders head-locked.
+// This matches the player's observation that only some guns show the defect.
+//
+// The fix edits the LOADED tag data: find the effect definition whose
+// first-person event contains exactly one mode-1 system at a different
+// location than >=2 mode-1 siblings sharing one location, and write the
+// siblings' location index over the odd one's. The engine then spawns it
+// exactly like the siblings, which are proven to follow the gun.
+//
+// Runtime layout, read instruction-for-instruction from the engine's own
+// emission gate at 0x001D4DB4 (the same function whose mode-1 patch removed
+// both flashes, proving the layout):
+//   handle  = *(u32*)(handleTable + index*8 + 4)
+//   defBase = pool[handle >> 28] + handle*4
+//   events block handle at defBase+0x30 (same *4 pool decode)
+//   event element stride 0x40 bytes; particle-systems block handle at
+//   event+0x38; particle-system element stride 0x70 bytes;
+//   location u16 at element+0x14, camera mode u16 at element+0x1E.
+// handleTable pointer and pool table are decoded from the unique 20-byte
+// signature below (mov r13,[rip+d32] / lea r9,[rip+d32] / mov r12d,0x48),
+// measured exactly one match; expected operands 0x00C1A600 / 0x04E39F20.
+inline constexpr uintptr_t kReachEffectHandleTableRva = 0x00C1A600;
+inline constexpr uintptr_t kReachEffectPoolTableRva = 0x04E39F20;
+inline constexpr size_t kReachEffectEventStride = 0x40;
+inline constexpr uintptr_t kReachEffectEventPsysBlockOffset = 0x38;
+inline constexpr uintptr_t kReachEffectDefEventsBlockOffset = 0x30;
+inline constexpr size_t kReachEffectPsysStride = 0x70;
+inline constexpr uintptr_t kReachEffectPsysLocationOffset = 0x14;
+inline constexpr uintptr_t kReachEffectPsysCameraModeOffset = 0x1E;
+inline constexpr unsigned kReachEffectCameraModeFirstPerson = 1;
+inline constexpr size_t kReachEffectMaxWalk = 16;
+
+// Pure and unit-testable: given the (cameraMode, location) pairs of one
+// event's particle systems, find the single odd-one-out mode-1 system whose
+// location differs from >=2 mode-1 siblings sharing one location. Returns the
+// element index to retarget and the location to write, or -1.
+struct ReachMuzzleRetargetDecision
+{
+    int elementIndex = -1;
+    unsigned short newLocation = 0;
+};
+
+inline constexpr ReachMuzzleRetargetDecision ReachDecideMuzzleRetarget(
+    const unsigned short* cameraModes, const unsigned short* locations,
+    size_t count)
+{
+    ReachMuzzleRetargetDecision decision{};
+    if (count < 3 || count > kReachEffectMaxWalk)
+        return decision;
+    // Majority location among mode-1 systems.
+    int bestCount = 0;
+    unsigned short bestLocation = 0;
+    for (size_t i = 0; i < count; ++i)
+    {
+        if (cameraModes[i] != kReachEffectCameraModeFirstPerson)
+            continue;
+        int same = 0;
+        for (size_t j = 0; j < count; ++j)
+            if (cameraModes[j] == kReachEffectCameraModeFirstPerson &&
+                locations[j] == locations[i])
+                ++same;
+        if (same > bestCount)
+        {
+            bestCount = same;
+            bestLocation = locations[i];
+        }
+    }
+    if (bestCount < 2)
+        return decision;
+    int odd = -1;
+    int oddCount = 0;
+    for (size_t i = 0; i < count; ++i)
+    {
+        if (cameraModes[i] == kReachEffectCameraModeFirstPerson &&
+            locations[i] != bestLocation)
+        {
+            odd = static_cast<int>(i);
+            ++oddCount;
+        }
+    }
+    if (oddCount != 1)
+        return decision;
+    decision.elementIndex = odd;
+    decision.newLocation = bestLocation;
+    return decision;
+}
+
 // The muzzle flash welded to the player's view, and the engine's own switch
 // for it.
 //

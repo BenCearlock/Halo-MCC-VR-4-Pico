@@ -10069,6 +10069,7 @@ namespace
     } g_reachCamera;
     bool RestoreReachNativeWeaponIkBypass();
     bool RestoreReachThirdPersonEffectSuppression();
+    void ReachMuzzleRetargetRestore();
     static_assert(std::atomic<int>::is_always_lock_free);
     static_assert(std::atomic<uint32_t>::is_always_lock_free);
 
@@ -10539,6 +10540,9 @@ namespace
     }
 
     std::atomic<uint32_t> g_reachMuzzleBodyCopiesHidden{0};
+    // Definition index of the player's own weapon effect, captured by the hot
+    // hook for the retarget worker. 0xFFFFFFFF = nothing captured.
+    std::atomic<uint32_t> g_reachMuzzleCapturedDefIndex{0xFFFFFFFFu};
 
     // ---- the weapon anchor the muzzle flash needs --------------------------
     // Why the flash sits on the player's face: our palette work never moves the
@@ -10735,7 +10739,8 @@ namespace
 
     // Guarded read of the two effect fields the decision needs.
     bool ReachReadEffectFpFields(
-        const void* effect, unsigned char& fpUserByte, int& objectIndex)
+        const void* effect, unsigned char& fpUserByte, int& objectIndex,
+        uint32_t& definitionIndex)
     {
         __try
         {
@@ -10744,6 +10749,7 @@ namespace
             fpUserByte = bytes[kReachEffectFpUserByteOffset];
             objectIndex = *reinterpret_cast<const int*>(
                 bytes + kReachEffectObjectIndexOffset);
+            definitionIndex = *reinterpret_cast<const uint32_t*>(bytes + 0x08);
             return true;
         }
         __except (EXCEPTION_EXECUTE_HANDLER)
@@ -10771,7 +10777,9 @@ namespace
             }
             unsigned char fpUserByte = 0;
             int objectIndex = 0;
-            if (!ReachReadEffectFpFields(effect, fpUserByte, objectIndex))
+            uint32_t effectDefinitionIndex = 0xFFFFFFFFu;
+            if (!ReachReadEffectFpFields(effect, fpUserByte, objectIndex,
+                                         effectDefinitionIndex))
             {
                 g_reachMuzzleReadFailures.fetch_add(
                     1, std::memory_order_relaxed);
@@ -10876,6 +10884,10 @@ namespace
                     g_reachMuzzleFpByteHighMask.fetch_or(
                         1u << ((fpUserByte >> 4) & 0x0Fu),
                         std::memory_order_relaxed);
+                    // The player's own weapon effect: hand its definition to
+                    // the retarget worker. Relaxed store, latest wins.
+                    g_reachMuzzleCapturedDefIndex.store(
+                        effectDefinitionIndex, std::memory_order_relaxed);
                 }
                 // The engine resolves the matrix HERE. Only after this call
                 // does outMatrix hold a real marker transform; the previous
@@ -14363,6 +14375,7 @@ namespace
         // than blocking teardown.
         if (!RestoreReachThirdPersonEffectSuppression())
             LOG("Reach muzzle: third-person effect branch could not be restored");
+        ReachMuzzleRetargetRestore();
 
         if (!RestoreReachNativeWeaponIkBypass())
         {
@@ -14532,6 +14545,244 @@ namespace
         }
         slot = resolved;
         return true;
+    }
+
+    // ---- selective muzzle retarget: put the odd FP particle on the gun -----
+    // See kReachEffectHandleTableRva in reach_render_logic.h. The hot hook
+    // captures the definition index of the player's own weapon effects; this
+    // worker decodes the loaded tag through the engine's own handle/pool
+    // arithmetic, finds the single first-person system whose location differs
+    // from its siblings, and writes the siblings' location index over it. The
+    // siblings provably track the controller-held gun.
+    const char* kReachEffectDecodeSig =
+        "4C 8B 2D ?? ?? ?? ?? 4C 8D 0D ?? ?? ?? ?? 41 BC 48 00 00 00";
+    uint32_t g_reachMuzzleAttemptedDefIndex = 0xFFFFFFFFu;
+    uintptr_t g_reachMuzzleHandleTable = 0;   // decoded from the signature
+    uintptr_t g_reachMuzzlePoolTable = 0;
+    bool g_reachMuzzleDecodeResolved = false;
+    uintptr_t g_reachMuzzlePatchAddress = 0;  // the location u16 we rewrote
+    uint16_t g_reachMuzzlePatchOriginal = 0;
+    std::atomic<uint32_t> g_reachMuzzleRetargetDone{0};
+
+    bool ReachReadU32(uintptr_t address, uint32_t* out)
+    {
+        __try
+        {
+            *out = *reinterpret_cast<const uint32_t*>(address);
+            return true;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            return false;
+        }
+    }
+    bool ReachReadU16(uintptr_t address, uint16_t* out)
+    {
+        __try
+        {
+            *out = *reinterpret_cast<const uint16_t*>(address);
+            return true;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            return false;
+        }
+    }
+    bool ReachWriteU16(uintptr_t address, uint16_t value)
+    {
+        __try
+        {
+            *reinterpret_cast<uint16_t*>(address) = value;
+            return *reinterpret_cast<const uint16_t*>(address) == value;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            return false;
+        }
+    }
+
+    // Decode pool[handle >> 28] + handle*4, the engine's own arithmetic.
+    bool ReachDecodePoolAddress(uint32_t handle, uintptr_t* out)
+    {
+        uintptr_t poolBase = 0;
+        __try
+        {
+            poolBase = *reinterpret_cast<const uintptr_t*>(
+                g_reachMuzzlePoolTable +
+                static_cast<uintptr_t>(handle >> 28) * 8);
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            return false;
+        }
+        if (!poolBase)
+            return false;
+        *out = poolBase + static_cast<uintptr_t>(handle) * 4;
+        return true;
+    }
+
+    void ReachMuzzleRetargetTick(uintptr_t base, size_t size,
+                                 uint32_t generation, bool soleReachTitle)
+    {
+        static uint32_t attemptedGeneration = 0;
+        if (!soleReachTitle || !base || !generation)
+        {
+            g_reachMuzzlePatchAddress = 0;
+            g_reachMuzzleDecodeResolved = false;
+            g_reachMuzzleRetargetDone.store(0, std::memory_order_relaxed);
+            g_reachMuzzleCapturedDefIndex.store(
+                0xFFFFFFFFu, std::memory_order_relaxed);
+            g_reachMuzzleAttemptedDefIndex = 0xFFFFFFFFu;
+            attemptedGeneration = 0;
+            return;
+        }
+        if (attemptedGeneration != generation)
+        {
+            attemptedGeneration = generation;
+            g_reachMuzzlePatchAddress = 0;
+            g_reachMuzzleDecodeResolved = false;
+            g_reachMuzzleRetargetDone.store(0, std::memory_order_relaxed);
+            g_reachMuzzleAttemptedDefIndex = 0xFFFFFFFFu;
+        }
+        if (g_reachMuzzlePatchAddress)
+            return;   // already retargeted this generation
+        if (!g_reachMuzzleDecodeResolved)
+        {
+            const uintptr_t hit =
+                sig::Find(base, size, kReachEffectDecodeSig);
+            if (!hit || sig::Find(hit + 1, base + size - hit - 1,
+                                  kReachEffectDecodeSig))
+            {
+                return;   // silent; retried next tick, logged via REACHFX
+            }
+            const uintptr_t tableSlot = sig::RipTarget(hit + 3, hit + 7);
+            const uintptr_t poolTable = sig::RipTarget(hit + 10, hit + 14);
+            if (tableSlot < base || tableSlot >= base + size ||
+                poolTable < base || poolTable >= base + size)
+            {
+                return;
+            }
+            __try
+            {
+                g_reachMuzzleHandleTable =
+                    *reinterpret_cast<const uintptr_t*>(tableSlot);
+            }
+            __except (EXCEPTION_EXECUTE_HANDLER)
+            {
+                return;
+            }
+            if (!g_reachMuzzleHandleTable)
+                return;
+            g_reachMuzzlePoolTable = poolTable;
+            g_reachMuzzleDecodeResolved = true;
+            LOG("Reach muzzle: tag decode resolved (handle table slot "
+                "haloreach.dll+0x%llX, pool haloreach.dll+0x%llX)",
+                (unsigned long long)(tableSlot - base),
+                (unsigned long long)(poolTable - base));
+        }
+        const uint32_t defIndex = g_reachMuzzleCapturedDefIndex.load(
+            std::memory_order_relaxed);
+        if (defIndex == 0xFFFFFFFFu ||
+            defIndex == g_reachMuzzleAttemptedDefIndex)
+        {
+            return;
+        }
+        g_reachMuzzleAttemptedDefIndex = defIndex;
+
+        uint32_t handle = 0;
+        if (!ReachReadU32(g_reachMuzzleHandleTable +
+                              static_cast<uintptr_t>(defIndex & 0xFFFFu) * 8 +
+                              4,
+                          &handle) ||
+            handle == 0 || handle == 0xFFFFFFFFu)
+        {
+            return;
+        }
+        uintptr_t defBase = 0;
+        if (!ReachDecodePoolAddress(handle, &defBase))
+            return;
+        uint32_t eventsHandle = 0;
+        if (!ReachReadU32(defBase + kReachEffectDefEventsBlockOffset,
+                          &eventsHandle) ||
+            !eventsHandle || eventsHandle == 0xFFFFFFFFu)
+        {
+            return;
+        }
+        uintptr_t eventsBase = 0;
+        if (!ReachDecodePoolAddress(eventsHandle, &eventsBase))
+            return;
+
+        for (size_t eventIndex = 0; eventIndex < 8; ++eventIndex)
+        {
+            const uintptr_t eventElement =
+                eventsBase + eventIndex * kReachEffectEventStride;
+            uint32_t psysHandle = 0;
+            if (!ReachReadU32(eventElement + kReachEffectEventPsysBlockOffset,
+                              &psysHandle) ||
+                !psysHandle || psysHandle == 0xFFFFFFFFu)
+            {
+                continue;
+            }
+            uintptr_t psysBase = 0;
+            if (!ReachDecodePoolAddress(psysHandle, &psysBase))
+                continue;
+            unsigned short modes[kReachEffectMaxWalk]{};
+            unsigned short locations[kReachEffectMaxWalk]{};
+            size_t count = 0;
+            for (; count < kReachEffectMaxWalk; ++count)
+            {
+                uint16_t mode = 0;
+                uint16_t location = 0;
+                if (!ReachReadU16(psysBase +
+                                      count * kReachEffectPsysStride +
+                                      kReachEffectPsysCameraModeOffset,
+                                  &mode) ||
+                    !ReachReadU16(psysBase +
+                                      count * kReachEffectPsysStride +
+                                      kReachEffectPsysLocationOffset,
+                                  &location) ||
+                    mode > 3 || location > 15)
+                {
+                    break;
+                }
+                modes[count] = mode;
+                locations[count] = location;
+            }
+            const ReachMuzzleRetargetDecision decision =
+                ReachDecideMuzzleRetarget(modes, locations, count);
+            if (decision.elementIndex < 0)
+                continue;
+            const uintptr_t target = psysBase +
+                static_cast<size_t>(decision.elementIndex) *
+                    kReachEffectPsysStride +
+                kReachEffectPsysLocationOffset;
+            const uint16_t original =
+                locations[decision.elementIndex];
+            if (!ReachWriteU16(target, decision.newLocation))
+                return;
+            g_reachMuzzlePatchAddress = target;
+            g_reachMuzzlePatchOriginal = original;
+            g_reachMuzzleRetargetDone.store(1, std::memory_order_relaxed);
+            LOG("Reach muzzle: RETARGETED - definition %u event %zu particle "
+                "system %d moved from location %u to location %u (the marker "
+                "its siblings track the gun with)",
+                defIndex & 0xFFFFu, eventIndex, decision.elementIndex,
+                original, decision.newLocation);
+            return;
+        }
+    }
+
+    void ReachMuzzleRetargetRestore()
+    {
+        if (g_reachMuzzlePatchAddress)
+        {
+            ReachWriteU16(g_reachMuzzlePatchAddress,
+                          g_reachMuzzlePatchOriginal);
+            g_reachMuzzlePatchAddress = 0;
+        }
+        g_reachMuzzleRetargetDone.store(0, std::memory_order_relaxed);
+        g_reachMuzzleCapturedDefIndex.store(
+            0xFFFFFFFFu, std::memory_order_relaxed);
     }
 
     // ---- suppress the third-person muzzle flash on the player's own body ----
@@ -15568,13 +15819,14 @@ namespace
             return;
         lastReportMs = now;
         lastTotal = total;
-        LOG("REACHFX: HUD flash widgets hidden %u; live-graph weapon writes %u; "
+        LOG("REACHFX: retargeted=%u; HUD flash widgets hidden %u; live-graph weapon writes %u; "
             "muzzle re-parented %u, "
             "out of range %u, "
             "nearest approach %u mm; lined up %u (no sibling yet %u); "
             "effect locations - redirected %u, world/no-fp-user %u, "
             "world/fp-output-none %u, already-first-person %u, unreadable %u "
             "(effect+0x50 low nibbles seen 0x%04X, high nibbles 0x%04X)",
+            g_reachMuzzleRetargetDone.load(std::memory_order_relaxed),
             g_reachHudFlashHidden.load(std::memory_order_relaxed),
             g_reachLiveGraphWeaponWrites.load(std::memory_order_relaxed),
             g_reachMuzzleReparented.load(std::memory_order_relaxed),
@@ -16096,6 +16348,7 @@ namespace
     {
         ReachCineProbeColdPoll(base, size, generation, soleReachTitle);
         ReachPauseColdPoll(base, size, generation, soleReachTitle);
+        ReachMuzzleRetargetTick(base, size, generation, soleReachTitle);
         ReachObserverCameraLogTick();
         ReachMuzzleLogTick();
         ReachCineProbeLogTick();
