@@ -14428,6 +14428,27 @@ bool Game_IsCameraOnlyBringup()
     return false;
 #endif
 }
+// Whether the ACTIVE title actually has its authored-crosshair capture hooks
+// installed. This is a live fact, not an assumption: if the capture is not
+// installed the procedural reticle is the only crosshair and must stay
+// visible, and if it IS installed the captured widget is the crosshair and the
+// procedural one must stay invisible so it cannot erase the art.
+//
+// ODST reaches the capture through the shared Halo 3 path -
+// OdstHudDrawWidgetHook calls HudDrawWidgetHook and OdstHudCrosshairVisibleHook
+// calls HudCrosshairVisibleHook - so once InstallOdstCrosshairHider succeeds it
+// captures exactly like Halo 3 does. It was previously excluded by
+// Game_IsCameraOnlyBringup, which is why it painted the procedural reticle over
+// art it had already captured.
+bool Game_TitleCapturesAuthoredCrosshair()
+{
+#if HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE
+    if (TitleAdapter_GetActiveTitle() == GameTitle::HaloReach)
+        return g_reachOrigHudDrawWidget != nullptr;
+#endif
+    return g_realHudDrawWidget != nullptr;
+}
+
 
 bool Game_OwnsReachAuthoredReticle()
 {

@@ -43,6 +43,10 @@ uint64_t Game_GetReachAuthoredCrosshairKey();
 // Identity of the crosshair art captured this frame, for any title. 0 means
 // nothing was captured. The compositor re-uploads the authored reticle only
 // when this changes, so a static crosshair costs no swapchain work.
+// True when the active title's authored-crosshair capture hooks are installed,
+// so the captured widget is the crosshair and the procedural reticle must stay
+// invisible. False means the procedural reticle IS the crosshair.
+bool Game_TitleCapturesAuthoredCrosshair();
 uint64_t Game_GetAuthoredCrosshairKey();
 // Called once per displayed frame, before any capture, so the per-frame
 // accumulation starts clean and a static crosshair yields a stable key.

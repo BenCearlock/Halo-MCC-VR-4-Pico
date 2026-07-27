@@ -4117,7 +4117,8 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
         // and similar, which made the old grace window expire and wipe the art
         // mid-fight. Holding the last art is both correct and free; a genuine
         // change (weapon swap, zoom, colour) re-uploads through the key path.
-        const bool titleCapturesAuthoredArt = !Game_IsCameraOnlyBringup();
+        const bool titleCapturesAuthoredArt =
+            Game_TitleCapturesAuthoredCrosshair();
         if (g_reticleContainsAuthored && titleCapturesAuthoredArt)
             return true;
 
@@ -4140,7 +4141,8 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
         // authored art lives in, wiping that art out on every repaint. That is
         // what showed the old crosshair, made the two alternate, and cost a
         // swapchain repaint per frame.
-        const bool titleHasAuthoredCapture = !Game_IsCameraOnlyBringup();
+        const bool titleHasAuthoredCapture =
+            Game_TitleCapturesAuthoredCrosshair();
         const float kProceduralOpacity =
             titleHasAuthoredCapture ? 0.0f : 1.0f;
         const bool enemy = g_reticleEnemy.load(std::memory_order_relaxed);
@@ -6309,7 +6311,8 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
                         static uint64_t s_lastUploadLogMs = 0;
                         // Halo 3 and ODST pay this same per-frame blocking
                         // swapchain upload for art that almost never changes.
-                        const bool titleCapturesArt = !Game_IsCameraOnlyBringup();
+                        const bool titleCapturesArt =
+                            Game_TitleCapturesAuthoredCrosshair();
                         const uint64_t reachCrosshairKey =
                             titleCapturesArt ? Game_GetAuthoredCrosshairKey() : 0;
                         // Measured: publishing the art costs ~4-5ms of the
