@@ -12041,120 +12041,6 @@ namespace
         return true;
     }
 
-    // ---- Reach weapon-fire camera-shake probe (LOG ONLY) -------------------
-    // The user reports the view being shoved when firing in Reach. Halo 3 and
-    // ODST bypass observer_apply_camera_effect, but that function's 60-byte
-    // signature has ZERO matches in haloreach.dll (measured this session: 1 in
-    // halo3.dll at 0x17DF44, 1 in halo3odst.dll at 0x1ACAF0, 0 in haloreach),
-    // so there is nothing to copy. Reach's own shake is a different system.
-    // HREK names it
-    //   c:\mcc\qfe1\reach\shared\engine\source\omaha\effects\player_effects.cpp
-    // with separate "camera_shake" and "camera_impulse" stages, per-slot max
-    // TRANSLATION at +0xFC..+0x104 and max ROTATION at +0x108..+0x110, 16 slots
-    // of stride 0x114 (bound proven by the cmp r8,0x1140 in the retail
-    // player_effect_set_max_rotation body).
-    //
-    // Why a probe and not a fix. ReachBuildHeadCullCamera memcpys the stock
-    // camera wholesale and only then imposes the headset orientation, so a
-    // ROTATIONAL impulse is already discarded while a TRANSLATIONAL one reaches
-    // the eye. But whether firing moves this camera at all is UNPROVEN: the
-    // assault rifle's weapon tag authors no shake and both of its aim-kick rates
-    // (min/full error look pitch rate) are 0, and Reach's .camera_shake tag
-    // group holds only impacts, explosions, melee, landings and overheat - no
-    // weapon-fire entry. If the camera does not step on the trigger then the
-    // kick is the first-person animation's camera node and every camera-side
-    // fix would be wrong. This measures which it is, and costs nothing visible.
-    //
-    // Sample on the engine thread, publish to a lock-free ring, log from the
-    // 50 ms worker: no logging, allocation or locking on the render path.
-    struct ReachShakeProbeEvent
-    {
-        float posStep;
-        float yawStep;
-        float pitchStep;
-        uint32_t frame;
-    };
-    struct ReachShakeProbeState
-    {
-        static constexpr uint32_t kSlots = 64;
-        std::atomic<bool> active{false};
-        std::atomic<uint32_t> written{0};
-        std::atomic<uint32_t> frames{0};
-        std::atomic<uint32_t> flagged{0};
-        ReachShakeProbeEvent ring[kSlots] = {};
-        // Engine thread only; never read by the worker.
-        float prevPos[3] = {};
-        float prevFwd[3] = {};
-        bool prevValid = false;
-    };
-    ReachShakeProbeState g_reachShakeProbe;
-
-    // Detector thresholds, deliberately low. This gates nothing; it only
-    // decides what is worth a log line. A walking player moves far less than
-    // this in one 120 Hz frame, so ordinary locomotion stays quiet.
-    constexpr float kReachShakePosStepUnits = 0.35f;
-    constexpr float kReachShakeYawStepRadians = 0.035f;   // ~2 degrees
-    constexpr float kReachShakeRadToDeg = 57.2957795f;
-
-    void ReachShakeProbeSample(
-        const unsigned char* stockCompact, bool cinematicRunning)
-    {
-        ReachShakeProbeState& p = g_reachShakeProbe;
-        // Cutscenes legitimately cut the camera; only gameplay is interesting.
-        if (!stockCompact || cinematicRunning)
-        {
-            p.prevValid = false;
-            return;
-        }
-        const float* pos = reinterpret_cast<const float*>(stockCompact + 0x00);
-        const float* fwd = reinterpret_cast<const float*>(stockCompact + 0x0C);
-        for (int i = 0; i < 3; ++i)
-        {
-            if (!isfinite(pos[i]) || !isfinite(fwd[i]))
-            {
-                p.prevValid = false;
-                return;
-            }
-        }
-        if ((fwd[0] * fwd[0] + fwd[1] * fwd[1]) <= 1e-8f)
-        {
-            p.prevValid = false;
-            return;
-        }
-        const uint32_t frame =
-            p.frames.fetch_add(1, std::memory_order_relaxed) + 1;
-        if (p.prevValid)
-        {
-            const float dx = pos[0] - p.prevPos[0];
-            const float dy = pos[1] - p.prevPos[1];
-            const float dz = pos[2] - p.prevPos[2];
-            const float posStep = sqrtf(dx * dx + dy * dy + dz * dz);
-            const float yawStep = fabsf(WrapPi(
-                atan2f(fwd[1], fwd[0]) -
-                atan2f(p.prevFwd[1], p.prevFwd[0])));
-            const float pitchStep = fabsf(
-                asinf(fmaxf(-1.0f, fminf(1.0f, fwd[2]))) -
-                asinf(fmaxf(-1.0f, fminf(1.0f, p.prevFwd[2]))));
-            if (posStep > kReachShakePosStepUnits ||
-                yawStep > kReachShakeYawStepRadians ||
-                pitchStep > kReachShakeYawStepRadians)
-            {
-                const uint32_t slot =
-                    p.written.fetch_add(1, std::memory_order_acq_rel) %
-                    ReachShakeProbeState::kSlots;
-                p.ring[slot].posStep = posStep;
-                p.ring[slot].yawStep = yawStep;
-                p.ring[slot].pitchStep = pitchStep;
-                p.ring[slot].frame = frame;
-                p.flagged.fetch_add(1, std::memory_order_relaxed);
-            }
-        }
-        memcpy(p.prevPos, pos, sizeof(p.prevPos));
-        memcpy(p.prevFwd, fwd, sizeof(p.prevFwd));
-        p.prevValid = true;
-        p.active.store(true, std::memory_order_release);
-    }
-
     // Build the single head-centre camera consumed by Reach's outer CPU
     // visibility pass. The frustum/projection helpers are the exact stock
     // pre-scope pair. The caller commits this same centre to the bounded
@@ -12297,16 +12183,6 @@ namespace
             g_reachCineProbe.cutPrevStamp = shotStamp;
             g_reachCineProbe.cutPrevVisible = screenVisible;
             g_reachCineProbe.cutPrevValid = true;
-        }
-        // Log-only: measure the pristine camera's own per-frame step during
-        // gameplay, immediately before this memcpy inherits its position and
-        // ReachApplyHeadLook overwrites its orientation. Reads nothing the
-        // engine will miss and writes nothing the engine will see.
-        {
-            bool cinematic = false;
-            if (g_reachCineProbe.armed.load(std::memory_order_acquire))
-                cinematic = (g_reachCineProbe.bufA[0x24 / 4] & 0xFFu) != 0;
-            ReachShakeProbeSample(stockCompact, cinematic);
         }
         memcpy(headCenter, stockCompact, kReachCompactCameraBytes);
         ApplyVrTurn(tracking.pad);
@@ -16573,50 +16449,6 @@ namespace
             lastBurstMs = now;
     }
 
-    // 50 ms worker: drain the fire-shake ring. All logging lives here, off the
-    // render path. Fail-open: an inactive probe simply prints nothing.
-    void ReachShakeProbeLogTick()
-    {
-        ReachShakeProbeState& p = g_reachShakeProbe;
-        if (!p.active.load(std::memory_order_acquire))
-            return;
-        static uint32_t drained = 0;
-        static uint64_t lastSummaryMs = 0;
-        const uint32_t written = p.written.load(std::memory_order_acquire);
-        if (written < drained)
-            drained = written;            // counter reset across a reload
-        uint32_t dropped = 0;
-        if (written - drained > ReachShakeProbeState::kSlots)
-        {
-            dropped = written - drained - ReachShakeProbeState::kSlots;
-            drained = written - ReachShakeProbeState::kSlots;
-        }
-        while (drained < written)
-        {
-            const ReachShakeProbeEvent e =
-                p.ring[drained % ReachShakeProbeState::kSlots];
-            ++drained;
-            LOG("Reach shake probe: frame %u step pos=%.4fu yaw=%.2fdeg "
-                "pitch=%.2fdeg",
-                (unsigned)e.frame, e.posStep, e.yawStep * kReachShakeRadToDeg,
-                e.pitchStep * kReachShakeRadToDeg);
-        }
-        if (dropped)
-            LOG("Reach shake probe: %u events dropped (ring overrun)",
-                (unsigned)dropped);
-        const uint64_t now = GetTickCount64();
-        if (now - lastSummaryMs >= 5000)
-        {
-            LOG("Reach shake probe: %u gameplay frames sampled, %u flagged "
-                "(pos>%.2fu or yaw/pitch>%.1fdeg)",
-                (unsigned)p.frames.load(std::memory_order_relaxed),
-                (unsigned)p.flagged.load(std::memory_order_relaxed),
-                kReachShakePosStepUnits,
-                kReachShakeYawStepRadians * kReachShakeRadToDeg);
-            lastSummaryMs = now;
-        }
-    }
-
     void ReachCameraCore_Poll(
         uintptr_t base, size_t size, uint32_t generation, bool soleReachTitle)
     {
@@ -16626,7 +16458,6 @@ namespace
         ReachObserverCameraLogTick();
         ReachMuzzleLogTick();
         ReachCineProbeLogTick();
-        ReachShakeProbeLogTick();
         LogReachFpCameraUploadIfReady();
         LogReachFpStatusIfNew();
         const bool installed =
