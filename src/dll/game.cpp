@@ -14475,22 +14475,30 @@ namespace
         return published;
     }
     // Worker-side only: report which of the six observer-camera call sites are
-    // actually exercised, and which ones the head-lock corrected. Two of the six
-    // are named from static evidence; the other four are unidentified, so one
-    // headset session names them from real play instead of a guess. Logs once
-    // when the set of exercised sites changes, then stays quiet.
+    // actually exercised, and which ones the head-lock corrected.
+    //
+    // This originally logged only when the SET of exercised sites changed, which
+    // made it nearly useless: the accepted 6bd17db session printed one snapshot
+    // 57 ms after arming, with 0 corrections on every row because the eye scope
+    // had not run yet, and never printed again. The headset result proved the
+    // correction works while the counters said nothing. Report on a set change
+    // OR every 30 s while counts are still moving, so the numbers reflect play.
     void ReachObserverCameraLogTick()
     {
         static uint32_t lastMask = 0xFFFFFFFFu;
+        static uint64_t lastReportMs = 0;
+        static uint32_t lastTotal = 0;
         uint32_t mask = 0;
         uint32_t hits[6]{};
         uint32_t fixed[6]{};
+        uint32_t total = 0;
         for (int site = 0; site < 6; ++site)
         {
             hits[site] = g_reachObserverCameraSiteHits[site].load(
                 std::memory_order_relaxed);
             fixed[site] = g_reachObserverCameraCorrected[site].load(
                 std::memory_order_relaxed);
+            total += hits[site] + fixed[site];
             if (hits[site])
                 mask |= (1u << site);
         }
@@ -14498,9 +14506,15 @@ namespace
             g_reachObserverCameraUnknownSite.load(std::memory_order_relaxed);
         if (unknown)
             mask |= (1u << 6);
-        if (mask == lastMask)
+        const uint64_t now = GetTickCount64();
+        const bool setChanged = mask != lastMask;
+        const bool periodic = total != lastTotal && lastReportMs != 0 &&
+            now - lastReportMs >= 30000;
+        if (!setChanged && !periodic)
             return;
         lastMask = mask;
+        lastReportMs = now;
+        lastTotal = total;
         if (!mask)
             return;
         for (int site = 0; site < 6; ++site)

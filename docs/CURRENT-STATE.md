@@ -513,6 +513,40 @@ code-first attempts missed it.
 - **Subtitles need a readable plane** (they are the interface text layer, not
   a CHUD widget - see below).
 
+### ACCEPTED: Reach character tags and objective markers off the hand - 2026-07-27
+
+Headset confirmed: "you actually fixed the character tags and objective
+markers. It's not perfect, but it's still very doable, so we can stick with
+that." Crosshair, guns, hands and 3D depth all confirmed unaffected. Halo 3 and
+ODST regression NOT yet run.
+
+| Identity | Value |
+| --- | --- |
+| Accepted source | `6bd17db47b6e653ec66198287df19b9b4d56e6aa` |
+| `halo3xr.dll` SHA-256 | `121D4FDFEBDC174691018156978AF3F6F38EAA5989019793865B5E0EBCC8528F` |
+
+Stock Reach has ONE camera parent: `render_camera_from_observer_camera`
+(`haloreach.dll+0x00287DFC`) builds both the world render camera and the CHUD
+projection camera from the same observer camera. Our aim steering points that
+observer camera down the controller ray while head-look goes to a private
+render-side copy, so everything except the world followed the hand. The seventh,
+optional hook restores the single parent by copying the per-eye head camera the
+world was already rendered from into the destination for every non-world call
+site.
+
+**The RAIN is not fixed and does NOT go through this function.** The site
+telemetry from the accepted session proves it: only three of the six call sites
+were ever exercised - site 2 (world render, never corrected), site 3
+(`+0x26FA47`, unidentified), and site 5 (CHUD projection). No rain consumer
+appears. The player reports the rain still rotates with BOTH head and hand,
+which is a separate defect with a separate camera source, still to be located.
+
+**Instrumentation defect to fix, not a behavior defect:** the worker logs the
+site table only when the SET of exercised sites changes, so the accepted session
+printed one snapshot 57 ms after arming with `0 head-locked` on every row and
+never printed again. The correction demonstrably works (headset result), but the
+counters cannot show it. Make the report periodic before relying on it again.
+
 ### ACCEPTED: Reach native pause state - 2026-07-27
 
 Headset confirmed by the user: "I tested it, and it worked." Reach remains
