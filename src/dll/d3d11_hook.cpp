@@ -2,6 +2,7 @@
 #include <d3d11.h>
 #include <dxgi1_2.h>
 #include <dxgi1_5.h>
+#include <algorithm>
 #include <atomic>
 #include <cstdlib>
 #include <climits>
@@ -609,7 +610,74 @@ static void STDMETHODCALLTYPE OMSetRenderTargetsHook(ID3D11DeviceContext* contex
 // is the most direct way left to find that path without disassembling more
 // of a stripped optimized binary blind.
 static std::atomic<int> g_reachDrawSamplesTaken{0};
-constexpr int kReachDrawSampleBudget = 64;
+constexpr int kReachDrawSampleBudget = 12;
+
+// The first 64-sample pass (2026-07-26) found the real signature: a run of
+// three sequential quads (indexCount==6, baseVertex 0/4/8, stride 40) at the
+// full-resolution viewport, distinct from a stride-32 mip/blur chain that
+// shrinks through power-of-two sizes. This pass narrows to exactly that shape
+// and reads the actual vertex bytes back (via a CPU-readable staging copy -
+// standard, safe, read-only; the draw call itself is untouched) instead of
+// only the buffer's stride, to see the real screen-space coordinates instead
+// of inferring them.
+static bool IsProvenHudQuadShape(
+    UINT indexCount, UINT stride, const D3D11_VIEWPORT& vp, float backbufferW)
+{
+    return indexCount == 6 && stride == 40 &&
+        vp.Width >= backbufferW - 1.0f;
+}
+
+static void DumpVertexBufferSample(
+    ID3D11DeviceContext* context, ID3D11Buffer* vb, UINT stride, UINT sampleNo)
+{
+    ID3D11Device* device = nullptr;
+    context->GetDevice(&device);
+    if (!device)
+        return;
+    D3D11_BUFFER_DESC srcDesc{};
+    vb->GetDesc(&srcDesc);
+    D3D11_BUFFER_DESC stagingDesc = srcDesc;
+    stagingDesc.Usage = D3D11_USAGE_STAGING;
+    stagingDesc.BindFlags = 0;
+    stagingDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+    stagingDesc.MiscFlags = 0;
+    ID3D11Buffer* staging = nullptr;
+    const HRESULT hr = device->CreateBuffer(&stagingDesc, nullptr, &staging);
+    device->Release();
+    if (FAILED(hr) || !staging)
+        return;
+    context->CopyResource(staging, vb);
+    D3D11_MAPPED_SUBRESOURCE mapped{};
+    if (SUCCEEDED(context->Map(
+            staging, 0, D3D11_MAP_READ, 0, &mapped)))
+    {
+        const uint8_t* bytes = static_cast<const uint8_t*>(mapped.pData);
+        // Log up to 4 vertices worth (our proven shape uses 4 unique
+        // vertices per quad, 3 quads); stride 40 = 10 floats/vertex.
+        const UINT vertsToShow = std::min(
+            4u, srcDesc.ByteWidth / std::max(stride, 1u));
+        for (UINT v = 0; v < vertsToShow; ++v)
+        {
+            const float* f = reinterpret_cast<const float*>(
+                bytes + static_cast<size_t>(v) * stride);
+            const UINT floatsToShow = std::min(stride / 4u, 10u);
+            char line[256];
+            int n = _snprintf_s(line, sizeof(line), _TRUNCATE,
+                "REACHVTX[sample %u]: vertex %u:", sampleNo, v);
+            for (UINT fi = 0; fi < floatsToShow && n > 0 &&
+                 static_cast<size_t>(n) < sizeof(line); ++fi)
+            {
+                char piece[24];
+                _snprintf_s(piece, sizeof(piece), _TRUNCATE,
+                    " %.4f", f[fi]);
+                strcat_s(line, sizeof(line), piece);
+            }
+            LOG("%s", line);
+        }
+        context->Unmap(staging, 0);
+    }
+    staging->Release();
+}
 
 static void LogReachHudDrawIfSmall(ID3D11DeviceContext* context,
     UINT indexCount, UINT startIndex, INT baseVertex)
@@ -619,9 +687,6 @@ static void LogReachHudDrawIfSmall(ID3D11DeviceContext* context,
         return;
     if (TitleAdapter_GetActiveTitle() != GameTitle::HaloReach)
         return;
-    // A HUD element is a handful of quads, not a world mesh: reject anything
-    // that isn't index-count-shaped like 1-8 quads (6 indices each) or a
-    // small triangle fan/strip, so this cannot fire on world geometry.
     if (indexCount == 0 || indexCount > 64)
         return;
 
@@ -633,18 +698,35 @@ static void LogReachHudDrawIfSmall(ID3D11DeviceContext* context,
     UINT stride = 0, offset = 0;
     context->IAGetVertexBuffers(0, 1, &vb, &stride, &offset);
     const bool hadVb = vb != nullptr;
-    if (vb)
-        vb->Release();
 
-    if (g_reachDrawSamplesTaken.fetch_add(1, std::memory_order_relaxed) >=
-        kReachDrawSampleBudget)
+    unsigned forcedBackbufferW = 0, forcedBackbufferH = 0;
+    D3D_GetForcedRenderSize(forcedBackbufferW, forcedBackbufferH);
+    const float backbufferW = forcedBackbufferW
+        ? static_cast<float>(forcedBackbufferW) : 3786.0f;
+    const bool provenShape =
+        hadVb && IsProvenHudQuadShape(indexCount, stride, vp, backbufferW);
+
+    if (!provenShape)
+    {
+        if (vb)
+            vb->Release();
         return;
+    }
+
+    const int sampleNo =
+        g_reachDrawSamplesTaken.fetch_add(1, std::memory_order_relaxed) + 1;
+    if (sampleNo > kReachDrawSampleBudget)
+    {
+        vb->Release();
+        return;
+    }
     LOG("REACHDRAW: DrawIndexed count=%u startIndex=%u baseVertex=%d "
-        "vp=(%.1f,%.1f %.1fx%.1f) vbStride=%u hasVB=%d [sample %d/%d]",
+        "vp=(%.1f,%.1f %.1fx%.1f) vbStride=%u [sample %d/%d]",
         indexCount, startIndex, baseVertex, vp.TopLeftX, vp.TopLeftY,
-        vp.Width, vp.Height, stride, hadVb ? 1 : 0,
-        g_reachDrawSamplesTaken.load(std::memory_order_relaxed),
-        kReachDrawSampleBudget);
+        vp.Width, vp.Height, stride, sampleNo, kReachDrawSampleBudget);
+    DumpVertexBufferSample(
+        context, vb, stride, static_cast<UINT>(sampleNo));
+    vb->Release();
 }
 
 static void STDMETHODCALLTYPE DrawIndexedHook(ID3D11DeviceContext* context,
