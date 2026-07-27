@@ -1438,17 +1438,20 @@ namespace
     // Plain byte compare honouring the adapter's wildcard mask. No SEH here:
     // every caller has already established that the bytes are readable.
     static bool SafeFrameAnchorEquals(
-        const unsigned char* candidate, const HudLayoutAdapter& adapter)
+        const unsigned char* candidate, const HudLayoutAnchorView& view)
     {
-        for (int i = 8; i < adapter.anchorLength; ++i)
+        for (int i = 8; i < view.anchorLength; ++i)
         {
-            const uint8_t mask = adapter.mask[i];
-            if (mask && (candidate[i] & mask) != (adapter.anchor[i] & mask))
+            const uint8_t mask = view.mask[i];
+            if (mask && (candidate[i] & mask) != (view.anchor[i] & mask))
                 return false;
         }
         return true;
     }
 
+    // Matches every resolution-class anchor the adapter carries, not only the
+    // primary one. Reach authors one curvature record per screen shape and the
+    // engine picks by aspect, so the widescreen record alone is not enough.
     static int SafeFrameScanRegion(
         uintptr_t regionBase, size_t len, const HudLayoutAdapter& adapter,
         uintptr_t* out, int maxOut)
@@ -1456,22 +1459,39 @@ namespace
         int found = 0;
         const unsigned char* p =
             reinterpret_cast<const unsigned char*>(regionBase);
-        const size_t span = static_cast<size_t>(HudLayoutScanSpan(adapter));
+        const int anchorCount = HudLayoutAnchorCount(adapter);
         __try
         {
-            uint64_t prefix = 0;
-            memcpy(&prefix, adapter.anchor.data(), sizeof(prefix));
-            for (size_t i = 0; i + span <= len && found < maxOut; ++i)
+            uint64_t prefixes[1 + kHudLayoutMaxAltAnchors]{};
+            size_t spans[1 + kHudLayoutMaxAltAnchors]{};
+            for (int a = 0; a < anchorCount; ++a)
             {
-                if (*reinterpret_cast<const uint64_t*>(p + i) != prefix)
-                    continue;
-                if (!SafeFrameAnchorEquals(p + i, adapter))
-                    continue;
-                out[found++] = regionBase + i +
-                    static_cast<size_t>(adapter.safeFrameOffset);
-                // Skip the matched identity only, exactly as before: two
-                // curvature records are far further apart than one anchor.
-                i += static_cast<size_t>(adapter.anchorLength) - 1;
+                const HudLayoutAnchorView view = HudLayoutAnchorAt(adapter, a);
+                memcpy(&prefixes[a], view.anchor, sizeof(prefixes[a]));
+                spans[a] = static_cast<size_t>(HudLayoutScanSpan(view));
+            }
+            for (size_t i = 0; i < len && found < maxOut; ++i)
+            {
+                const uint64_t here =
+                    (i + 8 <= len)
+                        ? *reinterpret_cast<const uint64_t*>(p + i) : 0;
+                if (i + 8 > len)
+                    break;
+                for (int a = 0; a < anchorCount; ++a)
+                {
+                    if (here != prefixes[a] || i + spans[a] > len)
+                        continue;
+                    const HudLayoutAnchorView view =
+                        HudLayoutAnchorAt(adapter, a);
+                    if (!SafeFrameAnchorEquals(p + i, view))
+                        continue;
+                    out[found++] = regionBase + i +
+                        static_cast<size_t>(view.safeFrameOffset);
+                    // Skip the matched identity only: two curvature records
+                    // are far further apart than one anchor.
+                    i += static_cast<size_t>(view.anchorLength) - 1;
+                    break;
+                }
             }
         }
         __except (EXCEPTION_EXECUTE_HANDLER) { return found; }
@@ -1548,20 +1568,32 @@ namespace
         return wrote;
     }
 
+    // A slot is valid if ANY of the adapter's resolution-class anchors still
+    // matches at its own offset behind the slot. Distinct virtual width/height
+    // bytes keep the classes from aliasing each other.
     static int SafeFrameVerifySlot(
         uintptr_t slot, const HudLayoutAdapter& adapter,
         uint32_t* destinationZ, uint32_t* h, uint32_t* v)
     {
-        const uintptr_t anchorAddress =
-            slot - static_cast<uintptr_t>(adapter.safeFrameOffset);
+        const int anchorCount = HudLayoutAnchorCount(adapter);
         __try
         {
-            if (memcmp(reinterpret_cast<const void*>(anchorAddress),
-                       adapter.anchor.data(), 8) != 0)
-                return 0;
-            if (!SafeFrameAnchorEquals(
-                    reinterpret_cast<const unsigned char*>(anchorAddress),
-                    adapter))
+            bool matched = false;
+            for (int a = 0; a < anchorCount && !matched; ++a)
+            {
+                const HudLayoutAnchorView view = HudLayoutAnchorAt(adapter, a);
+                const uintptr_t anchorAddress =
+                    slot - static_cast<uintptr_t>(view.safeFrameOffset);
+                if (memcmp(reinterpret_cast<const void*>(anchorAddress),
+                           view.anchor, 8) != 0)
+                    continue;
+                if (!SafeFrameAnchorEquals(
+                        reinterpret_cast<const unsigned char*>(anchorAddress),
+                        view))
+                    continue;
+                matched = true;
+            }
+            if (!matched)
                 return 0;
             *destinationZ = HudLayoutHasDepthField(adapter)
                 ? *reinterpret_cast<const volatile uint32_t*>(
@@ -14356,15 +14388,15 @@ void Game_LocateHudSafeFrames()
         profile = HudLayoutProfile::Halo3ODST;
 #endif
 #if HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE
-    // DISABLED 2026-07-26: a live headset session proved this write has zero
-    // visible effect at any value from 0.30 to 1.00, including the drift bug
-    // where forcing every-frame writes made the value visibly wobble with
-    // live headset FOV jitter. A read-only probe independently confirmed the
-    // write lands, holds, and is the only real copy of the record in the
-    // process, so the data pipeline is not the defect. The chud_globals
-    // curvature-info safe frame is very likely vestigial 360-era data that
-    // MCC's PC Reach renderer does not consult; see docs/RE-notes.md, the
-    // Reach HUD layout entry, before re-enabling this on a new theory.
+    // Re-enabled 2026-07-27 with the missing resolution class. The earlier
+    // no-effect result was measured while only Reach's "fullscreen wide"
+    // record was ever written; the per-eye VR target is 3752x3828 (aspect
+    // 0.98), which is not widescreen, so the engine was reading a record this
+    // mod never touched. The adapter now carries the fullscreen-standard
+    // record too.
+    if (profile == HudLayoutProfile::None &&
+        TitleAdapter_GetActiveTitle() == GameTitle::HaloReach)
+        profile = HudLayoutProfile::HaloReach;
 #endif
     if (profile == HudLayoutProfile::None &&
         Game_AllowsSharedGameplayFeatures())

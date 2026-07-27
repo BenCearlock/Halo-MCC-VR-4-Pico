@@ -28,6 +28,23 @@ inline constexpr int kMaxHudLayoutBlocks = 16;
 // so there is nothing for the shared depth write to move.
 inline constexpr int kHudLayoutNoDepthField = INT32_MIN;
 
+// A title may author more than one curvature record for the same skin, one per
+// resolution class (Reach: fullscreen wide / fullscreen standard / halfscreen /
+// quarterscreen...). The engine picks one by the render's aspect, so writing
+// only the widescreen record is not enough when the render is not widescreen -
+// which is exactly the VR case: Reach's per-eye target is 3752x3828 (aspect
+// 0.98), nowhere near 16:9. Alternates are matched and written identically to
+// the primary anchor; every one still has to pass its own full identity check.
+inline constexpr int kHudLayoutMaxAltAnchors = 3;
+
+struct HudLayoutAltAnchor
+{
+    std::array<uint8_t, kHudLayoutMaxAnchor> anchor;
+    std::array<uint8_t, kHudLayoutMaxAnchor> mask;
+    int anchorLength;
+    int safeFrameOffset;
+};
+
 struct HudLayoutAdapter
 {
     HudLayoutProfile profile;
@@ -49,6 +66,9 @@ struct HudLayoutAdapter
     // Halo 3's tag data lives in private read-write memory. Reach's map data
     // does not have to, so its adapter may also inspect mapped regions.
     bool scanMappedRegions;
+    // Additional resolution-class records for the same skins (see above).
+    std::array<HudLayoutAltAnchor, kHudLayoutMaxAltAnchors> altAnchors;
+    int altAnchorCount;
     // Halo 3 and ODST's record is authored-static once loaded: the writer can
     // skip a slot whose bytes already match what we want, because nothing else
     // touches it between our passes. Reach's record is NOT static: read-back
@@ -98,6 +118,8 @@ inline constexpr HudLayoutAdapter kHalo3HudLayoutAdapter = {
     3,
     3,
     false,
+    {},
+    0,
     false,
 };
 
@@ -120,6 +142,8 @@ inline constexpr HudLayoutAdapter kOdstHudLayoutAdapter = {
     1,
     1,
     false,
+    {},
+    0,
     false,
 };
 
@@ -184,6 +208,45 @@ inline constexpr HudLayoutAdapter kReachHudLayoutAdapter = {
     3,
     kMaxHudLayoutBlocks,
     true,
+    // Alternate resolution class: "fullscreen standard{480i fullscreen}".
+    // Reach authors this record identically in all three skins (920x690
+    // virtual canvas, sensor origin 88,624, sensor radius 58, vehicle 3d
+    // sensor radius 78, blip radius 6), so no byte here needs a wildcard.
+    // These are the game's own authored virtual-canvas constants, NOT the
+    // player's render resolution - covering both aspect classes is precisely
+    // what makes this independent of whatever resolution or window mode is in
+    // use, because the engine's own choice between them is then irrelevant.
+    {{
+        {
+            HudLayoutBytes({
+                0x98, 0x03, 0x00, 0x00, 0xB2, 0x02, 0x00, 0x00, // 920, 690
+                0x00, 0x00, 0xB0, 0x42, 0x00, 0x00, 0x1C, 0x44, // 88.0, 624.0
+                0x00, 0x00, 0x68, 0x42, 0x00, 0x00, 0x9C, 0x42, // 58.0, 78.0
+                0x00, 0x00, 0xC0, 0x40,                         // blip 6.0
+                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // minimap
+                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // safe frame
+                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // dings 0/0
+            }),
+            HudLayoutBytes({
+                0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+                0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+                0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+                0xFF, 0xFF, 0xFF, 0xFF,
+                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+            }),
+            76,
+            60,
+        },
+    }},
+    1,
     true,
 };
 
@@ -203,6 +266,33 @@ inline constexpr const HudLayoutAdapter* HudLayoutAdapterFor(
     }
 }
 
+// One resolution-class anchor of an adapter: primary (index 0) or alternate.
+struct HudLayoutAnchorView
+{
+    const uint8_t* anchor;
+    const uint8_t* mask;
+    int anchorLength;
+    int safeFrameOffset;
+};
+
+inline constexpr int HudLayoutAnchorCount(const HudLayoutAdapter& adapter)
+{
+    return 1 + adapter.altAnchorCount;
+}
+
+inline constexpr HudLayoutAnchorView HudLayoutAnchorAt(
+    const HudLayoutAdapter& adapter, int index)
+{
+    if (index <= 0)
+        return HudLayoutAnchorView{
+            adapter.anchor.data(), adapter.mask.data(),
+            adapter.anchorLength, adapter.safeFrameOffset};
+    const HudLayoutAltAnchor& alt = adapter.altAnchors[index - 1];
+    return HudLayoutAnchorView{
+        alt.anchor.data(), alt.mask.data(),
+        alt.anchorLength, alt.safeFrameOffset};
+}
+
 inline constexpr bool HudLayoutHasDepthField(const HudLayoutAdapter& adapter)
 {
     return adapter.depthFromSlot != kHudLayoutNoDepthField;
@@ -210,9 +300,39 @@ inline constexpr bool HudLayoutHasDepthField(const HudLayoutAdapter& adapter)
 
 // Every adapter must keep the scan prefix fully compared and stay inside the
 // fixed anchor buffer, or the shared scanner would silently widen its match.
+inline constexpr bool HudLayoutAnchorWellFormed(
+    const HudLayoutAnchorView& view)
+{
+    if (view.anchorLength < 8 || view.anchorLength > kHudLayoutMaxAnchor)
+        return false;
+    if (view.safeFrameOffset < 8 ||
+        view.safeFrameOffset + 8 > kHudLayoutMaxAnchor)
+        return false;
+    for (int i = 0; i < 8; ++i)
+    {
+        if (view.mask[i] != 0xFF)
+            return false;
+    }
+    for (int i = view.safeFrameOffset;
+         i < view.safeFrameOffset + 8 && i < view.anchorLength; ++i)
+    {
+        if (view.mask[i] != 0x00)
+            return false;
+    }
+    return true;
+}
+
 inline constexpr bool HudLayoutAdapterWellFormed(
     const HudLayoutAdapter& adapter)
 {
+    if (adapter.altAnchorCount < 0 ||
+        adapter.altAnchorCount > kHudLayoutMaxAltAnchors)
+        return false;
+    for (int i = 1; i < HudLayoutAnchorCount(adapter); ++i)
+    {
+        if (!HudLayoutAnchorWellFormed(HudLayoutAnchorAt(adapter, i)))
+            return false;
+    }
     if (adapter.anchorLength < 8 || adapter.anchorLength > kHudLayoutMaxAnchor)
         return false;
     if (adapter.safeFrameOffset < 8 ||
@@ -239,11 +359,11 @@ inline constexpr bool HudLayoutAdapterWellFormed(
 }
 
 // The scan must be able to read the safe-frame pair as well as the anchor.
-inline constexpr int HudLayoutScanSpan(const HudLayoutAdapter& adapter)
+inline constexpr int HudLayoutScanSpan(const HudLayoutAnchorView& view)
 {
-    const int throughSafeFrame = adapter.safeFrameOffset + 8;
-    return adapter.anchorLength > throughSafeFrame
-        ? adapter.anchorLength : throughSafeFrame;
+    const int throughSafeFrame = view.safeFrameOffset + 8;
+    return view.anchorLength > throughSafeFrame
+        ? view.anchorLength : throughSafeFrame;
 }
 
 static_assert(HudLayoutAdapterWellFormed(kHalo3HudLayoutAdapter));
