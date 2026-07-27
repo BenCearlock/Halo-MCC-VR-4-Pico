@@ -1,5 +1,5 @@
 > ### HALO 4 WILL BEGIN SOON
->
+> Halo 3 and ODST work best, reach has some visual bugs atm 
 > **DO NOT ACCEPT FIXES FOR THIS MOD FROM OUTSIDE SOURCES. WE DON'T KNOW WHAT'S
 > IN THEM.**
 >
