@@ -7996,6 +7996,45 @@ bool VR_BeginAuthoredReticleCapture()
     return BeginAuthoredReticleCaptureInternal(false);
 }
 
+// Hiding a widget does not need the capture path's render-target readback and
+// rebind - it only needs the pixels not to land. An empty scissor rect makes
+// the rasteriser discard them for two calls and no COM traffic.
+namespace
+{
+    struct NullScissorState
+    {
+        bool active = false;
+        UINT count = 0;
+        D3D11_RECT scissors[
+            D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE]{};
+    };
+    NullScissorState g_nullScissorState;
+}
+
+bool VR_BeginNullScissor()
+{
+    if (!g_context || g_nullScissorState.active)
+        return false;
+    auto& saved = g_nullScissorState;
+    saved.count = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE;
+    g_context->RSGetScissorRects(&saved.count, saved.scissors);
+    const D3D11_RECT empty{0, 0, 0, 0};
+    g_context->RSSetScissorRects(1, &empty);
+    saved.active = true;
+    return true;
+}
+
+void VR_EndNullScissor()
+{
+    auto& saved = g_nullScissorState;
+    if (!saved.active || !g_context)
+        return;
+    if (saved.count)
+        g_context->RSSetScissorRects(saved.count, saved.scissors);
+    saved.count = 0;
+    saved.active = false;
+}
+
 bool VR_BeginPreparedAuthoredReticleCapture()
 {
     return BeginAuthoredReticleCaptureInternal(true);

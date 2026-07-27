@@ -9993,6 +9993,10 @@ namespace
         // restore - eight RTV AddRefs and Releases each - roughly ten times a
         // frame. Held open, it is once per eye.
         bool captureOpen = false;
+        // Hiding uses an empty scissor rect instead of the capture path's
+        // render-target readback/rebind, so only the eye that actually
+        // captures art pays for the expensive redirect.
+        bool hideOpen = false;
         uint32_t generation = 0;
         uint32_t eye = 0;
         uint64_t preparedSerial = 0;
@@ -10240,24 +10244,25 @@ namespace
     // five-argument chud_draw_widget transaction. Select only class 2 and
     // reuse Halo 3/ODST's authored-widget capture. No procedural reticle,
     // widget-name fallback, or mixed flat-crosshair mode exists.
-    // Open/close the authored-reticle redirect at most once per eye.
-    static void OpenReachAuthoredCapture()
-    {
-        ReachFpCameraEyeScope& scope = g_reachFpCameraEyeScope;
-        if (scope.captureOpen)
-            return;
-        if (VR_BeginAuthoredReticleCapture())
-            scope.captureOpen = true;
-        else
-            // The redirect IS the mechanism. If it is unavailable there is no
-            // second way to do this - reject the transaction and let verified
-            // teardown run. No alternate draw mode.
-            RejectReachChudParityForCurrentEye();
-    }
+    // A widget draw is routed one of three ways, and the transition is done
+    // only when the mode actually changes, so consecutive widgets of the same
+    // kind cost nothing:
+    //   Visible  - untouched, draws into the eye.
+    //   Hidden   - empty scissor rect. Two calls, no COM traffic. Used when
+    //              the pixels are simply unwanted.
+    //   Captured - the full authored-reticle redirect, which reads back and
+    //              rebinds render targets, viewports and scissors. Only the
+    //              configured capture eye pays this.
+    enum class ReachWidgetRoute { Visible, Hidden, Captured };
 
     static void CloseReachAuthoredCapture()
     {
         ReachFpCameraEyeScope& scope = g_reachFpCameraEyeScope;
+        if (scope.hideOpen)
+        {
+            scope.hideOpen = false;
+            VR_EndNullScissor();
+        }
         if (!scope.captureOpen)
             return;
         scope.captureOpen = false;
@@ -10265,6 +10270,33 @@ namespace
             scope.authoredCrosshairCaptured = true;
         else
             RejectReachChudParityForCurrentEye();
+    }
+
+    static void RouteReachWidget(ReachWidgetRoute route)
+    {
+        ReachFpCameraEyeScope& scope = g_reachFpCameraEyeScope;
+        const bool wantCapture = route == ReachWidgetRoute::Captured;
+        const bool wantHide = route == ReachWidgetRoute::Hidden;
+        if (scope.captureOpen == wantCapture && scope.hideOpen == wantHide)
+            return;
+        CloseReachAuthoredCapture();
+        if (wantCapture)
+        {
+            if (VR_BeginAuthoredReticleCapture())
+                scope.captureOpen = true;
+            else
+                // The redirect IS the mechanism for capture. If it is
+                // unavailable there is no second way to do this - reject the
+                // transaction and let verified teardown run.
+                RejectReachChudParityForCurrentEye();
+        }
+        else if (wantHide)
+        {
+            if (VR_BeginNullScissor())
+                scope.hideOpen = true;
+            else
+                RejectReachChudParityForCurrentEye();
+        }
     }
 
     __declspec(noinline) void __fastcall ReachHudDrawWidgetDetour(
@@ -10301,7 +10333,7 @@ namespace
             {
                 // The magnified world-only scope picture must not receive a
                 // native CHUD widget, but the call still has to happen.
-                OpenReachAuthoredCapture();
+                RouteReachWidget(ReachWidgetRoute::Hidden);
                 original(userIndex, descriptor, widgetIndex,
                          useAlternatePath, drawState);
                 return;
@@ -10330,7 +10362,7 @@ namespace
                 isCrosshairClass)
             {
                 // Already-failed eye: hide the widget, but never skip the call.
-                OpenReachAuthoredCapture();
+                RouteReachWidget(ReachWidgetRoute::Hidden);
                 original(userIndex, descriptor, widgetIndex,
                          useAlternatePath, drawState);
                 return;
@@ -10371,10 +10403,11 @@ namespace
             // again. Reach draws one crosshair as several consecutive bitmap
             // widgets, so this is one save/restore per eye instead of one per
             // widget.
-            if (hideFromEye)
-                OpenReachAuthoredCapture();
-            else
-                CloseReachAuthoredCapture();
+            RouteReachWidget(
+                action == ReachChudCrosshairAction::CaptureAuthored
+                    ? ReachWidgetRoute::Captured
+                    : hideFromEye ? ReachWidgetRoute::Hidden
+                                  : ReachWidgetRoute::Visible);
             original(userIndex, descriptor, widgetIndex,
                      useAlternatePath, drawState);
         }
