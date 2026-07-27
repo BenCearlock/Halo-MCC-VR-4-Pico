@@ -181,6 +181,30 @@ inline constexpr uintptr_t kReachCompactCameraForwardOffset = 0x0C;
 // Measured in the pinned module: the 26-byte prologue is UNIQUE (exactly one
 // match), and the tail jump at +0x46 decodes to the first-person marker query,
 // so that address is derived from the match rather than hardcoded.
+// The marker-not-found fallback, and the muzzle flash stuck at the player's
+// view.
+//
+// In the resolver's world path, when the marker query 0x00471C30 returns NULL
+// the code does `lea rcx,[identity]; cmovne rcx, rax` at 0x00120FAC/0x00120FB3
+// and copies a GLOBAL IDENTITY real_matrix4x3 from haloreach+0x0098FA70. Its
+// 13 floats are {scale 1; forward 1,0,0; left 0,1,0; up 0,0,1; position 0,0,0}
+// - measured, not assumed. An effect handed that transform renders at the
+// origin of whatever space it is composed in, which is why the player sees it
+// pinned to the centre of their view, why it does not move when the gun is
+// pointed off screen, and why it sits exactly where the flat crosshair used to.
+//
+// Only a location whose marker LOOKUP FAILED gets this matrix. Every effect
+// that resolves a real marker - the flash on the controller-held gun, every
+// other character's weapon, impacts, explosions - never touches it. That makes
+// "did the resolver return the identity fallback" an exact, self-verifying test
+// for the stuck element, with no tag, weapon, or camera-mode assumption behind
+// it.
+inline constexpr uintptr_t kReachEffectIdentityMatrixRva = 0x0098FA70;
+inline constexpr size_t kReachEffectMatrixFloats = 13;
+inline constexpr uintptr_t kReachEffectMatrixPositionOffset = 0x28;
+// Far below any playable space, finite, and cheap to spot in a log.
+inline constexpr float kReachEffectHiddenPositionZ = -1.0e6f;
+
 inline constexpr uintptr_t kReachEffectLocationResolverRva = 0x00120EC4;
 inline constexpr uintptr_t kReachEffectLocationFpJumpOffset = 0x46;
 inline constexpr uintptr_t kReachEffectFpMarkerQueryRva = 0x002B0A58;

@@ -10483,6 +10483,60 @@ namespace
     //   alreadyFp - the location was already a first-person location
     // A bitmask of every distinct effect[0x50] seen is recorded too, because
     // "which values actually occur" is the fact that decides the real fix.
+    // Identity-fallback repair. The stuck muzzle element is a location whose
+    // marker lookup FAILED, so the resolver handed it the global identity
+    // matrix and it renders at the origin of the view. Its sibling particle
+    // systems on the SAME effect resolve their markers fine and land on the
+    // controller-held gun. So: remember the last transform that resolved for
+    // this effect, and when a sibling comes back as the identity fallback,
+    // give it that transform instead. The systems line up.
+    const float* g_reachEffectIdentity = nullptr;   // into the retained module
+    thread_local const void* g_reachLastGoodEffect = nullptr;
+    thread_local float g_reachLastGoodMatrix[kReachEffectMatrixFloats]{};
+    thread_local bool g_reachLastGoodValid = false;
+    std::atomic<uint32_t> g_reachMuzzleRepaired{0};
+    std::atomic<uint32_t> g_reachMuzzleIdentityNoSibling{0};
+
+    // True when the resolver returned the untouched identity fallback, i.e. the
+    // marker was not found. Exact 13-float comparison against the module's own
+    // global, so nothing that resolved a real marker can be mistaken for it.
+    __declspec(noinline) bool ReachMatrixIsIdentityFallback(const float* m)
+    {
+        const float* identity = g_reachEffectIdentity;
+        if (!identity || !m)
+            return false;
+        __try
+        {
+            for (size_t i = 0; i < kReachEffectMatrixFloats; ++i)
+                if (m[i] != identity[i])
+                    return false;
+            return true;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            return false;
+        }
+    }
+
+    __declspec(noinline) bool ReachCopyMatrix(float* dst, const float* src)
+    {
+        __try
+        {
+            for (size_t i = 0; i < kReachEffectMatrixFloats; ++i)
+            {
+                if (!isfinite(src[i]))
+                    return false;
+            }
+            for (size_t i = 0; i < kReachEffectMatrixFloats; ++i)
+                dst[i] = src[i];
+            return true;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            return false;
+        }
+    }
+
     std::atomic<uint32_t> g_reachMuzzleWorldNoFpUser{0};
     std::atomic<uint32_t> g_reachMuzzleWorldFpNone{0};
     std::atomic<uint32_t> g_reachMuzzleAlreadyFp{0};
@@ -10534,6 +10588,32 @@ namespace
                 original(effect, nodeDesignator, outMatrix);
                 return;
             }
+            // ---- line the particle systems up ------------------------------
+            // One of the muzzle particles resolves onto the gun; another comes
+            // back with the marker-not-found identity matrix and renders at the
+            // player's view. Same effect, adjacent calls. Give the failed one
+            // the transform its sibling just resolved.
+            float* out = static_cast<float*>(outMatrix);
+            if (ReachMatrixIsIdentityFallback(out))
+            {
+                if (g_reachLastGoodValid && g_reachLastGoodEffect == effect &&
+                    ReachCopyMatrix(out, g_reachLastGoodMatrix))
+                {
+                    g_reachMuzzleRepaired.fetch_add(
+                        1, std::memory_order_relaxed);
+                }
+                else
+                {
+                    g_reachMuzzleIdentityNoSibling.fetch_add(
+                        1, std::memory_order_relaxed);
+                }
+            }
+            else if (ReachCopyMatrix(g_reachLastGoodMatrix, out))
+            {
+                g_reachLastGoodEffect = effect;
+                g_reachLastGoodValid = true;
+            }
+
             ReachEffectFpDecision decision =
                 ReachDecideEffectLocation(
                     fpUserByte, static_cast<unsigned int>(nodeDesignator));
@@ -14555,6 +14635,13 @@ namespace
             {
                 g_reachEffectFpMarkerQuery =
                     reinterpret_cast<ReachEffectFpMarkerFn>(fpQuery);
+                // The marker-not-found fallback matrix this module hands out.
+                // Comparing against the engine's own copy is what makes the
+                // repair exact rather than a guess about which particle is bad.
+                g_reachEffectIdentity = reinterpret_cast<const float*>(
+                    base + kReachEffectIdentityMatrixRva);
+                g_reachLastGoodValid = false;
+                g_reachLastGoodEffect = nullptr;
                 effectLocationCreated = MH_CreateHook(
                     effectLocation,
                     reinterpret_cast<void*>(&ReachEffectLocationDetour),
@@ -14691,6 +14778,8 @@ namespace
         g_reachRainDecoupled.store(0, std::memory_order_relaxed);
         g_reachRainSkipped.store(0, std::memory_order_relaxed);
         g_reachMuzzleRedirects.store(0, std::memory_order_relaxed);
+        g_reachMuzzleRepaired.store(0, std::memory_order_relaxed);
+        g_reachMuzzleIdentityNoSibling.store(0, std::memory_order_relaxed);
         g_reachMuzzleReadFailures.store(0, std::memory_order_relaxed);
         g_reachMuzzleWorldNoFpUser.store(0, std::memory_order_relaxed);
         g_reachMuzzleWorldFpNone.store(0, std::memory_order_relaxed);
@@ -14995,9 +15084,12 @@ namespace
             return;
         lastReportMs = now;
         lastTotal = total;
-        LOG("REACHFX: effect locations - redirected %u, world/no-fp-user %u, "
+        LOG("REACHFX: muzzle particles lined up %u (no sibling yet %u); "
+            "effect locations - redirected %u, world/no-fp-user %u, "
             "world/fp-output-none %u, already-first-person %u, unreadable %u "
             "(effect+0x50 low nibbles seen 0x%04X, high nibbles 0x%04X)",
+            g_reachMuzzleRepaired.load(std::memory_order_relaxed),
+            g_reachMuzzleIdentityNoSibling.load(std::memory_order_relaxed),
             redirects, noFpUser, fpNone, alreadyFp, failures,
             g_reachMuzzleFpByteLowMask.load(std::memory_order_relaxed),
             g_reachMuzzleFpByteHighMask.load(std::memory_order_relaxed));
