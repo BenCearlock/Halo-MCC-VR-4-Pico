@@ -10147,6 +10147,46 @@ namespace
                     kReachChudCrosshairScriptingClass;
             if (ownsStereo && isCrosshairClass)
                 g_reachFpCameraEyeScope.chudClass2Seen = true;
+
+            // Enumerate what Reach actually emits instead of inferring it.
+            // HREK names the scripting classes (1 weapon stats, 2 crosshair,
+            // 3 shield, 4 grenades, 5 messages, 6 motion sensor, 7 chapter
+            // title, 8 cinematics), but nothing so far has confirmed which
+            // ones reach this hook during an owned VR eye pass, which is the
+            // difference between "the crosshair is not class 2 here" and "we
+            // never own the draw". Time-throttled to once every two seconds
+            // via CAS so it cannot flood the log the way an earlier
+            // change-triggered probe did.
+            {
+                static std::atomic<unsigned> s_total{0};
+                static std::atomic<unsigned> s_owned{0};
+                static std::atomic<unsigned> s_classMask{0};
+                static std::atomic<uint64_t> s_lastLogMs{0};
+                s_total.fetch_add(1, std::memory_order_relaxed);
+                if (ownsStereo)
+                    s_owned.fetch_add(1, std::memory_order_relaxed);
+                if (descriptorReadable)
+                {
+                    const int8_t signedClass = static_cast<int8_t>(rawClass);
+                    if (signedClass >= 0 && signedClass < 31)
+                        s_classMask.fetch_or(
+                            1u << signedClass, std::memory_order_relaxed);
+                }
+                const uint64_t nowMs = GetTickCount64();
+                uint64_t lastMs = s_lastLogMs.load(std::memory_order_relaxed);
+                if (nowMs - lastMs >= 2000 &&
+                    s_lastLogMs.compare_exchange_strong(
+                        lastMs, nowMs, std::memory_order_relaxed))
+                {
+                    LOG("Reach CHUD widgets: %u draws, %u during owned VR "
+                        "eyes, scripting classes seen = 0x%X (bit N = class N; "
+                        "crosshair is class %d)",
+                        s_total.exchange(0, std::memory_order_relaxed),
+                        s_owned.exchange(0, std::memory_order_relaxed),
+                        s_classMask.exchange(0, std::memory_order_relaxed),
+                        static_cast<int>(kReachChudCrosshairScriptingClass));
+                }
+            }
             const int stereoEye =
                 g_stereoEye.load(std::memory_order_relaxed);
             if (matchingEyeScope &&
