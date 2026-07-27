@@ -10632,7 +10632,16 @@ namespace
             // weapon's own render path, not by this resolver, so it is
             // untouched. Displacing the world copy is what stock first-person
             // play effectively does by never showing it.
-            if ((fpUserByte & 0x0Fu) != 0u &&
+            // DISABLED after a headset test. This displaced ~14,000 effect
+            // locations per 30 s - the counters prove it fired, because
+            // world/fp-output-none fell from 13,998 to 0 - and the flash on the
+            // player's face did not move. So the element is NOT positioned
+            // through this resolver, which is now the THIRD independent
+            // measurement saying so (zero first-person designators, zero
+            // identity fallbacks, and now this). Nothing unproven stays active.
+            constexpr bool kReachHideBodyWeaponEffects = false;
+            if (kReachHideBodyWeaponEffects &&
+                (fpUserByte & 0x0Fu) != 0u &&
                 static_cast<short>(nodeDesignator & 0xFFFFu) >= 0)
             {
                 if (ReachDisplaceEffectLocation(outMatrix))
