@@ -723,7 +723,42 @@ transactions, and every published art-key change. Silent while healthy.
 | Candidate package | `out/candidates/298d270-reach-fp-parity-20260727-063300640Z` |
 | `halo3xr.dll` SHA-256 | `333B154C14A34A55FBE8E20B117A4446F52B026449B02B60667FAB11168748B8` |
 | Preserved previous install | `out/deploy-backups/a5270ca-before-298d270-20260727-063301337Z` |
+| Headset result | **PASS for 3D.** Reach armed `01:40:14` and held stereo for the whole session, no teardown. REACHHUD reported `crosshair redirect unavailable 11/24 times ... the camera core stayed armed` at `01:43:54`, the moment the user disabled the crosshair - the failure isolation working exactly as designed. Two defects remained; see below. |
+
+### UNTESTED: Reach `crosshair=0` hides the flat crosshair too - 2026-07-27
+
+| Identity | Value |
+| --- | --- |
+| Candidate source | `a683ae359ece1fcc4d642c17209a3b858b7337e9` |
+| Candidate package | `out/candidates/a683ae3-reach-fp-parity-20260727-064939631Z` |
+| `halo3xr.dll` SHA-256 | `57A3C775C24EA4D30E12D41D1B2D7F8455103EA1E7E45CA3F46C0E0F7E8D1300` |
+| Preserved previous install | `out/deploy-backups/333b154-before-a683ae3-20260727-064940345Z` |
 | Headset result | **PENDING** |
+
+Turning the crosshair off revealed Reach's ORIGINAL flat crosshair - the
+opposite of the setting's meaning, and players who want no crosshair at all
+must be able to have that. Reach has no visibility predicate to NOP and its
+CHUD alpha write is inert, so the render-target redirect is the only thing
+that keeps the native crosshair off the eye; the plain capture entry refused
+whenever `crosshair=0`. New `VR_BeginAuthoredReticleRedirect` keeps the lazy
+resource creation (so a transient resource state can never fail it, unlike
+the prepared entry that caused the 3D regression) and drops the
+crosshair-enabled requirement. Reach's three hide paths use it. Display is
+still gated on `g_config.crosshair` in the compositor, so `crosshair=0` now
+means no crosshair anywhere.
+
+Deliberately surgical: with `crosshair=1` the new entry is behaviourally
+identical to `298d270`, so normal play cannot regress. Halo 3's capture path
+(`game.cpp:711`) and the prepared entry's contract are untouched.
+
+**Objective-driven crosshair loss - mechanism identified, fix is its own
+candidate.** The same log shows the published art key moving to a transient
+value and returning ~50 ms later (`9C04306C` -> `F82FB8B1` -> `9C04306C` at
+`01:43:16`, and the same shape repeatedly), with no class-2 drought, no
+unreadable descriptors and no rejects. So it is art-key churn republishing
+different art, not the engine dropping the widget: when an objective is
+given, the drawn class-2 widget set changes, the key changes with it, and
+the re-upload publishes art that does not contain the crosshair.
 
 Reverts the `fafebc6` prepared-entry switch that killed Reach 3D, and then
 removes the reason it was fatal: a momentarily unavailable render-target
