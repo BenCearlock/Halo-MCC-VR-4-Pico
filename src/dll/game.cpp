@@ -14356,9 +14356,15 @@ void Game_LocateHudSafeFrames()
         profile = HudLayoutProfile::Halo3ODST;
 #endif
 #if HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE
-    if (profile == HudLayoutProfile::None &&
-        TitleAdapter_GetActiveTitle() == GameTitle::HaloReach)
-        profile = HudLayoutProfile::HaloReach;
+    // DISABLED 2026-07-26: a live headset session proved this write has zero
+    // visible effect at any value from 0.30 to 1.00, including the drift bug
+    // where forcing every-frame writes made the value visibly wobble with
+    // live headset FOV jitter. A read-only probe independently confirmed the
+    // write lands, holds, and is the only real copy of the record in the
+    // process, so the data pipeline is not the defect. The chud_globals
+    // curvature-info safe frame is very likely vestigial 360-era data that
+    // MCC's PC Reach renderer does not consult; see docs/RE-notes.md, the
+    // Reach HUD layout entry, before re-enabling this on a new theory.
 #endif
     if (profile == HudLayoutProfile::None &&
         Game_AllowsSharedGameplayFeatures())
