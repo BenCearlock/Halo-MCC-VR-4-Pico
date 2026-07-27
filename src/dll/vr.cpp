@@ -4116,12 +4116,16 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
         // during death/loading gaps. The private ODST camera core installs no
         // authored capture yet, so there the procedural reticle IS the
         // crosshair and must be opaque to be seen at all.
-        // Reach is the same case as the ODST camera core: haloreach.dll has
-        // no class-2 CHUD gate to capture authored art from, so the procedural
-        // reticle IS its crosshair and must be opaque to be seen at all.
-        const bool titleHasAuthoredCapture =
-            !Game_IsCameraOnlyBringup() &&
-            TitleAdapter_GetActiveTitle() != GameTitle::HaloReach;
+        // Reach DOES capture authored art now - its crosshair widgets are
+        // found through the owning collection's scripting class rather than a
+        // class-2 gate - so it is in the same case as Halo 3: the authored
+        // widget is the crosshair and the procedural one must stay invisible.
+        // While Reach was still listed here as having no capture, it painted
+        // the procedural reticle fully opaque into the SAME swapchain the
+        // authored art lives in, wiping that art out on every repaint. That is
+        // what showed the old crosshair, made the two alternate, and cost a
+        // swapchain repaint per frame.
+        const bool titleHasAuthoredCapture = !Game_IsCameraOnlyBringup();
         const float kProceduralOpacity =
             titleHasAuthoredCapture ? 0.0f : 1.0f;
         const bool enemy = g_reticleEnemy.load(std::memory_order_relaxed);
@@ -6318,9 +6322,18 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
                         // blank the swapchain until the next upload.
                         const bool reachCaptureEmpty =
                             reachTitle && reachCrosshairKey == 0;
+                        // Deliberately NOT gated on the key being unchanged.
+                        // Doing that uploaded once and never again, and if that
+                        // single upload caught the capture texture before its
+                        // widgets had been drawn it published nothing and there
+                        // was no second chance - perfect frame rate, no art.
+                        // The key's job here is to prove the capture HAS
+                        // content; the frame gap keeps the cost bounded. A
+                        // steady low-rate refresh also keeps state changes
+                        // (enemy/friendly colour, zoom) live.
+                        (void)reachKeyUnchanged;
                         const bool reachArtAlreadyPublished =
-                            reachKeyUnchanged || reachUploadTooSoon ||
-                            reachCaptureEmpty;
+                            reachUploadTooSoon || reachCaptureEmpty;
                         const bool shouldUploadAuthoredReticle =
                             authoredReticleThisFrame && reticleUploadAdmitted &&
                             !reachArtAlreadyPublished;
