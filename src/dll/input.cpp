@@ -7,6 +7,7 @@
 #include "game.h"
 #include "vr.h"
 #include "menu.h"
+#include "title_adapter.h"
 #include "../common/log.h"
 #include "../common/config.h"
 #include "../common/input_logic.h"
@@ -113,12 +114,27 @@ namespace
             g_pauseChord.Reset();
         }
 
+        // Reach only: the left trigger and the left X button trade places, so
+        // the grenade lands on X and the Spartan armour ability lands on the
+        // trigger. The VR->XInput map above is otherwise ONE profile shared by
+        // every title; Halo 3 and ODST have no armour ability and keep X on
+        // reload/action, so this is gated on the active title rather than
+        // changing the shared map. Both inputs are on the left hand either way.
+        const bool swapLeftHandActions =
+            TitleAdapter_GetActiveTitle() == GameTitle::HaloReach;
+        // The trigger is analog and X is a click. Neither Reach action is
+        // pressure-sensitive, so cross them at the same 0.6 threshold the grips
+        // already use, and drive the trigger fully on from the click.
+        const bool xPressed = swapLeftHandActions ? pad.trigL > 0.6f : pad.x;
+        const float leftTrigger =
+            swapLeftHandActions ? (pad.x ? 1.0f : 0.0f) : pad.trigL;
+
         WORD btn = state->Gamepad.wButtons;
         if (scopeAvailable)
             btn &= ~XINPUT_GAMEPAD_RIGHT_THUMB;
         if (pad.a) btn |= XINPUT_GAMEPAD_A;
         if (pad.b && !pauseChord.consumeClicks) btn |= XINPUT_GAMEPAD_B;
-        if (pad.x) btn |= XINPUT_GAMEPAD_X;
+        if (xPressed) btn |= XINPUT_GAMEPAD_X;
         if (pad.y && !pauseChord.consumeClicks) btn |= XINPUT_GAMEPAD_Y;
         if (pad.clickL && !chord.consumeClicks) btn |= XINPUT_GAMEPAD_LEFT_THUMB;
         if (pad.clickR && !chord.consumeClicks && !scopeAvailable)
@@ -149,7 +165,7 @@ namespace
         if (pad.gripR > 0.6f) btn |= XINPUT_GAMEPAD_RIGHT_SHOULDER;
         state->Gamepad.wButtons = btn;
 
-        const BYTE tl = (BYTE)(pad.trigL * 255.0f);
+        const BYTE tl = (BYTE)(leftTrigger * 255.0f);
         const BYTE tr = (BYTE)(pad.trigR * 255.0f);
         if (tl > state->Gamepad.bLeftTrigger) state->Gamepad.bLeftTrigger = tl;
         if (tr > state->Gamepad.bRightTrigger) state->Gamepad.bRightTrigger = tr;
