@@ -1,10 +1,16 @@
 HALO 4 WILL BEGIN SOON, DO NOT ACCEPT FIXES OF THIS MOD FROM OUTSIDE SOURCES WE DON'T KNOW WHATS IN IT
 
-Try updating to Steam VR Beta, A user has reported that it fixes the double vision!
+STEAM VR BETA IS REQUIRED 
+ A user has reported that it fixes the double vision!
 
-If experiencing stutter install this with steam vr as default runtime 
+Steam VR has to be your open xr runtime default
+
+Compatibility across headsets may vary, if it doesn't work try a different way to connect if you can but follow those two details above and you should be good.
+
+LMK in the issues if your headset is not working and someone or i can help you
+
+performance boost on gpu with quad views
 https://github.com/mbucchia/Quad-Views-Foveated
-EVEN IF YOU DONT HAVE EYE TRACKING JUST MAKE SURE YOUR HEADSET IS COMPATIBLE 
 
 Please list your specs if you're having issues. It's a guessing game over here 
 
