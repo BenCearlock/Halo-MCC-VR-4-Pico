@@ -733,7 +733,40 @@ transactions, and every published art-key change. Silent while healthy.
 | Candidate package | `out/candidates/a683ae3-reach-fp-parity-20260727-064939631Z` |
 | `halo3xr.dll` SHA-256 | `57A3C775C24EA4D30E12D41D1B2D7F8455103EA1E7E45CA3F46C0E0F7E8D1300` |
 | Preserved previous install | `out/deploy-backups/333b154-before-a683ae3-20260727-064940345Z` |
+| Headset result | **PASS.** User: "the hide crosshair bug is fixed". `crosshair=0` now shows no crosshair of any kind, and VR stays up. |
+
+### UNTESTED: Reach objective-driven crosshair loss - 2026-07-27
+
+| Identity | Value |
+| --- | --- |
+| Candidate source | `578b82de2529d27778d653d02bcb6c86fecc389f` |
+| Candidate package | `out/candidates/578b82d-reach-fp-parity-20260727-065952281Z` |
+| `halo3xr.dll` SHA-256 | `434A63A82446A7C11F3C5ABFE3EAD96BDCCEB58C5DAFC68D0399F10B24D2E3CC` |
+| Preserved previous install | `out/deploy-backups/57a3c77-before-578b82d-20260727-065952978Z` |
 | Headset result | **PENDING** |
+
+**Root cause: the mod was deleting its own art source.** REACHHUD named it in
+the reproduction session:
+`[01:56:51.484] no class-2 crosshair widget drawn for 2s - the engine stopped
+emitting it (unreadable descriptors 0, rejects 0)`, with no recovery line
+afterwards. Zero unreadable descriptors and zero rejects rules out the
+capture path entirely - Reach stops emitting the widget, so there is nothing
+to capture, the authored quad stops being submitted, and the crosshair is
+gone for the rest of the level.
+
+`SuppressReachNativeCrosshair` writes 0 to the crosshair's own alpha, fade
+target and fade duration in `chud_globals`, every admitted frame. Reach's
+CHUD is left holding a fully faded-out crosshair, and once an objective event
+makes it re-evaluate that fade state it stops drawing the widget at all.
+
+It is also redundant: the render-target redirect is what keeps the flat
+crosshair off the eye, proven by the `crosshair=0` pass above where the
+redirect runs with no alpha write and no flat crosshair appears. Disabled
+behind a named constant rather than deleted. If the flat crosshair ever leaks
+through the redirect, fix the redirect - this write cannot be made safe,
+because any CHUD state change that consults the fade record can latch the
+widget off permanently. Halo 3 and ODST use their own visibility predicate
+and never call this Reach-only path.
 
 Turning the crosshair off revealed Reach's ORIGINAL flat crosshair - the
 opposite of the setting's meaning, and players who want no crosshair at all
