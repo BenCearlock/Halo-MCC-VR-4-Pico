@@ -10349,7 +10349,8 @@ namespace
             {
                 // The magnified world-only scope picture must not receive a
                 // native CHUD widget, but the call still has to happen.
-                if (VR_BeginAuthoredReticleCapture())
+                // Redirect entry: hiding must not depend on crosshair=1.
+                if (VR_BeginAuthoredReticleRedirect())
                     captureStarted = true;
                 original(userIndex, descriptor, widgetIndex,
                          useAlternatePath, drawState);
@@ -10397,8 +10398,9 @@ namespace
                 g_reachFpCameraEyeScope.chudParityFailed &&
                 isCrosshairClass)
             {
-                // Already-failed eye: hide the widget, but never skip the call.
-                if (VR_BeginAuthoredReticleCapture())
+                // Already-failed eye: hide the widget, but never skip the
+                // call. Redirect entry for the same crosshair=0 reason.
+                if (VR_BeginAuthoredReticleRedirect())
                     captureStarted = true;
                 original(userIndex, descriptor, widgetIndex,
                          useAlternatePath, drawState);
@@ -10453,16 +10455,16 @@ namespace
             }
             if (hideFromEye)
             {
-                // REVERTED 2026-07-27: this briefly called the PREPARED entry
-                // "for symmetry" with the End below. That entry refuses
-                // unless every prepared resource already exists, and a
-                // refusal here disarmed the core - Reach armed, then lost
-                // stereo 45 ms later and tore down (log 01:29:20.548 armed ->
-                // 01:29:20.602 stereo OFF). The lazy entry creates what is
-                // missing and heals itself, which is why this worked before.
-                // Do not "fix" this asymmetry again without first removing
-                // the teardown consequence below.
-                if (VR_BeginAuthoredReticleCapture())
+                // Lazy-creating redirect that also ignores crosshair=0.
+                // Two headset regressions came from this one call. The
+                // PREPARED entry refuses unless every resource already
+                // exists, and that refusal disarmed the core (armed
+                // 01:29:20.548 -> stereo OFF .602). The plain capture entry
+                // refuses when crosshair=0, and since Reach has no
+                // visibility predicate and its alpha write is inert, that
+                // refusal put the flat stock crosshair back on the eye for
+                // players who asked for none.
+                if (VR_BeginAuthoredReticleRedirect())
                     captureStarted = true;
                 else
                     ReportReachRedirectUnavailable();

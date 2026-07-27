@@ -159,6 +159,11 @@ bool VR_GetLeftControllerPose(float outQuat[4], float outPos[3]);
 // weapon reticle is redirected into the controller-ray quad texture instead
 // of being drawn at the center of either VR eye.
 bool VR_BeginAuthoredReticleCapture();
+// Reach-only hide entry: same lazy resource creation, but it never refuses
+// because crosshair=0. Reach has no visibility predicate and its CHUD alpha
+// write is inert, so this redirect is the only way its native crosshair can
+// be kept off the eye - including when the user asks for no crosshair at all.
+bool VR_BeginAuthoredReticleRedirect();
 void VR_EndAuthoredReticleCapture();
 // Reach prepares every allocation and swapchain/RTV object on its cold title
 // worker before installing the mandatory HREK hook. The prepared begin/end
