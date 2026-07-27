@@ -14590,16 +14590,16 @@ namespace
                 hit ? "ambiguous" : "missing");
             return false;
         }
-        const uintptr_t site = hit + kReachThirdPersonEffectPatchOffset;
+        const uintptr_t site = hit + kReachFirstPersonEffectPatchOffset;
         if (memcmp(reinterpret_cast<const void*>(site),
-                   kReachThirdPersonEffectOriginal,
+                   kReachFirstPersonEffectOriginal,
                    kReachThirdPersonEffectPatchBytes) != 0)
         {
             LOG("Reach muzzle: third-person deny site does not hold the "
                 "expected bytes; leaving it alone");
             return false;
         }
-        if (!ReachWriteCode(site, kReachThirdPersonEffectPatch,
+        if (!ReachWriteCode(site, kReachFirstPersonEffectPatch,
                             kReachThirdPersonEffectPatchBytes))
         {
             LOG("Reach muzzle: could not write the third-person suppression");
@@ -14607,12 +14607,10 @@ namespace
         }
         g_reachThirdPersonEffectPatchSite = site;
         g_reachThirdPersonEffectPatched = true;
-        LOG("Reach muzzle: third-person-only particle systems suppressed at "
-            "haloreach.dll+0x%llX (expected 0x%llX); the body-anchored muzzle "
-            "flash stops emitting, the first-person flash on the gun is "
-            "untouched",
-            static_cast<unsigned long long>(site - base),
-            static_cast<unsigned long long>(kReachThirdPersonEffectDenyRva));
+        LOG("Reach muzzle: FIRST-person-only particle systems suppressed at "
+            "haloreach.dll+0x%llX; the camera-space muzzle flash stops "
+            "emitting. Mode 0 and mode 2 systems are untouched",
+            static_cast<unsigned long long>(site - base));
         return true;
     }
 
@@ -14625,7 +14623,7 @@ namespace
         }
         const bool ok = ReachWriteCode(
             g_reachThirdPersonEffectPatchSite,
-            kReachThirdPersonEffectOriginal,
+            kReachFirstPersonEffectOriginal,
             kReachThirdPersonEffectPatchBytes);
         g_reachThirdPersonEffectPatched = false;
         g_reachThirdPersonEffectPatchSite = 0;
@@ -15321,7 +15319,7 @@ namespace
         // kept rendering. So the element is NOT a third-person-only particle
         // system. Combined with the earlier eliminations this rules out the
         // entire per-mode emission gate as the source. Kept for evidence.
-        // ApplyReachThirdPersonEffectSuppression(base, size);
+        ApplyReachThirdPersonEffectSuppression(base, size);
         if (!ApplyReachNativeWeaponIkBypass())
         {
             LOG("Reach camera install: native weapon-IK bypass failed; "

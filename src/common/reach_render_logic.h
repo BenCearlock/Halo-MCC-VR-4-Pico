@@ -144,6 +144,21 @@ inline constexpr unsigned char kReachThirdPersonEffectPatch[3] = {
 inline constexpr unsigned char kReachThirdPersonEffectOriginal[3] = {
     0x45, 0x85, 0xF6};
 
+// The FIRST-person arm of the same switch, at signature offset +0x21:
+// `mov r10b, r9b` - allow a first-person-only system when the effect belongs
+// to the local player's first-person weapon. The engine's first-person weapon
+// renders in CAMERA SPACE and the mod never moves it (the controller-tracked
+// gun is a render-time copy), so a first-person-only muzzle particle spawns
+// head-locked and view-flat: the "trapped in 2D" flash. The mode-2 denial was
+// verified applied and changed nothing, which is what isolates mode 1.
+// `xor r10b, r10b` denies it. Mode 1 only ever renders for the local player's
+// own weapon, so no other character's effects can be affected.
+inline constexpr uintptr_t kReachFirstPersonEffectPatchOffset = 0x21;
+inline constexpr unsigned char kReachFirstPersonEffectPatch[3] = {
+    0x45, 0x32, 0xD2};
+inline constexpr unsigned char kReachFirstPersonEffectOriginal[3] = {
+    0x45, 0x8A, 0xD1};
+
 // Reach's rain, and why it swings with head AND hand in VR.
 //
 // The rain particle renderer is retail 0x00288D60 (.pdata bounds
