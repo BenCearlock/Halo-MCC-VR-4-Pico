@@ -681,7 +681,14 @@ Two further defects were then reported; see the next candidate.
 | Candidate package | `out/candidates/fafebc6-reach-fp-parity-20260727-062510426Z` |
 | `halo3xr.dll` SHA-256 | `A5270CA29940F59492F38D8B97D1C0D6812DFC0B2A7B563C68178C603519EAAD` |
 | Preserved previous install | `out/deploy-backups/d0dac5a-before-fafebc6-20260727-062511131Z` |
-| Headset result | **PENDING** |
+| Headset result | **FAILED - Reach lost 3D entirely. Superseded by `298d270` below.** |
+
+> `fafebc6` also switched the crosshair redirect to the PREPARED capture
+> entry "for symmetry" with its End call. That entry refuses unless every
+> prepared resource already exists, and the refusal path disarmed the core:
+> armed `01:29:20.548` -> stereo OFF `01:29:20.602` -> core removed
+> `01:29:21.174`. Reverted in `298d270`, together with the teardown
+> consequence that made it fatal.
 
 **`crosshair=0` tore down VR (fixed).** With the crosshair disabled,
 `ReachDecideChudCrosshairAction` returns `Suppress`, which still requires the
@@ -708,6 +715,32 @@ unreadable-descriptor counts with the alternate-path flag, rejected eye
 transactions, and every published art-key change. Silent while healthy.
 
 **Still open from the same session (need their own evidence pass):**
+### UNTESTED: Reach redirect-loss no longer disarms the core - 2026-07-27
+
+| Identity | Value |
+| --- | --- |
+| Candidate source | `298d270a98b286bbc41bdab1ea68e0ef0d91d3b6` |
+| Candidate package | `out/candidates/298d270-reach-fp-parity-20260727-063300640Z` |
+| `halo3xr.dll` SHA-256 | `333B154C14A34A55FBE8E20B117A4446F52B026449B02B60667FAB11168748B8` |
+| Preserved previous install | `out/deploy-backups/a5270ca-before-298d270-20260727-063301337Z` |
+| Headset result | **PENDING** |
+
+Reverts the `fafebc6` prepared-entry switch that killed Reach 3D, and then
+removes the reason it was fatal: a momentarily unavailable render-target
+redirect now marks the eye (so a partially captured pair never publishes -
+the compositor skips that frame and retries) and keeps the camera core
+armed, instead of disarming and requesting six-hook teardown. Both the Begin
+and End failure paths use `ReportReachRedirectUnavailable`; the worker logs
+the count. This is the same correction applied to the two silent teardown
+paths on 2026-07-26, and with it neither this regression nor the
+`crosshair=0` teardown could have killed VR. `crosshair=0` safety and the
+REACHHUD counters from `fafebc6` are retained.
+
+**Lesson worth keeping:** the begin/end asymmetry was real, and "fixing" it
+was still wrong, because the failure consequence - not the entry point - was
+the actual defect. Remove a fatal consequence before tightening the thing
+that can trigger it.
+
 The user's exact requirements for the remaining HUD work, stated 2026-07-27:
 
 - **Character tags must follow the HEAD ONLY.** Today they follow head AND
