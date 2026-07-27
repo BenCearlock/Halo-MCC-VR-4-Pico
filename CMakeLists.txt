@@ -37,8 +37,8 @@ if(Git_FOUND)
     endif()
 endif()
 
-# The accepted 0.2.2 product is one cumulative Halo 3 + ODST build. OFF remains
-# available only for a deliberate Halo 3 isolation build.
+# The accepted 0.3.0 product is one cumulative Halo 3 + ODST + Reach build. OFF
+# remains available only for a deliberate Halo 3 isolation build.
 option(HALOMCCVR_EXPERIMENTAL_ODST_BRINGUP
     "Enable the cumulative Halo 3 + ODST runtime" ON)
 
@@ -48,7 +48,7 @@ if(HALOMCCVR_EXPERIMENTAL_ODST_BRINGUP)
 else()
     set(HALOMCCVR_BUILD_ODST "OFF")
     message(WARNING
-        "Halo MCC VR: ODST is disabled; this does not match release 0.2.2")
+        "Halo MCC VR: ODST is disabled; this does not match release 0.3.0")
 endif()
 
 # Halo: Reach is a permanent title in the one cumulative build, exactly like

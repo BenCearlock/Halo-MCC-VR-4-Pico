@@ -9,13 +9,13 @@
 > Living Fray is starting his MCC VR mod back up — if you'd rather run unsigned
 > code made by a human, wait for his.
 
-A native OpenXR VR mod for Halo 3 and Halo 3: ODST in the Steam edition of
-Halo: The Master Chief Collection.
+A native OpenXR VR mod for Halo 3, Halo 3: ODST and Halo: Reach in the Steam
+edition of Halo: The Master Chief Collection.
 
 The current known-good release is
-[MCC VR Alpha 0.2.2](https://github.com/pancreations/Halo-MCC-VR/releases/tag/MCC_VR_ALPHA_0.2.2).
-It is an alpha: use it at your own risk, launch only without anti-cheat, and
-expect incomplete hardware and gameplay coverage.
+[MCC VR Alpha 0.3.0](https://github.com/pancreations/Halo-MCC-VR/releases/tag/MCC_VR_ALPHA_0.3.0),
+which adds **Halo: Reach**. It is an alpha: use it at your own risk, launch only
+without anti-cheat, and expect incomplete hardware and gameplay coverage.
 
 ## What works
 
@@ -28,6 +28,11 @@ expect incomplete hardware and gameplay coverage.
   and mission transitions.
 - ODST stereo, controls, weapons/hands, native HUD, cutscenes, vibration,
   death/respawn recovery, and one tested drivable car.
+- Halo: Reach stereo, controls, weapon aim, hands/gun, HUD, cutscenes and
+  vibration. Reach is new in 0.3.0 and is the earliest of the three titles.
+
+On Reach the left trigger and X are swapped compared to Halo 3 and ODST, so
+grenades sit on X.
 
 Known limitations:
 
@@ -36,8 +41,10 @@ Known limitations:
 - MCC can retain multiple title modules after switching games. If a level
   returns to the menu, fully close and restart MCC.
 - ODST brightness stays at the game default.
-- Broader ODST weapon, turret, passenger-gun, vehicle, co-op, headset, and
-  long-session coverage is still needed.
+- On Reach, character tags and navpoints are misplaced in 3D, and the
+  `hud_curvature` and `hud_vertical_offset` settings have no effect.
+- Broader ODST and Reach weapon, turret, passenger-gun, vehicle, co-op, headset,
+  and long-session coverage is still needed.
 
 The exact accepted source and artifact hashes are in
 [docs/CURRENT-STATE.md](docs/CURRENT-STATE.md).
@@ -47,10 +54,11 @@ The exact accepted source and artifact hashes are in
 There is no installer script.
 
 1. Download the binary asset
-   `MCC_VR_ALPHA_0.2.2.zip` from the official `0.2.2` release page.
+   `MCC_VR_ALPHA_0.3.0.zip` from the official `0.3.0` release page.
 2. In Steam, open MCC's **Manage > Browse local files** folder.
 3. Create a folder named exactly `Halo_MCC_VR` in the main MCC folder.
-4. Copy `halo3xr.dll` and `halo3xr_launcher.exe` into that folder.
+4. Copy `halo3xr.dll`, `halo3xr_launcher.exe` and `halomccvr.cfg` into that
+   folder.
 5. Make SteamVR the default OpenXR runtime, start Steam and SteamVR, then run
    `halo3xr_launcher.exe`.
 
@@ -60,26 +68,41 @@ The final path must end in:
 Halo The Master Chief Collection\Halo_MCC_VR\halo3xr_launcher.exe
 ```
 
-Do not place the files loose in the MCC root. To update, close MCC and replace
-only the DLL and launcher; keep `halomccvr.cfg`. To uninstall, close MCC and
-delete only the dedicated `Halo_MCC_VR` folder.
+Do not place the files loose in the MCC root. To uninstall, close MCC and delete
+only the dedicated `Halo_MCC_VR` folder.
+
+### Updating from 0.2.2 — replace your config
+
+**Replace `halomccvr.cfg` with the one in the ZIP. Do not keep your old one.**
+This is different from previous updates, which told you to keep it.
+
+0.3.0 adds settings that older config files do not contain, and there is no
+migration step: any setting your old file is missing silently falls back to a
+built-in default rather than the shipped value. The most visible casualty is
+`fit_desktop_window`, whose built-in default is off while the shipped config
+turns it on — keeping an old config can therefore cap your headset frame rate.
+Sharpening, HUD and weapon-alignment values regress the same way.
+
+The shipped config is a tuned, tested configuration rather than bare defaults.
+If you want your own tuning back, copy your old `halomccvr.cfg` somewhere safe
+first, install the new one, then re-apply your preferences through the F1 menu.
 
 If one PC behaves differently, first confirm SteamVR is still the default
 OpenXR runtime, fully close every MCC process before relaunching, compare the
 installed hashes below, and compare `halomccvr.cfg`. Do not use a repository
 build folder as an installation source.
 
-Release `0.2.2` hashes:
+Release `0.3.0` hashes:
 
 ```text
-ZIP      43E52AEF5A2D1647A8F3AE6AEFDB6C22F0C67C7AA06FD70D327FB3E00ACF5DCC
-DLL      1E3F0F7E1D67DB7F322FF0B2C0236CA8708E4C9EC204EDE83484DBD6BBAF3BD6
-Launcher FA95B264630D42594581E4D2F8E1103FE4DB2D0711714DA4F62AA6175155C534
+ZIP      __ZIP_SHA256__
+DLL      __DLL_SHA256__
+Launcher __LAUNCHER_SHA256__
 ```
 
 Windows security software may flag or quarantine unsigned injection-based VR
 mods. Download only from the official release, verify the hashes, inspect the
-source if desired, and allow only the two release files rather than disabling
+source if desired, and allow only the two release binaries rather than disabling
 security software globally.
 
 ## Required MCC settings
@@ -97,9 +120,10 @@ ODST's look settings control how quickly bullet direction catches the
 motion-controller crosshair. If shots trail, confirm sensitivity is at maximum
 and acceleration is off.
 
-Settings live in `Halo_MCC_VR\halomccvr.cfg`. The game creates this documented
-file on first launch; the F1 menu edits the same values. Deleting only that file
-with MCC closed regenerates the release defaults.
+Settings live in `Halo_MCC_VR\halomccvr.cfg`, shipped in the ZIP as a tuned
+configuration. The F1 menu edits the same values, and the game regenerates the
+file if it is missing — but a regenerated file contains bare built-in defaults,
+not the shipped tuning, so keep a copy of the shipped one.
 
 ## Build from source
 
