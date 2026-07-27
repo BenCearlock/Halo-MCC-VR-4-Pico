@@ -13420,20 +13420,42 @@ namespace
                 fpCamera,
                 reinterpret_cast<void*>(&ReachFpCameraRebuildDetour),
                 reinterpret_cast<void**>(&g_reachOrigFpCameraRebuild)) == MH_OK;
-        // The address is confirmed by two fully independent methods: an AOB
-        // scan for the class-byte read (the pre-9166a99 attempt) and forward
-        // call-graph tracing from the proven kReachPlayerViewRenderRva. Both
-        // land on the same function. The crash that followed each attempt was
-        // never the address - it was the detour skipping the engine's own
-        // draw call, which is fixed in ReachHudDrawWidgetDetour above.
-        const bool hudDrawWidgetCreated = fpCameraCreated && MH_CreateHook(
-                hudDrawWidget,
-                reinterpret_cast<void*>(&ReachHudDrawWidgetDetour),
-                reinterpret_cast<void**>(&g_reachOrigHudDrawWidget)) == MH_OK;
-        if (fpCameraCreated && !hudDrawWidgetCreated)
-            LOG("Reach crosshair: chud_draw_widget hook create FAILED at "
-                "haloreach.dll+0x%llX",
-                static_cast<unsigned long long>(kReachHudDrawWidgetRva));
+        // DISABLED. Enabling this hook has crashed haloreach.dll every single
+        // time it has ever been enabled - four times, always the identical
+        // fault: 0xC0000005 at haloreach.dll+0x2ED80C. Twice tonight
+        // (2026-07-26 20:59, 21:27, 21:31) and once in the pre-9166a99
+        // attempt (13:26), across two completely different ways of finding the
+        // address and two different detour implementations.
+        //
+        // What is actually established:
+        //   - The address 0x2DA364 is almost certainly correct. Two fully
+        //     independent methods agree on it: an AOB scan for the class-byte
+        //     read (41 0F BE 56 04) and forward call-graph tracing from the
+        //     proven kReachPlayerViewRenderRva.
+        //   - 0x2ED80C is called from INSIDE 0x2DA364 (at 0x2DA6EC) right
+        //     after it reads the class byte, and from one other widget
+        //     function at 0x2DA21A. Its first instruction is
+        //     "mov eax,[rcx+0x98]" and it faults because RCX is bad. RCX is a
+        //     Blam pool-handle decode (pool_base[handle>>28] + index*stride),
+        //     so the handle or pool being read is invalid at that moment.
+        //   - "The detour skipped the engine's draw call" was WRONG. That was
+        //     fixed (every path now calls the original) and it crashed again
+        //     identically.
+        //
+        // The remaining untested hypothesis is that the authored-reticle
+        // capture pipeline itself (VR_BeginAuthoredReticleCapture and the
+        // surrounding transaction) is unvalidated code that has never once
+        // executed successfully - it was written, never proven, and disabled.
+        // It should be treated as unproven, not as working code needing an
+        // address.
+        //
+        // The decisive next experiment needs NO rebuild: set kill_reticle = 0
+        // in halomccvr.cfg with this hook enabled. That routes the detour down
+        // DrawStock, so the hook runs but the capture code is never entered.
+        // Still crashes => the hook/address/calling convention is at fault.
+        // Does not crash => the capture pipeline is at fault. That single
+        // result tells the next session where to work instead of guessing.
+        const bool hudDrawWidgetCreated = false;
         if (!innerCreated || !outerCreated ||
             !fpInterpolateCreated || !fpPaletteCreated || !fpCameraCreated)
         {
