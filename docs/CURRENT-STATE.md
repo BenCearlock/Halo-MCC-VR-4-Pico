@@ -741,6 +741,52 @@ was still wrong, because the failure consequence - not the entry point - was
 the actual defect. Remove a fatal consequence before tightening the thing
 that can trigger it.
 
+### Reach HUD element identification - 2026-07-27 (official HREK evidence)
+
+Answering "which ones are the subtitles and which are the character tags".
+These are **three different systems**, which is why they fail differently and
+why the user correctly observes that the rest of the HUD is fine:
+
+| Element | System | HREK evidence |
+| --- | --- | --- |
+| Character tags / navpoints | CHUD navpoint system, world-anchored and projected each frame | `chud_navpoints.cpp` (`0x18A51C0`); 20 entries, stride `0x88`, `position_worldspace` at `+0x3C`; retail `ai_add_navpoint` -> `+0x1A1A7C` -> worker `+0x6C2E68` via TLS slot `+0x30` |
+| Objectives | CHUD objective element | `cinematic_set_chud_objective` (`0x17D09D8`) |
+| Subtitles | **NOT a CHUD widget** - the interface text/subtitle layer, with its own font, colour and rect settings | `subtitle font` (`0x169ED70`), `subtitle color` (`0x169F168`), `subtitle rect width` (`0x169F1D0`), `display_subtitles`, `subtitle: failed to find string %s` |
+
+Subtitles being a separate layer is the significant finding: they are
+composited outside the CHUD path the mod already owns, so their double
+vision has a different cause than any CHUD element and needs its own
+compositing fix rather than a navpoint-style transform fix.
+
+### Reach muzzle flash: why there are two, and where the second comes from
+
+The user reports one flash correctly tracking the controller-held gun and a
+**second element stuck at the face**, and wants both on the hand.
+
+Official HREK shows Reach's effect system tags each effect with
+`first_person_weapon_output_user_index` and `first_person_weapon_user_mask`
+(asserts at `0x16CB780`, `0x16CC170`, `0x16CD5D8`, `0x16CD6B0`), plus a
+dedicated `first_person_weapons.cpp` (`0x1866E60`) whose render code even
+carries a `didn't find trigger marker for weapon` diagnostic (`0x1859E60`).
+So an effect is either attached to the first-person weapon - rendering in FP
+space, which is why that element follows the controller-driven weapon the
+palette work already moves - or it is an ordinary world-space effect spawned
+at the weapon object's marker. Reach's sim weapon is still wholly stock and
+head-anchored in this build, so a world-space muzzle effect is emitted at the
+player's head: exactly the reported face-stuck flash.
+
+The marker query both consumers reach is already proven:
+`first_person_weapon_get_marker`, `haloreach.dll+0x120FDC` through
+`+0x1210D3`, ABI
+`void __fastcall(firstPersonWeapon, uint16_t markerIndex, BoneMatrix* outMatrix, bool firstPerson)`,
+exact entry signature recorded in `docs/REACH-SIGNATURE-EVIDENCE.md`.
+**There is currently no hook on it** - the marker-query detour was surgically
+removed with the failed projectile-origin lineage. Re-adding one is the
+implementation path for putting the second element on the hand, and it must
+be scoped to the effect/marker consumer only: the removed lineage failed
+because it moved the projectile origin, which is a different consumer and is
+not what is being asked for here.
+
 The user's exact requirements for the remaining HUD work, stated 2026-07-27:
 
 - **Character tags must follow the HEAD ONLY.** Today they follow head AND
@@ -753,12 +799,11 @@ The user's exact requirements for the remaining HUD work, stated 2026-07-27:
   nested camera workspace is `haloreach+0x00CFAC20` (compact `+0`, derived
   `+0x1E4`). The needed fact is which camera/workspace the CHUD 3D
   projection actually reads - determine it, do not assume it.
-- **The stray muzzle flash must follow the HAND.** One flash already tracks
-  the controller-held gun correctly; a second is drawn at the old
-  screen-centre crosshair position. Reach bullets and muzzle markers are
-  still wholly stock (the projectile lineage was removed), so the centre
-  flash is most likely the stock first-person weapon's own flash at the
-  frozen sim aim - but that must be confirmed, not assumed.
+- **BOTH muzzle flash elements must follow the HAND.** There are two. One
+  already tracks the controller-held gun correctly and must not be disturbed;
+  the second is stuck at the player's face. The requirement is to move the
+  second onto the same hand-tracked transform as the first - NOT to suppress
+  it, and NOT to move the tags. See the mechanism section above.
 - **Objective text and subtitles must sit on a readable plane.** Subtitles
   currently give double vision (drawn per-eye with divergent projection or
   effectively at infinity rather than at a converged HUD depth). The user
