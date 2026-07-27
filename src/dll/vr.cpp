@@ -6307,8 +6307,11 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
                         static uint64_t s_uploadsDone = 0;
                         static uint64_t s_uploadsSkipped = 0;
                         static uint64_t s_lastUploadLogMs = 0;
-                        const uint64_t reachCrosshairKey = reachTitle
-                            ? Game_GetReachAuthoredCrosshairKey() : 0;
+                        // Halo 3 and ODST pay this same per-frame blocking
+                        // swapchain upload for art that almost never changes.
+                        const bool titleCapturesArt = !Game_IsCameraOnlyBringup();
+                        const uint64_t reachCrosshairKey =
+                            titleCapturesArt ? Game_GetAuthoredCrosshairKey() : 0;
                         // Measured: publishing the art costs ~4-5ms of the
                         // render window, which is the difference between
                         // fitting a 120Hz budget (8.33ms) and missing it and
@@ -6322,10 +6325,10 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
                         // every single one.
                         constexpr uint64_t kReachUploadMinFrameGap = 6;
                         const bool reachKeyUnchanged =
-                            reachTitle && reachCrosshairKey != 0 &&
+                            titleCapturesArt && reachCrosshairKey != 0 &&
                             reachCrosshairKey == s_lastUploadedReachKey;
                         const bool reachUploadTooSoon =
-                            reachTitle && s_lastUploadFrame != 0 &&
+                            titleCapturesArt && s_lastUploadFrame != 0 &&
                             g_preparedFrame.serial >= s_lastUploadFrame &&
                             g_preparedFrame.serial - s_lastUploadFrame <
                                 kReachUploadMinFrameGap;
@@ -6336,7 +6339,7 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
                         // frame, so any frame whose capture was empty would
                         // blank the swapchain until the next upload.
                         const bool reachCaptureEmpty =
-                            reachTitle && reachCrosshairKey == 0;
+                            titleCapturesArt && reachCrosshairKey == 0;
                         // Deliberately NOT gated on the key being unchanged.
                         // Doing that uploaded once and never again, and if that
                         // single upload caught the capture texture before its
@@ -8062,6 +8065,9 @@ static bool BeginAuthoredReticleCaptureInternal(bool requirePreparedResources)
         g_context->ClearRenderTargetView(g_authoredReticleRtv, clear);
         g_authoredReticleSerial = serial;
         g_authoredReticleReady = false;
+        // New displayed frame: start the art-identity accumulation clean so a
+        // static crosshair produces the same key every frame.
+        Game_ResetAuthoredCrosshairKey();
     }
 
     auto& saved = g_reticleCaptureState;

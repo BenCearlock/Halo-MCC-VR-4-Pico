@@ -616,6 +616,20 @@ namespace
     GameIsPlaybackFn g_gameIsPlayback = nullptr;
     HudDrawWidgetFn g_realHudDrawWidget = nullptr;
     thread_local bool g_insideHudDrawWidget = false;
+    // Identity of the crosshair art most recently captured, for ANY title.
+    // The compositor re-uploads the authored reticle only when this changes, so
+    // a static crosshair costs no swapchain work at all.
+    std::atomic<uint64_t> g_authoredCrosshairKey{0};
+    thread_local uint64_t g_authoredCrosshairKeyAccum = 0;
+
+    inline uint64_t FoldAuthoredCrosshairKey(
+        uint64_t accum, unsigned int widgetIndex, unsigned int variant)
+    {
+        uint64_t k = accum * 1099511628211ull;
+        k ^= static_cast<uint64_t>(variant) * 0x9E3779B97F4A7C15ull;
+        k ^= static_cast<uint64_t>(widgetIndex) + 0x165667B19E3779F9ull;
+        return k ? k : 1;  // 0 is reserved for "nothing captured"
+    }
     thread_local bool g_authoredReticleCaptureStarted = false;
     // Shared because Halo can execute first-person work on a render worker.
     std::atomic<bool> g_scopeRenderActive{false};
@@ -662,7 +676,16 @@ namespace
         g_realHudDrawWidget(userIndex, descriptor, widgetIndex,
                             useAlternatePath, drawState);
         if (g_authoredReticleCaptureStarted)
+        {
+            // This widget's art was redirected into the authored texture, so
+            // fold its identity in and publish it. Same weapon and state ->
+            // same key -> the compositor skips the blocking swapchain upload.
+            g_authoredCrosshairKeyAccum = FoldAuthoredCrosshairKey(
+                g_authoredCrosshairKeyAccum, widgetIndex, useAlternatePath);
+            g_authoredCrosshairKey.store(
+                g_authoredCrosshairKeyAccum, std::memory_order_release);
             VR_EndAuthoredReticleCapture();
+        }
         g_insideHudDrawWidget = previousInside;
         g_authoredReticleCaptureStarted = previousCapture;
     }
@@ -10353,12 +10376,11 @@ namespace
                 // Suppress path as well, which is why the key stayed 0 and the
                 // skip never engaged.
                 ReachFpCameraEyeScope& scope = g_reachFpCameraEyeScope;
-                uint64_t k = scope.captureKey * 1099511628211ull;
-                k ^= static_cast<uint64_t>(useAlternatePath) * 0x9E3779B97F4A7C15ull;
-                k ^= static_cast<uint64_t>(widgetIndex) + 0x165667B19E3779F9ull;
-                if (!k)
-                    k = 1;  // 0 means "nothing captured"; never collide with it
-                scope.captureKey = k;
+                scope.captureKey = FoldAuthoredCrosshairKey(
+                    scope.captureKey, widgetIndex, useAlternatePath);
+                g_authoredCrosshairKeyAccum = scope.captureKey;
+                g_authoredCrosshairKey.store(
+                    scope.captureKey, std::memory_order_release);
             }
             if (hideFromEye)
             {
@@ -14429,6 +14451,17 @@ uint64_t Game_GetReachAuthoredCrosshairKey()
 {
     return g_reachAuthoredCrosshairKey.load(std::memory_order_acquire);
 }
+uint64_t Game_GetAuthoredCrosshairKey()
+{
+    return g_authoredCrosshairKey.load(std::memory_order_acquire);
+}
+
+void Game_ResetAuthoredCrosshairKey()
+{
+    g_authoredCrosshairKeyAccum = 0;
+    g_authoredCrosshairKey.store(0, std::memory_order_release);
+}
+
 
 
 void Game_RejectReachAuthoredReticle(uint32_t expectedGeneration,

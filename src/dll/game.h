@@ -40,6 +40,13 @@ bool Game_OwnsReachAuthoredReticle();
 // authored reticle already in the swapchain is still correct and does not need
 // re-uploading this frame.
 uint64_t Game_GetReachAuthoredCrosshairKey();
+// Identity of the crosshair art captured this frame, for any title. 0 means
+// nothing was captured. The compositor re-uploads the authored reticle only
+// when this changes, so a static crosshair costs no swapchain work.
+uint64_t Game_GetAuthoredCrosshairKey();
+// Called once per displayed frame, before any capture, so the per-frame
+// accumulation starts clean and a static crosshair yields a stable key.
+void Game_ResetAuthoredCrosshairKey();
 // Atomically rejects the active Reach authored-reticle transaction after a
 // frame-bound upload failure. The title worker performs verified teardown;
 // there is no procedural, transparent, or flat-crosshair substitute.
