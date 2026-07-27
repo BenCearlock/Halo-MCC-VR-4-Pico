@@ -11061,6 +11061,30 @@ namespace
     // member B TLS slot, immediately followed by the member B cache store
     // mov [rcx+rbx], rax. Searched only inside a bounded tail window.
     const char* kReachCineSlotBSig = "B9 ?? ?? ?? ?? 48 89 04 19";
+
+    // ---- Reach native pause flag -------------------------------------------
+    // See kReachNativePauseFlagRva in reach_render_logic.h for how this was
+    // identified (live differential + code-reference filter + a 10 Hz watch of
+    // a five-second pause cadence). The signature below is the runtime binding:
+    // the flag's own address is DECODED from the matched store's disp32, never
+    // hardcoded, exactly like Halo 3's LocateNativePauseFlag and ODST's owner
+    // proof. The store alone is ambiguous (39 sites); the TLS-member fetch and
+    // the 0x200 state-bit set in front of it are what make it unique.
+    const char* kReachNativePauseOwnerSig =
+        "8B 15 ?? ?? ?? ?? "             // mov edx, [module TLS index]
+        "65 48 8B 04 25 58 00 00 00 "    // mov rax, gs:[0x58]
+        "B9 A0 00 00 00 "                // mov ecx, 0xA0  (member slot)
+        "48 8B 04 D0 "                   // mov rax, [rax+rdx*8]
+        "48 8B 14 08 "                   // mov rdx, [rax+rcx]
+        "B8 00 02 00 00 "                // mov eax, 0x200
+        "66 42 09 04 32 "                // or word ptr [rdx+r14], ax
+        "44 88 2D ?? ?? ?? ??";          // mov byte ptr [rip+d32], r13b
+
+    // 0 = not located, otherwise the live address of Reach's pause byte.
+    std::atomic<uintptr_t> g_reachNativePauseFlag{0};
+    // Cached last read, so the XInput path does not repeat a guarded engine
+    // read: -1 unknown, 0 running, 1 paused. Published by the Present tick.
+    std::atomic<int> g_reachEnginePauseCache{-1};
     constexpr size_t kReachCineSigLength = 111;
     constexpr const char* kReachCineVerifyName =
         "cinematic globals non deterministic";
@@ -14281,6 +14305,97 @@ namespace
         }
         return published;
     }
+    // Guarded read of Reach's native pause byte. Same shape as Halo 3's
+    // ReadEnginePaused and ODST's ReadOdstEnginePaused: a value outside {0,1}
+    // means the binding is no longer trustworthy, so report "unknown" and let
+    // the caller behave exactly as it did before this feature existed.
+    bool ReadReachEnginePaused(bool& paused)
+    {
+        const uintptr_t flag =
+            g_reachNativePauseFlag.load(std::memory_order_acquire);
+        if (!flag)
+            return false;
+        __try
+        {
+            const uint8_t value = *reinterpret_cast<const uint8_t*>(flag);
+            if (value > 1)
+                return false;
+            paused = value != 0;
+            return true;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            return false;
+        }
+    }
+
+    // 50 ms worker: locate Reach's native pause flag once per module
+    // generation. Fail-open in every branch - a missing, ambiguous, or
+    // out-of-range result logs once and leaves Reach behaving exactly as it did
+    // before (always Gameplay while armed). It never blocks arming, never
+    // disarms the camera core, and never touches Halo 3 or ODST.
+    void ReachPauseColdPoll(
+        uintptr_t base, size_t size, uint32_t generation, bool soleReachTitle)
+    {
+        static uint32_t attemptedGeneration = 0;
+        if (!soleReachTitle || !base || !generation)
+        {
+            g_reachNativePauseFlag.store(0, std::memory_order_release);
+            g_reachEnginePauseCache.store(-1, std::memory_order_release);
+            attemptedGeneration = 0;
+            return;
+        }
+        if (attemptedGeneration == generation)
+            return;
+        attemptedGeneration = generation;
+        g_reachNativePauseFlag.store(0, std::memory_order_release);
+        g_reachEnginePauseCache.store(-1, std::memory_order_release);
+
+        const uintptr_t hit = sig::Find(base, size, kReachNativePauseOwnerSig);
+        if (!hit || sig::Find(hit + 1, base + size - hit - 1,
+                              kReachNativePauseOwnerSig))
+        {
+            LOG("Reach pause state: owner signature %s; Reach keeps reporting "
+                "gameplay while armed (no pause presentation)",
+                hit ? "ambiguous" : "missing");
+            return;
+        }
+        // The store is the last instruction of the signature:
+        //   mov byte ptr [rip+disp32], r13b   (7 bytes, disp32 at +3)
+        const uintptr_t store = hit + kReachNativePauseStoreOffset;
+        const uintptr_t flag =
+            sig::RipTarget(store + 3, hit + kReachNativePauseOwnerSigLength);
+        if (flag < base || flag >= base + size)
+        {
+            LOG("Reach pause state: decoded flag falls outside haloreach.dll; "
+                "pause presentation stays off");
+            return;
+        }
+        uint8_t initial = 0xFF;
+        __try
+        {
+            initial = *reinterpret_cast<const uint8_t*>(flag);
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            initial = 0xFF;
+        }
+        if (initial > 1)
+        {
+            LOG("Reach pause state: flag failed boolean validation (%u); "
+                "pause presentation stays off", static_cast<unsigned>(initial));
+            return;
+        }
+
+        g_reachNativePauseFlag.store(flag, std::memory_order_release);
+        LOG("Reach pause state: native flag at haloreach.dll+0x%llX "
+            "(initial=%u, owner +0x%llX, expected +0x%llX/+0x%llX)",
+            (unsigned long long)(flag - base), static_cast<unsigned>(initial),
+            (unsigned long long)(hit - base),
+            (unsigned long long)kReachNativePauseOwnerRva,
+            (unsigned long long)kReachNativePauseFlagRva);
+    }
+
     // 50 ms worker: locate the cinematic-globals registration once per module
     // generation and decode everything the sampler needs. Fail-open, one log
     // line either way; never touches the camera core.
@@ -14637,6 +14752,7 @@ namespace
         uintptr_t base, size_t size, uint32_t generation, bool soleReachTitle)
     {
         ReachCineProbeColdPoll(base, size, generation, soleReachTitle);
+        ReachPauseColdPoll(base, size, generation, soleReachTitle);
         ReachCineProbeLogTick();
         LogReachFpCameraUploadIfReady();
         LogReachFpStatusIfNew();
@@ -15770,6 +15886,7 @@ void Game_AutoVrTick()
 
 #if HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE
     static bool wasReachHudContext = false;
+    static bool wasReachNativePause = false;
     if (TitleAdapter_GetActiveTitle() == GameTitle::HaloReach)
     {
         wasReachHudContext = true;
@@ -15788,11 +15905,39 @@ void Game_AutoVrTick()
                     VR_ToggleStereo();
                 LOG("Reach camera bring-up: head tracking, stereo, and 6DOF ON");
             }
+            // Native pause, matching Halo 3's behavior rather than ODST's.
+            // Halo 3 switches presentation to head-locked 2D and keeps its
+            // camera core armed; ODST tears the whole core down for Save & Quit
+            // safety, which is exactly what produced its slow-rearm defect. The
+            // player asked for "flat head-locked view on pause, stereo back on
+            // unpause", so Reach follows Halo 3. If the flag was never located
+            // this reports unknown and Reach behaves exactly as it did before.
+            bool reachPaused = false;
+            const bool reachPauseKnown = ReadReachEnginePaused(reachPaused);
+            g_reachEnginePauseCache.store(
+                reachPauseKnown ? (reachPaused ? 1 : 0) : -1,
+                std::memory_order_release);
+            if (reachPauseKnown && reachPaused && !wasReachNativePause)
+            {
+                wasReachNativePause = true;
+                VR_RequestPausePresentation(true);
+                LOG("Reach pause presentation: native pause entered, "
+                    "switching to head-locked 2D");
+            }
+            else if ((!reachPauseKnown || !reachPaused) && wasReachNativePause)
+            {
+                wasReachNativePause = false;
+                VR_RequestPausePresentation(false);
+                LOG("Reach pause presentation: native pause exited, "
+                    "restoring stereo 3D");
+            }
             const uint32_t reachGen =
                 TitleAdapter_GetGeneration(GameTitle::HaloReach);
             if (reachGen)
                 TitleAdapter_PublishMode(
-                    GameTitle::HaloReach, reachGen, RuntimeMode::Gameplay);
+                    GameTitle::HaloReach, reachGen,
+                    (reachPauseKnown && reachPaused) ? RuntimeMode::Paused
+                                                     : RuntimeMode::Gameplay);
             // Same shared HUD behavior Halo 3 and ODST get, against Reach's own
             // record. An armed per-eye core is Reach's liveness proof; a failed
             // or ambiguous locate leaves Reach's HUD wholly stock and says so.
@@ -15818,11 +15963,24 @@ void Game_AutoVrTick()
                 HudLayoutAutoTick(HudLayoutProfile::HaloReach);
             }
         }
-        else if (g_enabled.load(std::memory_order_relaxed) ||
-                 VR_IsStereoEnabled())
+        else
         {
-            g_enabled.store(false, std::memory_order_release);
-            VR_DetachGamePresentation();
+            // Disarmed: a pause override must not outlive the camera core, or
+            // the next arm comes back to a stranded 2D presentation.
+            g_reachEnginePauseCache.store(-1, std::memory_order_release);
+            if (wasReachNativePause)
+            {
+                wasReachNativePause = false;
+                VR_RequestPausePresentation(false);
+                LOG("Reach pause presentation: camera core disarmed, "
+                    "clearing 2D pause override");
+            }
+            if (g_enabled.load(std::memory_order_relaxed) ||
+                VR_IsStereoEnabled())
+            {
+                g_enabled.store(false, std::memory_order_release);
+                VR_DetachGamePresentation();
+            }
         }
         return;
     }
@@ -15830,6 +15988,17 @@ void Game_AutoVrTick()
     {
         wasReachHudContext = false;
         g_reachLastCamCopyMs.store(0, std::memory_order_release);
+        g_reachEnginePauseCache.store(-1, std::memory_order_release);
+        // Leaving Reach through its own pause menu must not strand the next
+        // title in the 2D override - the same rule Halo 3 applies at its
+        // "title left, clearing 2D pause override" transition.
+        if (wasReachNativePause)
+        {
+            wasReachNativePause = false;
+            VR_RequestPausePresentation(false);
+            LOG("Reach pause presentation: title left, "
+                "clearing 2D pause override");
+        }
         InvalidateHudLayoutProfile(HudLayoutProfile::HaloReach);
     }
 #endif
@@ -16335,13 +16504,18 @@ bool Game_MoveStickIsLocomotion()
     // ownership has not resolved yet (first heartbeats after arming, the
     // <=500 ms expiry after a transition) so locomotion does not glitch to
     // raw-stick there. Scoped to Reach; Halo 3/ODST keep the pure mode-driven
-    // path unchanged. Known limit: a Reach pause menu that keeps the camera
-    // armed reads as locomotion -- acceptable until Reach menu-state
-    // detection exists.
+    // path unchanged.
+    //
+    // The fallback must honour native pause, or it reinstates the exact defect
+    // the pause work removes: it would answer "locomotion" during the pause
+    // menu even while the mode above correctly says Paused, and the menu stick
+    // would still be treated as walking. The cache is published by the Present
+    // tick (-1 = flag not located, in which case this behaves as it always
+    // did).
     if (TitleAdapter_GetActiveTitle() == GameTitle::HaloReach &&
         g_reachCamera.armed.load(std::memory_order_acquire) &&
         g_enabled.load(std::memory_order_acquire))
-        return true;
+        return g_reachEnginePauseCache.load(std::memory_order_acquire) != 1;
 #endif
     return false;
 }

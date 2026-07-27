@@ -1665,6 +1665,75 @@ target/copy lifetime, split-screen, an unload/reload pair, device-loss or
 detour teardown, stereo-eye behavior, headset parity, or a player-visible
 Reach path. `proof_complete` and `hook_eligible` remain false.
 
+## Native pause flag (live-observed, 2026-07-27)
+
+`haloreach.dll+0x00C1A0E2` is Reach's native pause byte. **1 = paused,
+0 = running.**
+
+This one was not derived from HREK, and deliberately so. HREK names the system
+but does not expose a readable flag: `game_paused` is a registered debug
+variable whose entry exists in retail (`.rdata` RVA `0x009E90F8`, table entry
+`.data` RVA `0x00B42748`, type `0x5`) but whose value pointer is **null even at
+runtime**, so it is function-backed and cannot be read the way
+`render_far_clip_distance` (type `0x6`, value `0x00B43A8C`) can. HREK also shows
+the pause is owned by a UI component - `c_start_menu_pause_component`,
+documented "Pauses the game while the component exists", with an `IsPaused`
+property documented "Is the game paused" - and those symbol names are stripped
+from retail. The flag was therefore established by **observing the running
+title**, which the project's no-guessing rule explicitly permits ("confirm by
+observation"), and only then matched in the pinned module.
+
+Three independent lines agree:
+
+1. **Memory differential.** A read-only scan of the writable committed pages
+   inside the loaded `haloreach.dll` (67.35 MB), captured across three paused
+   and two unpaused states, with the paused captures taken at different places
+   in the level so that position-correlated bytes fall out. A survivor had to be
+   identical across every paused capture, identical across every unpaused
+   capture, boolean-valued, and different between the groups. 2175 bytes
+   survived.
+2. **Code-reference filter.** Of those 2175, exactly **four** are referenced by
+   any instruction at all, scanning `.text` for 23 rip-relative byte-access
+   forms (`mov`/`cmp`/`test`/`and`/`or`/`xor`/`movzx`/`movsx`/`setcc`, load and
+   store). This flag has one writer and eight readers spread across the engine -
+   the profile of a real global pause gate. The other three were: one write-1 /
+   write-0 / compare cluster that looked textbook but did not track pause, and
+   two per-frame churn bytes.
+3. **Live watch.** A 10 Hz poll of all four candidates while the player paused
+   and unpaused on a five-second cadence. This flag produced six clean
+   alternating transitions 4.9-6.2 s apart, matching the requested cadence
+   exactly and matching the differential's polarity. The two churn bytes flipped
+   several times per second; the textbook-shaped candidate moved once in 67 s
+   and read `0` while the game was paused, which eliminated it.
+
+The runtime binding is a signature, not the RVA. The owner instruction is
+
+```
+haloreach+0x0000F5AD  8B 15 ?? ?? ?? ??            mov edx, [module TLS index]
+                      65 48 8B 04 25 58 00 00 00   mov rax, gs:[0x58]
+                      B9 A0 00 00 00               mov ecx, 0xA0   (member slot)
+                      48 8B 04 D0                  mov rax, [rax+rdx*8]
+                      48 8B 14 08                  mov rdx, [rax+rcx]
+                      B8 00 02 00 00               mov eax, 0x200
+                      66 42 09 04 32               or  word ptr [rdx+r14], ax
+haloreach+0x0000F5D3  44 88 2D ?? ?? ?? ??         mov byte ptr [rip+d32], r13b
+```
+
+45 bytes, **exactly one match** in the pinned module, and its decoded disp32
+resolves to `0x00C1A0E2`. The context is required: the bare store
+`44 88 2D ?? ?? ?? ??` matches **39** sites. The flag address is decoded from
+the matched store, never hardcoded - the same discipline as Halo 3's
+`LocateNativePauseFlag` and ODST's owner proof, which resolves its flag from a
+`C6 05 disp32 01` at owner+0x20.
+
+The flag lives in `.data` beyond that section's raw file size, so it is
+zero-filled at load. That is correct for "not paused at startup" and is why the
+static file shows nothing there.
+
+Constants: `kReachNativePauseOwnerRva`, `kReachNativePauseFlagRva`,
+`kReachNativePauseOwnerSigLength`, `kReachNativePauseStoreOffset` in
+`src/common/reach_render_logic.h`.
+
 ## Evidence still required
 
 The unaccepted camera candidate now implements the exact outer-owner token,

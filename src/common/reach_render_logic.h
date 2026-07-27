@@ -31,6 +31,32 @@ inline constexpr uintptr_t kReachOuterMainRenderTargetRva = 0x000C33F8;
 inline constexpr uintptr_t kReachOuterPresentCallRva = 0x000C3000;
 inline constexpr uintptr_t kReachOuterPresentTargetRva = 0x0025113C;
 inline constexpr uintptr_t kReachFrustumHelperRva = 0x00287F58;
+// Reach's native pause flag, and the unique owner instruction that writes it.
+//
+// Identified 2026-07-27 by live observation of the running retail title, not by
+// reading the stripped binary for behavior. Three independent lines agree:
+//   1. A read-only writable-page differential over the loaded haloreach.dll
+//      across three paused and two unpaused captures taken at different places
+//      in the level. 2175 bytes survived as boolean and group-consistent.
+//   2. Of those 2175, exactly four are referenced by any code at all (23
+//      rip-relative byte-access instruction forms scanned across .text). This
+//      one has one writer and eight readers spread across the engine - the
+//      profile of a real global pause gate.
+//   3. A 10 Hz live watch while the player paused and unpaused on a five-second
+//      cadence: six clean alternating transitions 4.9-6.2 s apart, matching the
+//      requested cadence exactly, with the other three candidates eliminated
+//      (two flip several times per second, one moved once in 67 s).
+// Polarity: 1 = paused, 0 = running. The flag lives past .data's raw size, so
+// it is zero-filled at load, which is correct for "not paused at startup".
+//
+// The owner signature is the binding; the RVAs below are expected values used
+// for logging and cross-checking only. The bare store instruction
+// "44 88 2D ?? ?? ?? ??" matches 39 sites, so the TLS-member context is what
+// makes this unique - verified exactly one match in the pinned module.
+inline constexpr uintptr_t kReachNativePauseOwnerRva = 0x0000F5AD;
+inline constexpr uintptr_t kReachNativePauseFlagRva = 0x00C1A0E2;
+inline constexpr size_t kReachNativePauseOwnerSigLength = 45;
+inline constexpr uintptr_t kReachNativePauseStoreOffset = 38;
 // The remaining three stock camera-rebuild helpers, proven in
 // REACH-SIGNATURE-EVIDENCE.md ("Inner stereo candidate and coherent rebuild
 // constraints", steps 2-6). The projection builder is the direct call that
