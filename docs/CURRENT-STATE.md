@@ -451,7 +451,69 @@ friendly-green and hostile-red changes, shared crosshair configuration parity,
 safe title transitions/teardown, and a Halo 3 regression for the touched shared
 authored-reticle composition path.
 
-## BASELINE: authored crosshairs on all three titles - 2026-07-27
+## ACCEPTED: Reach vibration, cutscene facing, and a LIVE crosshair - 2026-07-27
+
+**Headset confirmed by the user across all three titles:** "I tested all three
+halos, and their crosshairs are working good. The performance is good."
+
+| Identity | Value |
+| --- | --- |
+| Accepted source | `716a635362d0b26d52bfe74d5d271a10768ae3c3` |
+| `halo3xr.dll` SHA-256 | `B97ED6CDF213421D2FBE05B8B9BFFA1270B8C314370B457BF32CA3A5AB5FEA54` |
+| `halo3xr_launcher.exe` SHA-256 | `B32C0001F297465C0924E18A85126D0C01F5084FEDF3F9389CA49160BFBA66BF` |
+| Branch | `reach/frame-skip` |
+
+Confirmed working: Reach controller vibration; yaw realignment at authored
+cutscene cuts; the authored crosshair now animating with live colour states on
+Reach, Halo 3 and ODST; `crosshair=0` hiding every crosshair including Reach's
+flat one; and no frame-rate cost.
+
+### The crosshair blackout: one defect behind three symptoms
+
+The VR crosshair displayed a single frozen snapshot. The art key describes
+WHICH widgets drew, not how they look, so Reach's animation frames, red/green
+state tints and fades all left it unchanged and the upload was skipped
+forever. Three reported symptoms, one cause: no animation, dead colour states,
+and - when the frozen snapshot was captured during a fade-out - a permanently
+blank crosshair.
+
+The decisive evidence was a heartbeat log at the moment of a blackout: every
+gate open (`authoredThisFrame=1`, quad `SUBMITTED`, `heldArt=1`) with the key
+frozen at `DFFEE7EAB8A8F81F` to the end of the session. The art was captured
+and displayed the whole time; it was blank. The fix refreshes on the existing
+frame-gap floor, which keeps the ~4-5ms blocking upload off every frame at
+120Hz.
+
+**Four wrong theories preceded it, and the pattern is worth keeping:** the
+CHUD alpha/fade write, the redirect entry point (which cost Reach's 3D), the
+art-key ordering, and "Reach stops emitting the widget". Each was plausible
+and each was disproven by instrumentation. Two lessons: a diagnostic that
+cannot distinguish its own hypotheses is worse than none (the class histogram
+and the quad heartbeat each overturned a conclusion drawn from silence), and
+the player's description of *related* symptoms - here "the animations are
+gone, it doesn't turn green" - identified the mechanism after four
+code-first attempts missed it.
+
+### Still open, with the user's exact requirements
+
+- **Character tags AND objectives must follow the HEAD ONLY.** They currently
+  float with the hand as well. See the HUD element identification and
+  navpoint evidence below.
+- **Both muzzle flash elements must follow the HAND.** One already does; the
+  second is stuck at the face. Move it, do not suppress it.
+- **Reach needs a pause state**, matching Halo 3 and ODST: native pause should
+  publish `RuntimeMode::Paused` and switch presentation to head-locked 2D via
+  `VR_RequestPausePresentation`, then restore stereo on unpause. Reach
+  currently publishes `Gameplay` whenever its core is armed
+  (`Game_AutoVrTick`), so a pause menu keeps full stereo and the menu stick is
+  treated as locomotion - the known limit recorded in
+  `Game_MoveStickIsLocomotion`. Halo 3's `LocateNativePauseFlag` /
+  `ReadOdstEnginePaused` are the shape to follow; Reach's own pause flag still
+  needs locating from HREK.
+- **Subtitles need a readable plane** (they are the interface text layer, not
+  a CHUD widget - see below).
+
+## Superseded baseline: authored crosshairs on all three titles - 2026-07-27
 
 **This is the current working baseline.** Halo 3, ODST and Halo: Reach all
 display their own authored CHUD crosshair art on the VR aim ray, the flat
