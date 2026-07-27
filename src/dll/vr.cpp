@@ -6467,9 +6467,43 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
                                     &projection));
                         }
                         const bool reticleChainAdmitted = reticleUploadAdmitted;
-                        if (reticleOwnerAdmitted &&
-                            g_config.crosshair &&
-                            haveAim && reticleChainAdmitted)
+                        const bool reticleQuadSubmitted =
+                            reticleOwnerAdmitted && g_config.crosshair &&
+                            haveAim && reticleChainAdmitted;
+#if HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE
+                        // The 2026-07-27 objective blackout is proven NOT to be
+                        // the capture, the class resolution, or the redirect:
+                        // during it Reach draws every other HUD widget at its
+                        // normal rate and simply emits no crosshair, while the
+                        // authored art stays held in the swapchain and the
+                        // repaint guard leaves it alone. So the art exists and
+                        // the quad still stops reaching the eye - which means
+                        // one of these gates is refusing. Name it rather than
+                        // guess a third time. Throttled state-change only, on
+                        // the compositor thread that already logs status lines.
+                        if (reachTitle)
+                        {
+                            static bool loggedSubmitted = true;
+                            if (reticleQuadSubmitted != loggedSubmitted)
+                            {
+                                loggedSubmitted = reticleQuadSubmitted;
+                                LOG("REACHHUD: crosshair quad %s "
+                                    "(ownerAdmitted=%d projectionAdmitted=%d "
+                                    "cfgCrosshair=%d haveAim=%d chain=%d "
+                                    "authoredThisFrame=%d heldArt=%d)",
+                                    reticleQuadSubmitted ? "SUBMITTED"
+                                                         : "NOT submitted",
+                                    reticleOwnerAdmitted ? 1 : 0,
+                                    reachProjectionAdmitted ? 1 : 0,
+                                    g_config.crosshair ? 1 : 0,
+                                    haveAim ? 1 : 0,
+                                    reticleChainAdmitted ? 1 : 0,
+                                    authoredReticleThisFrame ? 1 : 0,
+                                    g_reticleContainsAuthored ? 1 : 0);
+                            }
+                        }
+#endif
+                        if (reticleQuadSubmitted)
                         {
                             XrPosef rawAim{{aimQ[0],aimQ[1],aimQ[2],aimQ[3]},
                                            {aimP[0],aimP[1],aimP[2]}};
