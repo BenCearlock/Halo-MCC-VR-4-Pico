@@ -6405,9 +6405,31 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
                         // change, and the key changes with it. The frame gap
                         // remains only as a floor so a churning key can never
                         // reintroduce a per-frame blocking swapchain wait.
+                        // The key describes WHICH widgets drew, not how they
+                        // look. Reach animates its crosshair, tints it red on
+                        // an enemy and green on a hit, and fades it in and out
+                        // - none of which change the key. Skipping the upload
+                        // on an unchanged key therefore froze one snapshot
+                        // forever: no animation, no colour states, and if the
+                        // snapshot happened to be taken while the crosshair
+                        // was faded out, a permanently blank crosshair. That
+                        // is the headset blackout, proven 2026-07-27: at the
+                        // moment the crosshair was gone, every gate was open
+                        // (authoredThisFrame=1, quad SUBMITTED, heldArt=1) and
+                        // the key sat frozen at DFFEE7EAB8A8F81F for the rest
+                        // of the session. The art was being captured and shown
+                        // the whole time - it was blank.
+                        //
+                        // Refresh on the frame gap instead. That keeps the
+                        // measured cost bounded (the blocking swapchain
+                        // acquire/wait/copy is ~4-5ms, so it must never run
+                        // every frame at 120Hz) while letting animation,
+                        // colour state and fade recovery through. (void) on
+                        // reachKeyUnchanged: kept computed so the reasoning
+                        // above stays legible next to it.
+                        (void)reachKeyUnchanged;
                         const bool reachArtAlreadyPublished =
-                            reachCaptureEmpty || reachKeyUnchanged ||
-                            reachUploadTooSoon;
+                            reachCaptureEmpty || reachUploadTooSoon;
                         const bool shouldUploadAuthoredReticle =
                             authoredReticleThisFrame && reticleUploadAdmitted &&
                             !reachArtAlreadyPublished;
