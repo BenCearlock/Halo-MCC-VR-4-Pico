@@ -11209,7 +11209,15 @@ namespace
             // The collection name is stripped from retail, so the index is the
             // only handle available; the max index per definition is learned
             // from what actually draws.
-            const bool hideHudMuzzleFlash =
+            // REVERTED 2026-07-27. This hid the GRENADE indicator: the
+            // "always the last collection" rule held for the four weapon HUDs
+            // HREK was checked against, but the last collection at runtime is
+            // not warning_flashes - it was grenades. The player also states
+            // plainly that the element is not a CHUD widget at all: not blue,
+            // not vector art, a flipbook texture. CHUD is therefore ruled out
+            // as the subsystem, and this rule was wrong on both counts.
+            constexpr bool kReachHideHudMuzzleFlash = false;
+            const bool hideHudMuzzleFlash = kReachHideHudMuzzleFlash &&
                 ownsStereo && descriptorReadable && collectionIsFlash;
             if (hideHudMuzzleFlash)
                 g_reachHudFlashHidden.fetch_add(1, std::memory_order_relaxed);
