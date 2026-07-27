@@ -1,6 +1,3 @@
-Support my OTHER and ACTUAL artistic endeavors! (No proceeds will be used to fund vibe coding, just help me make bigger budget animations)
-buymeacoffee.com/pancreations
-
 HALO 4 WILL BEGIN SOON, DO NOT ACCEPT FIXES OF THIS MOD FROM OUTSIDE SOURCES WE DON'T KNOW WHATS IN IT
 
 STEAM VR BETA IS REQUIRED 
