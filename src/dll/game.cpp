@@ -10808,33 +10808,6 @@ namespace
             // through this resolver, which is now the THIRD independent
             // measurement saying so (zero first-person designators, zero
             // identity fallbacks, and now this). Nothing unproven stays active.
-            // ---- re-parent the face-stuck muzzle flash onto the gun --------
-            // The resolver hands back a marker matrix built against the
-            // engine's weapon, which our palette work never moved. If that
-            // matrix sits on the stock weapon, rebuild it against the
-            // controller-aligned weapon: express the marker in the stock
-            // weapon's local frame, then re-apply that exact local offset and
-            // orientation on the moved weapon. Rigid and exact - the marker
-            // keeps its real position on the barrel, so there is no offset.
-            //
-            // Keyed on POSITION, not on any effect flag. Three previous
-            // candidates guessed at flags and all three fired without moving
-            // anything the player could see. Only a matrix already sitting on
-            // the stock weapon is touched, so other characters' weapons,
-            // impacts and explosions are out of range by construction.
-            {
-                BoneMatrix stockWeapon{};
-                BoneMatrix movedWeapon{};
-                float* resolved = static_cast<float*>(outMatrix);
-                if (g_reachCamera.armed.load(std::memory_order_acquire) &&
-                    g_enabled.load(std::memory_order_acquire) &&
-                    ReachReadWeaponAnchor(stockWeapon, movedWeapon))
-                {
-                    ReachReparentEffectMatrix(resolved, stockWeapon,
-                                              movedWeapon);
-                }
-            }
-
             constexpr bool kReachHideBodyWeaponEffects = false;
             if (kReachHideBodyWeaponEffects &&
                 (fpUserByte & 0x0Fu) != 0u &&
@@ -10905,7 +10878,40 @@ namespace
                         1u << ((fpUserByte >> 4) & 0x0Fu),
                         std::memory_order_relaxed);
                 }
+                // The engine resolves the matrix HERE. Only after this call
+                // does outMatrix hold a real marker transform; the previous
+                // candidate re-parented beforehand, against uninitialised
+                // memory, and the engine then overwrote it - which is exactly
+                // why the probe came back with the nearest-approach sentinel
+                // untouched and zero re-parents.
                 original(effect, nodeDesignator, outMatrix);
+            // ---- re-parent the face-stuck muzzle flash onto the gun --------
+            // The resolver hands back a marker matrix built against the
+            // engine's weapon, which our palette work never moved. If that
+            // matrix sits on the stock weapon, rebuild it against the
+            // controller-aligned weapon: express the marker in the stock
+            // weapon's local frame, then re-apply that exact local offset and
+            // orientation on the moved weapon. Rigid and exact - the marker
+            // keeps its real position on the barrel, so there is no offset.
+            //
+            // Keyed on POSITION, not on any effect flag. Three previous
+            // candidates guessed at flags and all three fired without moving
+            // anything the player could see. Only a matrix already sitting on
+            // the stock weapon is touched, so other characters' weapons,
+            // impacts and explosions are out of range by construction.
+            {
+                BoneMatrix stockWeapon{};
+                BoneMatrix movedWeapon{};
+                float* resolved = static_cast<float*>(outMatrix);
+                if (g_reachCamera.armed.load(std::memory_order_acquire) &&
+                    g_enabled.load(std::memory_order_acquire) &&
+                    ReachReadWeaponAnchor(stockWeapon, movedWeapon))
+                {
+                    ReachReparentEffectMatrix(resolved, stockWeapon,
+                                              movedWeapon);
+                }
+            }
+
                 return;
             }
             // Exactly the call the engine's own first-person branch makes,
