@@ -6260,37 +6260,33 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
                             reticleTitleAdmitted &&
                             g_config.crosshair && haveAim &&
                             EnsureReticleChain();
+                        // Reach uploads its captured widget art exactly like
+                        // Halo 3 and ODST. The previous "!reachTitle" excluded
+                        // Reach from ever publishing the art it captures, which
+                        // is why its crosshair stayed procedural even once the
+                        // capture worked. The exclusion dated from when the
+                        // Reach CHUD hook could not run at all.
                         const bool shouldUploadAuthoredReticle =
-                            !reachTitle && authoredReticleThisFrame &&
-                            reticleUploadAdmitted;
+                            authoredReticleThisFrame && reticleUploadAdmitted;
                         bool authoredUploadFailed = false;
                         if (shouldUploadAuthoredReticle &&
-                            !UploadAuthoredReticle(reachTitle))
+                            !UploadAuthoredReticle(false))
                         {
                             // Never expose stale or undefined swapchain
-                            // contents if the authored upload fails. Halo 3 and
-                            // ODST retain their accepted behavior; Reach's
-                            // mandatory transaction rejects the generation and
-                            // permits no transparent/procedural substitute.
+                            // contents: repaint the chain, exactly as the
+                            // accepted Halo 3 / ODST path does. A crosshair
+                            // upload failure must not disarm Reach's camera
+                            // core or drop its world projection - failure
+                            // isolation, per AGENTS.md. It is reported loudly
+                            // rather than passing silently.
                             g_authoredReticleReady = false;
-                            authoredUploadFailed = true;
-                            if (reachTitle)
-                            {
-                                // Revoke the already-copied pair before any
-                                // layer is queued. The next prepared serial also
-                                // cannot reuse either eye after this rejection.
-#if HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE
-                                g_reachEyeSerial[0].store(
-                                    0, std::memory_order_release);
-                                g_reachEyeSerial[1].store(
-                                    0, std::memory_order_release);
-#endif
-                                Game_RejectReachAuthoredReticle(
-                                    reachGeneration,
-                                    "authored reticle upload failed");
-                            }
-                            else
-                                EnsureReticleChain();
+                            EnsureReticleChain();
+                            static std::atomic<bool> loggedUploadLoss{false};
+                            if (!loggedUploadLoss.exchange(
+                                    true, std::memory_order_relaxed))
+                                LOG("authored reticle upload FAILED; the VR "
+                                    "reticle is showing its procedural art "
+                                    "this frame instead of the game's widget");
                         }
                         const bool liveReachOwnerAfterUpload =
                             !reachTitle || Game_OwnsReachAuthoredReticle();
