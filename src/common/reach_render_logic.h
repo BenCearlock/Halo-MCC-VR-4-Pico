@@ -53,6 +53,54 @@ inline constexpr uintptr_t kReachFrustumHelperRva = 0x00287F58;
 // for logging and cross-checking only. The bare store instruction
 // "44 88 2D ?? ?? ?? ??" matches 39 sites, so the TLS-member context is what
 // makes this unique - verified exactly one match in the pinned module.
+// Reach's single camera parent: render_camera_from_observer_camera.
+//
+// Stock Reach derives BOTH the world render camera and the CHUD world-to-screen
+// projection camera from the same observer camera through this one function, so
+// stock Reach has exactly ONE parent for everything the player sees. Our mod
+// breaks that: weapon aim steers the observer camera onto the right controller
+// ray, while head-look is applied to a PRIVATE render-side copy. The world then
+// renders from the head while every other consumer of the observer camera - the
+// CHUD marker projection, and the weather/rain pass - still follows the hand.
+// The player sees name tags, objective markers and rain swing with the gun.
+//
+// Halo 3 and ODST do not have this defect because both apply head-look INSIDE
+// their camera-copy hook and never restore the source; see the load-bearing
+// comment at game.cpp "Do not scope this write again".
+//
+// The destination layout is proven by this function's own copy block
+// (0x287E3B-0x287E6E), which is why the correction is a plain field copy:
+//   observer +0x00 position -> render +0x00      (3 floats)
+//   observer +0x28 forward  -> render +0x0C      (3 floats)
+//   observer +0x34 up       -> render +0x18      (3 floats)
+//   observer +0x6C vfov     -> render +0x28
+// That destination is byte-identical to the compact camera layout this codebase
+// already uses (pos +0x00, fwd +0x0C, up +0x18), the same one ReachApplyHeadLook
+// writes - so the per-eye head camera can be copied straight in.
+//
+// Measured in the pinned module: the 23-byte prologue below is UNIQUE (exactly
+// one match), and NONE of the six call sites reads a return value, so the
+// function is void and the detour cannot clobber a result.
+inline constexpr uintptr_t kReachRenderCameraFromObserverRva = 0x00287DFC;
+// Return addresses of all six call sites, measured from their rel32 targets.
+inline constexpr uintptr_t kReachObserverCameraReturnRvas[6] = {
+    0x0025B404, 0x0025D406, 0x0026C2DE, 0x0026FA47, 0x0026FB13, 0x002E1525};
+// 0x0026C2DE is the world render camera - the headset-accepted path, never
+// corrected. 0x002E1525 is the CHUD world-to-screen projection camera.
+// The remaining four are unidentified; the runtime tallies them by site so one
+// headset session names them instead of a guess.
+inline constexpr int kReachObserverCameraWorldSite = 2;
+inline constexpr int kReachObserverCameraChudSite = 5;
+
+// Pure, unit-testable: map a return RVA to its call-site index, or -1.
+inline constexpr int ReachClassifyObserverCameraReturn(uintptr_t returnRva)
+{
+    for (int i = 0; i < 6; ++i)
+        if (kReachObserverCameraReturnRvas[i] == returnRva)
+            return i;
+    return -1;
+}
+
 inline constexpr uintptr_t kReachNativePauseOwnerRva = 0x0000F5AD;
 inline constexpr uintptr_t kReachNativePauseFlagRva = 0x00C1A0E2;
 inline constexpr size_t kReachNativePauseOwnerSigLength = 45;

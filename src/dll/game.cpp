@@ -10063,6 +10063,7 @@ namespace
         void* fpPaletteTarget = nullptr;
         void* fpCameraTarget = nullptr;
         void* hudDrawWidgetTarget = nullptr;
+        void* observerCameraTarget = nullptr;
     } g_reachCamera;
     bool RestoreReachNativeWeaponIkBypass();
     static_assert(std::atomic<int>::is_always_lock_free);
@@ -10321,6 +10322,100 @@ namespace
     // five-argument chud_draw_widget transaction. Select only class 2 and
     // reuse Halo 3/ODST's authored-widget capture. No procedural reticle,
     // widget-name fallback, or mixed flat-crosshair mode exists.
+    // ---- Reach observer-camera re-parenting --------------------------------
+    // Takes the rain, objective markers and character name tags OFF the hand.
+    // They are not a HUD "layer" - they are every consumer of Reach's observer
+    // camera, which our aim steering points down the controller ray while the
+    // world renders from a private head copy. See
+    // kReachRenderCameraFromObserverRva for the full derivation and the proven
+    // destination layout.
+    //
+    // This does NOT apply head-look a second time. ReachApplyHeadLook consumes
+    // one-shot state (g_needRecenter and g_reachCineCutRealign, both exchange())
+    // so calling it again per frame would silently eat the manual recenter and
+    // the accepted cutscene yaw realign. Instead this copies the camera the
+    // world was ALREADY rendered from for this exact eye, which also guarantees
+    // the markers can never disagree with the world they are drawn over.
+    using ReachObserverCameraFn = void(__fastcall*)(void*, const void*);
+    ReachObserverCameraFn g_reachOrigObserverCamera = nullptr;
+    std::atomic<uint32_t> g_reachObserverCameraSiteHits[6]{};
+    std::atomic<uint32_t> g_reachObserverCameraCorrected[6]{};
+    std::atomic<uint32_t> g_reachObserverCameraUnknownSite{0};
+
+    __declspec(noinline) void __fastcall ReachObserverCameraDetour(
+        void* dst, const void* src)
+    {
+        const uintptr_t returnAddress =
+            reinterpret_cast<uintptr_t>(_ReturnAddress());
+        g_reachCamera.activeCallbacks.fetch_add(1, std::memory_order_acq_rel);
+        __try
+        {
+            ReachObserverCameraFn original = g_reachOrigObserverCamera;
+            if (!original)
+                return;
+            // Always run the engine's own build first, unconditionally, on
+            // every path. A skipped call leaves the destination camera
+            // uninitialised; correcting it afterwards is purely additive.
+            original(dst, src);
+
+            const uintptr_t base = g_reachCamera.base;
+            if (!dst || !base || returnAddress <= base)
+                return;
+            const int site =
+                ReachClassifyObserverCameraReturn(returnAddress - base);
+            if (site < 0)
+            {
+                g_reachObserverCameraUnknownSite.fetch_add(
+                    1, std::memory_order_relaxed);
+                return;
+            }
+            g_reachObserverCameraSiteHits[site].fetch_add(
+                1, std::memory_order_relaxed);
+            // The world render camera is the headset-accepted path and already
+            // carries head-look. Touching it would double-apply and put the
+            // accepted Reach 3D at risk, so it is never corrected.
+            if (site == kReachObserverCameraWorldSite)
+                return;
+            if (!ReachOwnsHudStereoTransaction())
+                return;
+            const ReachFpCameraEyeScope& scope = g_reachFpCameraEyeScope;
+            if (!scope.active ||
+                scope.generation != g_reachCamera.generation)
+            {
+                return;
+            }
+            // Destination and the cached head camera share the compact layout
+            // exactly (proven by this function's own copy block), so this is a
+            // straight three-field copy: position, forward, up. Field of view
+            // and everything else the engine derived is left alone.
+            const float* headPos =
+                reinterpret_cast<const float*>(scope.compact + 0x00);
+            const float* headFwd =
+                reinterpret_cast<const float*>(scope.compact + 0x0C);
+            const float* headUp =
+                reinterpret_cast<const float*>(scope.compact + 0x18);
+            for (int i = 0; i < 3; ++i)
+            {
+                if (!isfinite(headPos[i]) || !isfinite(headFwd[i]) ||
+                    !isfinite(headUp[i]))
+                {
+                    return;
+                }
+            }
+            unsigned char* out = static_cast<unsigned char*>(dst);
+            memcpy(out + 0x00, headPos, sizeof(float) * 3);
+            memcpy(out + 0x0C, headFwd, sizeof(float) * 3);
+            memcpy(out + 0x18, headUp, sizeof(float) * 3);
+            g_reachObserverCameraCorrected[site].fetch_add(
+                1, std::memory_order_relaxed);
+        }
+        __finally
+        {
+            g_reachCamera.activeCallbacks.fetch_sub(
+                1, std::memory_order_acq_rel);
+        }
+    }
+
     __declspec(noinline) void __fastcall ReachHudDrawWidgetDetour(
         int userIndex, void* descriptor, unsigned int widgetIndex,
         unsigned int useAlternatePath, void* drawState)
@@ -13191,7 +13286,7 @@ namespace
     bool ScanForReachDetourIngress(bool& busy)
     {
         static bool rangesResolved = false;
-        static ReachDetourCodeRange ranges[6]{};
+        static ReachDetourCodeRange ranges[7]{};
         if (!rangesResolved)
         {
             const void* functions[] = {
@@ -13201,6 +13296,7 @@ namespace
                 reinterpret_cast<const void*>(&ReachFpPalette),
                 reinterpret_cast<const void*>(&ReachFpCameraRebuildDetour),
                 reinterpret_cast<const void*>(&ReachHudDrawWidgetDetour),
+                reinterpret_cast<const void*>(&ReachObserverCameraDetour),
             };
             static_assert(_countof(functions) == _countof(ranges));
             bool resolved = true;
@@ -13220,6 +13316,7 @@ namespace
             g_reachCamera.fpPaletteTarget,
             g_reachCamera.fpCameraTarget,
             g_reachCamera.hudDrawWidgetTarget,
+            g_reachCamera.observerCameraTarget,
         };
         void* const trampolines[] = {
             reinterpret_cast<void*>(g_reachOrigMainRenderView),
@@ -13228,6 +13325,7 @@ namespace
             reinterpret_cast<void*>(g_reachOrigFpPalette),
             reinterpret_cast<void*>(g_reachOrigFpCameraRebuild),
             reinterpret_cast<void*>(g_reachOrigHudDrawWidget),
+            reinterpret_cast<void*>(g_reachOrigObserverCamera),
         };
         static_assert(_countof(targets) == _countof(ranges));
         static_assert(_countof(trampolines) == _countof(ranges));
@@ -13322,6 +13420,7 @@ namespace
     {
         bool disabledAll = true;
         void* const targets[] = {
+            g_reachCamera.observerCameraTarget,
             g_reachCamera.hudDrawWidgetTarget,
             g_reachCamera.outerTarget,
             g_reachCamera.innerTarget,
@@ -13345,6 +13444,23 @@ namespace
             return false;
 
         bool removedAll = true;
+        if (g_reachCamera.observerCameraTarget)
+        {
+            const MH_STATUS status =
+                MH_RemoveHook(g_reachCamera.observerCameraTarget);
+            if (status == MH_OK || status == MH_ERROR_NOT_CREATED)
+            {
+                g_reachCamera.observerCameraTarget = nullptr;
+                g_reachOrigObserverCamera = nullptr;
+            }
+            else
+            {
+                removedAll = false;
+                LOG("Reach head-lock cleanup: remove failed for %p (%d)",
+                    g_reachCamera.observerCameraTarget,
+                    static_cast<int>(status));
+            }
+        }
         if (g_reachCamera.hudDrawWidgetTarget)
         {
             const MH_STATUS status =
@@ -13511,6 +13627,7 @@ namespace
         g_reachCamera.fpPaletteTarget = nullptr;
         g_reachCamera.fpCameraTarget = nullptr;
         g_reachCamera.hudDrawWidgetTarget = nullptr;
+        g_reachCamera.observerCameraTarget = nullptr;
         g_reachCamera.moduleReference = nullptr;
         g_reachCamera.base = 0;
         g_reachCamera.size = 0;
@@ -14011,6 +14128,21 @@ namespace
             LOG("Reach crosshair: chud_draw_widget hook create FAILED at "
                 "haloreach.dll+0x%llX",
                 static_cast<unsigned long long>(kReachHudDrawWidgetRva));
+        // Optional and independent of the crosshair: takes rain, objective
+        // markers and character tags off the hand. Deliberately NOT chained off
+        // hudDrawWidgetCreated - one optional feature must never gate another.
+        void* observerCamera = reinterpret_cast<void*>(
+            base + kReachRenderCameraFromObserverRva);
+        const bool observerCameraCreated = fpCameraCreated && MH_CreateHook(
+                observerCamera,
+                reinterpret_cast<void*>(&ReachObserverCameraDetour),
+                reinterpret_cast<void**>(&g_reachOrigObserverCamera)) == MH_OK;
+        if (fpCameraCreated && !observerCameraCreated)
+            LOG("Reach head-lock: observer-camera hook create FAILED at "
+                "haloreach.dll+0x%llX; rain/markers/tags stay on the hand, "
+                "nothing else affected",
+                static_cast<unsigned long long>(
+                    kReachRenderCameraFromObserverRva));
         if (!innerCreated || !outerCreated ||
             !fpInterpolateCreated || !fpPaletteCreated || !fpCameraCreated)
         {
@@ -14021,6 +14153,7 @@ namespace
             bool fpPaletteRetained=fpPaletteCreated;
             bool fpCameraRetained=fpCameraCreated;
             bool hudDrawWidgetRetained=hudDrawWidgetCreated;
+            bool observerCameraRetained=observerCameraCreated;
             auto removeCreated=[&](bool created,void* target,bool& retained) {
                 if (!created) return;
                 const MH_STATUS status=MH_RemoveHook(target);
@@ -14029,6 +14162,8 @@ namespace
                 else
                     cleanupOk=false;
             };
+            removeCreated(observerCameraCreated,observerCamera,
+                          observerCameraRetained);
             removeCreated(hudDrawWidgetCreated,hudDrawWidget,
                           hudDrawWidgetRetained);
             removeCreated(fpCameraCreated,fpCamera,fpCameraRetained);
@@ -14044,6 +14179,7 @@ namespace
             if (!fpPaletteRetained) g_reachOrigFpPalette=nullptr;
             if (!fpCameraRetained) g_reachOrigFpCameraRebuild=nullptr;
             if (!hudDrawWidgetRetained) g_reachOrigHudDrawWidget=nullptr;
+            if (!observerCameraRetained) g_reachOrigObserverCamera=nullptr;
             if (cleanupOk)
             {
                 FreeLibrary(moduleReference);
@@ -14064,6 +14200,8 @@ namespace
                     fpCameraRetained?fpCamera:nullptr;
                 g_reachCamera.hudDrawWidgetTarget=
                     hudDrawWidgetRetained?hudDrawWidget:nullptr;
+                g_reachCamera.observerCameraTarget=
+                    observerCameraRetained?observerCamera:nullptr;
                 g_reachCamera.armed.store(false,std::memory_order_release);
                 g_reachCamera.teardownRequested.store(
                     true,std::memory_order_release);
@@ -14093,6 +14231,16 @@ namespace
         g_reachCamera.fpCameraTarget = fpCamera;
         g_reachCamera.hudDrawWidgetTarget =
             hudDrawWidgetCreated ? hudDrawWidget : nullptr;
+        g_reachCamera.observerCameraTarget =
+            observerCameraCreated ? observerCamera : nullptr;
+        for (int site = 0; site < 6; ++site)
+        {
+            g_reachObserverCameraSiteHits[site].store(
+                0, std::memory_order_relaxed);
+            g_reachObserverCameraCorrected[site].store(
+                0, std::memory_order_relaxed);
+        }
+        g_reachObserverCameraUnknownSite.store(0, std::memory_order_relaxed);
         g_reachFpCameraUpload = reinterpret_cast<ReachFpCameraUploadFn>(
             base + kReachFpCameraUploadRva);
         g_reachCamera.installedAtMs = GetTickCount64();
@@ -14173,6 +14321,27 @@ namespace
                 "haloreach.dll+0x%llX; authored-widget capture pending "
                 "per-eye execution",
                 static_cast<unsigned long long>(kReachHudDrawWidgetRva));
+        }
+        // Same optional, fail-open contract: a failure here removes only this
+        // hook. The world render camera is never corrected by it either way, so
+        // the accepted Reach 3D cannot be affected by this feature failing.
+        if (observerCameraCreated &&
+            MH_EnableHook(observerCamera) != MH_OK)
+        {
+            LOG("Reach head-lock: observer-camera hook enable failed; rain, "
+                "objective markers and character tags stay on the hand, "
+                "nothing else affected");
+            MH_RemoveHook(observerCamera);
+            g_reachCamera.observerCameraTarget = nullptr;
+            g_reachOrigObserverCamera = nullptr;
+        }
+        else if (observerCameraCreated)
+        {
+            LOG("Reach head-lock: observer-camera hook active at "
+                "haloreach.dll+0x%llX; rain/objective markers/character tags "
+                "will follow the head only",
+                static_cast<unsigned long long>(
+                    kReachRenderCameraFromObserverRva));
         }
         // Optional and fail-open: kill_reticle only. If this cannot be resolved
         // exactly, Reach keeps its stock crosshair and nothing else changes.
@@ -14305,6 +14474,53 @@ namespace
         }
         return published;
     }
+    // Worker-side only: report which of the six observer-camera call sites are
+    // actually exercised, and which ones the head-lock corrected. Two of the six
+    // are named from static evidence; the other four are unidentified, so one
+    // headset session names them from real play instead of a guess. Logs once
+    // when the set of exercised sites changes, then stays quiet.
+    void ReachObserverCameraLogTick()
+    {
+        static uint32_t lastMask = 0xFFFFFFFFu;
+        uint32_t mask = 0;
+        uint32_t hits[6]{};
+        uint32_t fixed[6]{};
+        for (int site = 0; site < 6; ++site)
+        {
+            hits[site] = g_reachObserverCameraSiteHits[site].load(
+                std::memory_order_relaxed);
+            fixed[site] = g_reachObserverCameraCorrected[site].load(
+                std::memory_order_relaxed);
+            if (hits[site])
+                mask |= (1u << site);
+        }
+        const uint32_t unknown =
+            g_reachObserverCameraUnknownSite.load(std::memory_order_relaxed);
+        if (unknown)
+            mask |= (1u << 6);
+        if (mask == lastMask)
+            return;
+        lastMask = mask;
+        if (!mask)
+            return;
+        for (int site = 0; site < 6; ++site)
+        {
+            if (!hits[site])
+                continue;
+            const char* role =
+                site == kReachObserverCameraWorldSite ? "world render (never corrected)"
+                : site == kReachObserverCameraChudSite ? "CHUD marker projection"
+                : "unidentified";
+            LOG("Reach head-lock: site %d return +0x%llX %s - %u calls, "
+                "%u head-locked", site,
+                (unsigned long long)kReachObserverCameraReturnRvas[site],
+                role, hits[site], fixed[site]);
+        }
+        if (unknown)
+            LOG("Reach head-lock: %u calls from an unrecognised return address "
+                "(left untouched)", unknown);
+    }
+
     // Guarded read of Reach's native pause byte. Same shape as Halo 3's
     // ReadEnginePaused and ODST's ReadOdstEnginePaused: a value outside {0,1}
     // means the binding is no longer trustworthy, so report "unknown" and let
@@ -14753,6 +14969,7 @@ namespace
     {
         ReachCineProbeColdPoll(base, size, generation, soleReachTitle);
         ReachPauseColdPoll(base, size, generation, soleReachTitle);
+        ReachObserverCameraLogTick();
         ReachCineProbeLogTick();
         LogReachFpCameraUploadIfReady();
         LogReachFpStatusIfNew();

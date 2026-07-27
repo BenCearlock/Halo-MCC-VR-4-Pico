@@ -3893,6 +3893,37 @@ int main()
           !IsExpectedNextFrameWaitDispatch(UINT64_MAX, 0),
         "Begin admission rejects stale, skipped, invalid, or wrapped dispatches");
 
+    // Reach observer-camera head-lock: the call-site classifier decides which
+    // consumers get taken off the hand. Getting the world-render index wrong
+    // would double-apply head-look to the accepted Reach 3D path.
+    Check(ReachClassifyObserverCameraReturn(0x0026C2DE) ==
+              kReachObserverCameraWorldSite,
+        "The world render camera return address maps to the world site");
+    Check(ReachClassifyObserverCameraReturn(0x002E1525) ==
+              kReachObserverCameraChudSite,
+        "The CHUD projection return address maps to the CHUD site");
+    Check(kReachObserverCameraWorldSite != kReachObserverCameraChudSite,
+        "The world and CHUD sites are distinct");
+    Check(ReachClassifyObserverCameraReturn(0x0025B404) == 0 &&
+          ReachClassifyObserverCameraReturn(0x0025D406) == 1 &&
+          ReachClassifyObserverCameraReturn(0x0026FA47) == 3 &&
+          ReachClassifyObserverCameraReturn(0x0026FB0E + 5) == 4,
+        "Every measured observer-camera call site maps to its own index");
+    Check(ReachClassifyObserverCameraReturn(0x0026C2DD) < 0 &&
+          ReachClassifyObserverCameraReturn(0x0026C2DF) < 0 &&
+          ReachClassifyObserverCameraReturn(0) < 0,
+        "An off-by-one or unknown return address is never classified as a site");
+    {
+        bool collision = false;
+        for (int a = 0; a < 6; ++a)
+            for (int b = a + 1; b < 6; ++b)
+                if (kReachObserverCameraReturnRvas[a] ==
+                    kReachObserverCameraReturnRvas[b])
+                    collision = true;
+        Check(!collision,
+            "The six observer-camera return addresses are all distinct");
+    }
+
     if (g_failures == 0)
         std::cout << "HaloMCCVR core tests passed\n";
     return g_failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
