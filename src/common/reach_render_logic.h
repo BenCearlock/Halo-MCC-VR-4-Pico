@@ -96,6 +96,35 @@ inline constexpr char kReachFpCameraRebuildBodySha256[] =
 // Headset-pending: this is a newly-verified address, not yet proven in the
 // installed game.
 inline constexpr uintptr_t kReachHudDrawWidgetRva = 0x002DA364;
+// Resolving a CHUD widget's real scripting class. Decoded from retail
+// 0x2DA68A-0x2DA6EC, which is exactly what Reach itself does before drawing:
+//
+//   globalPtr  = *(module + kReachChudDefinitionTableRva)
+//   handle     = *(globalPtr + (arg4 & 0xFFFF) * 8 + 4)
+//   chudDef    = pool[handle >> 28] + handle * 4
+//   collHandle = *(chudDef + 4)
+//   collection = pool[collHandle >> 28]
+//                  + (collHandle + descriptor[3] * kReachChudCollectionStride) * 4
+//
+// pool[i] is *(module + kReachChudPoolTableRva + i*8) - the same 4-bit-tag
+// handle decode used everywhere else in this engine.
+//
+// The class byte then sits at collection + 4. The official tag definition
+// gives the collection's field order and confirms that offset: a 4-byte
+// "artist name" string id first, then the "scripting class" char enum.
+//
+// This matters because descriptor+4 is NOT the class - it is a widget index
+// within the collection (0x2ED80C is a three-tier index accessor, strides
+// 0x27/0x21/0x20). Comparing that index against 2 hid whichever widget
+// happened to sit at index 2, which is why exactly one arc of the crosshair
+// ever disappeared. Nearly every drawn widget authors its class as
+// "undefined/use parent" (1092 of 1143 across the official exports), so the
+// only correct source for the class is the owning collection.
+inline constexpr uintptr_t kReachChudDefinitionTableRva = 0x00C1A600;
+inline constexpr uintptr_t kReachChudPoolTableRva = 0x04E39F20;
+inline constexpr uint32_t kReachChudCollectionStride = 0x37;
+inline constexpr uintptr_t kReachChudCollectionClassOffset = 4;
+inline constexpr uintptr_t kReachChudDescriptorCollectionByte = 3;
 inline constexpr uintptr_t kReachFpCameraUploadRva = 0x00282D60;
 inline constexpr size_t kReachFpCameraUploadBodySize = 0x0179;
 inline constexpr char kReachFpCameraUploadBodySha256[] =

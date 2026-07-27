@@ -10065,6 +10065,95 @@ namespace
     // lesser mode; a fresh module generation is required for another proof.
     std::atomic<uint32_t> g_reachChudParityFailedGeneration{0};
 
+    static int SafeReadU32(const void* slot, uint32_t* value)
+    {
+        __try
+        {
+            *value = *reinterpret_cast<const volatile uint32_t*>(slot);
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER) { return 0; }
+        return 1;
+    }
+
+    static int SafeReadPtr(const void* slot, uintptr_t* value)
+    {
+        __try
+        {
+            *value = *reinterpret_cast<const volatile uintptr_t*>(slot);
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER) { return 0; }
+        return 1;
+    }
+
+    // Reach's own resolution, decoded from 0x2DA68A-0x2DA6EC. See
+    // reach_render_logic.h for the derivation. Returns false if any link in
+    // the chain cannot be read; the caller must treat that as a real failure,
+    // never as "not a crosshair".
+    static bool ResolveReachChudCollectionClass(
+        uintptr_t base, const void* descriptor, unsigned int definitionIndex,
+        int8_t& scriptingClass)
+    {
+        if (!base || !descriptor)
+            return false;
+        const auto pool = [base](uint32_t handle, uintptr_t& out) -> bool {
+            const uintptr_t slot = base + kReachChudPoolTableRva +
+                static_cast<uintptr_t>(handle >> 28) * 8;
+            return SafeReadPtr(reinterpret_cast<const void*>(slot), &out) != 0;
+        };
+
+        uintptr_t globalPtr = 0;
+        if (!SafeReadPtr(
+                reinterpret_cast<const void*>(
+                    base + kReachChudDefinitionTableRva),
+                &globalPtr) ||
+            !globalPtr)
+            return false;
+
+        uint32_t definitionHandle = 0;
+        if (!SafeReadU32(
+                reinterpret_cast<const void*>(
+                    globalPtr +
+                    static_cast<uintptr_t>(definitionIndex & 0xFFFFu) * 8 + 4),
+                &definitionHandle))
+            return false;
+
+        uintptr_t definitionPool = 0;
+        if (!pool(definitionHandle, definitionPool) || !definitionPool)
+            return false;
+        const uintptr_t chudDefinition =
+            definitionPool + static_cast<uintptr_t>(definitionHandle) * 4;
+
+        uint32_t collectionHandle = 0;
+        if (!SafeReadU32(
+                reinterpret_cast<const void*>(chudDefinition + 4),
+                &collectionHandle))
+            return false;
+
+        uint8_t collectionIndex = 0;
+        if (!SafeReadByte(
+                reinterpret_cast<const uint8_t*>(descriptor) +
+                    kReachChudDescriptorCollectionByte,
+                &collectionIndex))
+            return false;
+
+        uintptr_t collectionPool = 0;
+        if (!pool(collectionHandle, collectionPool) || !collectionPool)
+            return false;
+        const uintptr_t collection = collectionPool +
+            (static_cast<uintptr_t>(collectionHandle) +
+             static_cast<uintptr_t>(collectionIndex) *
+                 kReachChudCollectionStride) * 4;
+
+        uint8_t rawClass = 0;
+        if (!SafeReadByte(
+                reinterpret_cast<const uint8_t*>(
+                    collection + kReachChudCollectionClassOffset),
+                &rawClass))
+            return false;
+        scriptingClass = static_cast<int8_t>(rawClass);
+        return true;
+    }
+
     bool ReachOwnsHudStereoTransaction()
     {
         if (TitleAdapter_GetActiveTitle() != GameTitle::HaloReach)
@@ -10138,13 +10227,19 @@ namespace
                 return;
             }
 
-            uint8_t rawClass = 0xFF;
-            const bool descriptorReadable = descriptor && SafeReadByte(
-                reinterpret_cast<const uint8_t*>(descriptor) + 4,
-                &rawClass);
+            // descriptor+4 is a WIDGET INDEX, not the scripting class. The
+            // class belongs to the owning collection, reached through
+            // descriptor+3. Resolving it the way Reach does is the only way to
+            // catch every piece of a crosshair: almost all drawn widgets
+            // author their class as "undefined/use parent".
+            int8_t resolvedClass = -1;
+            const bool descriptorReadable = descriptor &&
+                ResolveReachChudCollectionClass(
+                    g_reachCamera.base, descriptor, useAlternatePath,
+                    resolvedClass);
+            const uint8_t rawClass = static_cast<uint8_t>(resolvedClass);
             const bool isCrosshairClass = descriptorReadable &&
-                static_cast<int8_t>(rawClass) ==
-                    kReachChudCrosshairScriptingClass;
+                resolvedClass == kReachChudCrosshairScriptingClass;
             if (ownsStereo && isCrosshairClass)
                 g_reachFpCameraEyeScope.chudClass2Seen = true;
 
@@ -10161,6 +10256,8 @@ namespace
                 static std::atomic<unsigned> s_total{0};
                 static std::atomic<unsigned> s_owned{0};
                 static std::atomic<unsigned> s_classMask{0};
+                static std::atomic<uint64_t> s_class2Groups{0};
+                static std::atomic<uint64_t> s_class0Groups{0};
                 static std::atomic<uint64_t> s_lastLogMs{0};
                 s_total.fetch_add(1, std::memory_order_relaxed);
                 if (ownsStereo)
@@ -10171,6 +10268,26 @@ namespace
                     if (signedClass >= 0 && signedClass < 31)
                         s_classMask.fetch_or(
                             1u << signedClass, std::memory_order_relaxed);
+                    // Byte +2 of the widget record is the index Reach scales by
+                    // 0x310 in its dispatcher loop. If widgets of one crosshair
+                    // share it, it identifies the owning group and can resolve
+                    // "use parent" without guessing. Record it for class-2
+                    // widgets and for class-0 widgets separately so the two
+                    // sets can be compared directly.
+                    uint8_t groupByte = 0;
+                    if (SafeReadByte(
+                            reinterpret_cast<const uint8_t*>(descriptor) + 2,
+                            &groupByte))
+                    {
+                        if (signedClass == kReachChudCrosshairScriptingClass)
+                            s_class2Groups.fetch_or(
+                                1ull << (groupByte & 63),
+                                std::memory_order_relaxed);
+                        else if (signedClass == 0)
+                            s_class0Groups.fetch_or(
+                                1ull << (groupByte & 63),
+                                std::memory_order_relaxed);
+                    }
                 }
                 const uint64_t nowMs = GetTickCount64();
                 uint64_t lastMs = s_lastLogMs.load(std::memory_order_relaxed);
@@ -10179,12 +10296,19 @@ namespace
                         lastMs, nowMs, std::memory_order_relaxed))
                 {
                     LOG("Reach CHUD widgets: %u draws, %u during owned VR "
-                        "eyes, scripting classes seen = 0x%X (bit N = class N; "
-                        "crosshair is class %d)",
+                        "eyes, classes seen = 0x%X (bit N = class N; crosshair "
+                        "is class %d). group bytes: class2 = 0x%llX, "
+                        "class0 = 0x%llX",
                         s_total.exchange(0, std::memory_order_relaxed),
                         s_owned.exchange(0, std::memory_order_relaxed),
                         s_classMask.exchange(0, std::memory_order_relaxed),
-                        static_cast<int>(kReachChudCrosshairScriptingClass));
+                        static_cast<int>(kReachChudCrosshairScriptingClass),
+                        static_cast<unsigned long long>(
+                            s_class2Groups.exchange(
+                                0, std::memory_order_relaxed)),
+                        static_cast<unsigned long long>(
+                            s_class0Groups.exchange(
+                                0, std::memory_order_relaxed)));
                 }
             }
             const int stereoEye =
