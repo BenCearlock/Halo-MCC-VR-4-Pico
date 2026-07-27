@@ -9986,6 +9986,13 @@ namespace
         bool chudParityFailed = false;
         bool chudClass2Seen = false;
         bool authoredCrosshairCaptured = false;
+        // The authored-reticle redirect is held OPEN across consecutive
+        // crosshair widgets rather than opened and closed around each one.
+        // Reach draws a crosshair as several bitmap widgets, so a per-widget
+        // redirect meant a full D3D render-target/viewport/scissor save and
+        // restore - eight RTV AddRefs and Releases each - roughly ten times a
+        // frame. Held open, it is once per eye.
+        bool captureOpen = false;
         uint32_t generation = 0;
         uint32_t eye = 0;
         uint64_t preparedSerial = 0;
@@ -10233,11 +10240,37 @@ namespace
     // five-argument chud_draw_widget transaction. Select only class 2 and
     // reuse Halo 3/ODST's authored-widget capture. No procedural reticle,
     // widget-name fallback, or mixed flat-crosshair mode exists.
+    // Open/close the authored-reticle redirect at most once per eye.
+    static void OpenReachAuthoredCapture()
+    {
+        ReachFpCameraEyeScope& scope = g_reachFpCameraEyeScope;
+        if (scope.captureOpen)
+            return;
+        if (VR_BeginAuthoredReticleCapture())
+            scope.captureOpen = true;
+        else
+            // The redirect IS the mechanism. If it is unavailable there is no
+            // second way to do this - reject the transaction and let verified
+            // teardown run. No alternate draw mode.
+            RejectReachChudParityForCurrentEye();
+    }
+
+    static void CloseReachAuthoredCapture()
+    {
+        ReachFpCameraEyeScope& scope = g_reachFpCameraEyeScope;
+        if (!scope.captureOpen)
+            return;
+        scope.captureOpen = false;
+        if (VR_EndPreparedAuthoredReticleCapture())
+            scope.authoredCrosshairCaptured = true;
+        else
+            RejectReachChudParityForCurrentEye();
+    }
+
     __declspec(noinline) void __fastcall ReachHudDrawWidgetDetour(
         int userIndex, void* descriptor, unsigned int widgetIndex,
         unsigned int useAlternatePath, void* drawState)
     {
-        bool captureStarted = false;
         g_reachCamera.activeCallbacks.fetch_add(
             1, std::memory_order_acq_rel);
         __try
@@ -10268,8 +10301,7 @@ namespace
             {
                 // The magnified world-only scope picture must not receive a
                 // native CHUD widget, but the call still has to happen.
-                if (VR_BeginAuthoredReticleCapture())
-                    captureStarted = true;
+                OpenReachAuthoredCapture();
                 original(userIndex, descriptor, widgetIndex,
                          useAlternatePath, drawState);
                 return;
@@ -10298,8 +10330,7 @@ namespace
                 isCrosshairClass)
             {
                 // Already-failed eye: hide the widget, but never skip the call.
-                if (VR_BeginAuthoredReticleCapture())
-                    captureStarted = true;
+                OpenReachAuthoredCapture();
                 original(userIndex, descriptor, widgetIndex,
                          useAlternatePath, drawState);
                 return;
@@ -10335,29 +10366,22 @@ namespace
                 action == ReachChudCrosshairAction::RejectTransaction;
             if (action == ReachChudCrosshairAction::RejectTransaction)
                 RejectReachChudParityForCurrentEye();
+            // Open the redirect on the first widget that must be hidden and
+            // leave it open; close it as soon as a widget must be visible
+            // again. Reach draws one crosshair as several consecutive bitmap
+            // widgets, so this is one save/restore per eye instead of one per
+            // widget.
             if (hideFromEye)
-            {
-                if (VR_BeginAuthoredReticleCapture())
-                    captureStarted = true;
-                else
-                    // The redirect IS the mechanism. If it is unavailable
-                    // there is no second way to do this - reject the
-                    // transaction and let verified teardown run, exactly as
-                    // this path already did before. No alternate draw mode.
-                    RejectReachChudParityForCurrentEye();
-            }
+                OpenReachAuthoredCapture();
+            else
+                CloseReachAuthoredCapture();
             original(userIndex, descriptor, widgetIndex,
                      useAlternatePath, drawState);
         }
         __finally
         {
-            if (captureStarted)
-            {
-                if (VR_EndPreparedAuthoredReticleCapture())
-                    g_reachFpCameraEyeScope.authoredCrosshairCaptured = true;
-                else
-                    RejectReachChudParityForCurrentEye();
-            }
+            // The redirect deliberately outlives this call; the per-eye
+            // teardown in the render path closes it.
             g_reachCamera.activeCallbacks.fetch_sub(
                 1, std::memory_order_acq_rel);
         }
@@ -11334,6 +11358,7 @@ namespace
                 fpCameraScope.chudParityFailed = false;
                 fpCameraScope.chudClass2Seen = false;
                 fpCameraScope.authoredCrosshairCaptured = false;
+                fpCameraScope.captureOpen = false;
                 memcpy(fpCameraScope.compact, compact,
                        sizeof(fpCameraScope.compact));
                 memcpy(fpCameraScope.derived, primaryDerived,
@@ -11347,6 +11372,10 @@ namespace
                 }
                 __finally
                 {
+                    // Close the authored-reticle redirect for this eye. It is
+                    // held open across the eye's crosshair widgets, so this is
+                    // the one place it can be balanced.
+                    CloseReachAuthoredCapture();
                     fpCameraScope.active = false;
                 }
                 if (!renderReturned)
