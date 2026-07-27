@@ -468,6 +468,14 @@ cutscene cuts; the authored crosshair now animating with live colour states on
 Reach, Halo 3 and ODST; `crosshair=0` hiding every crosshair including Reach's
 flat one; and no frame-rate cost.
 
+> The "yaw realignment at authored cutscene cuts" accepted here was only
+> **partly** true, and this entry overstated it. It realigned at cutscene start
+> and end but missed the cuts in between; see "ACCEPTED: Reach cutscene facing
+> at every shot cut - 2026-07-27" below for the evidence and the completed fix.
+> The acceptance was taken from a session that never watched a shot change
+> mid-cutscene - a reminder to confirm the specific behavior, not the feature
+> name.
+
 ### The crosshair blackout: one defect behind three symptoms
 
 The VR crosshair displayed a single frozen snapshot. The art key describes
@@ -512,6 +520,51 @@ code-first attempts missed it.
   needs locating from HREK.
 - **Subtitles need a readable plane** (they are the interface text layer, not
   a CHUD widget - see below).
+
+### ACCEPTED: Reach cutscene facing at every shot cut - 2026-07-27
+
+Headset confirmed: "That one, it works now."
+
+| Identity | Value |
+| --- | --- |
+| Accepted source | `32d92a74db4d41a46e5956bbf7c0737abe1283e7` |
+| `halo3xr.dll` SHA-256 | `F7E9CBD0906F081AC01F0F8D51A416DA8654C39ECC0D0C6EE7BB7224FA9131D2` |
+| `halo3xr_launcher.exe` SHA-256 | `B32C0001F297465C0924E18A85126D0C01F5084FEDF3F9389CA49160BFBA66BF` |
+| Candidate package | `out/candidates/32d92a7-reach-fp-parity-20260727-132926196Z` |
+| Build | Release x64, preset `release`, Halo 3 + ODST + Reach |
+| Branch | `reach/frame-skip` |
+| Preserved evidence | `out/test-runs/32d92a7-reach-cutscene-facing-pass-20260727Z` |
+
+The earlier acceptance realigned only at cutscene start and end. The user
+reported still facing the wrong way, and narrowed it precisely: "I can't even
+tell if the first shot is oriented, but I know for sure that the subsequent
+ones aren't," in every cutscene.
+
+Root cause, from the installed 08:19 log on build `5cd1181`: cut detection
+watched cinematic-globals `+0x28` alone, and that stamp changed exactly twice
+across a 65-second cutscene (08:12:52, 08:13:20, then the exit at 08:13:57).
+Every shot in between inherited the previous shot's facing. `+0x28` is an
+authored boundary stamp, **not** a per-shot marker - the older comment claiming
+it "changes at every authored cut" was written from a session that only ever
+observed cutscene starts and ends.
+
+The fix detects the cut from the authored camera itself: within a shot the
+cinematic camera moves continuously, at a cut it jumps. Each frame compares the
+pristine stock camera against the previous frame's and treats a yaw step over
+~20 degrees (`kReachCineCutYawRadians`) or a position step over 2 world units
+(`kReachCineCutJumpUnitsSq`) as a cut, ORed with the existing stamp and
+fade-end edges. Thresholds are deliberately loose: the fastest authored whip
+pan is ~1.7 deg on a 120 Hz frame and ~7 deg across a 33 ms hitch.
+
+Gated on the cinematic-in-progress byte at `+0x24`, newly read from the same
+log that proved `+0x26` and `+0x28`: it reads 1 only for the duration of the
+cutscene and 0 through the menu and all following gameplay, so the test cannot
+fire during play, where the camera legitimately jumps on snap turn, respawn and
+vehicle entry. Halo 3 and ODST keep their own scene/shot path untouched.
+
+The worker line now reports the split - `Reach cutscene facing: realigned to
+the authored camera (cut N, M of them from the camera-jump test)` - so a future
+log shows which detector is carrying the cutscene.
 
 ### ACCEPTED: Reach muzzle flash on the gun - 2026-07-27 NEW REACH BASELINE
 
