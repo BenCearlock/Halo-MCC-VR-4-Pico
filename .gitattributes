@@ -1,0 +1,4 @@
+# Preserve pinned third-party SMAA bytes exactly, including upstream whitespace.
+third_party/smaa/SMAA.hlsl -text -whitespace
+third_party/smaa/Textures/*.h -text -whitespace
+third_party/smaa/LICENSE.txt -text -whitespace

@@ -13,7 +13,22 @@
 inline constexpr int kNativeRenderWidth = 2912;
 inline constexpr int kNativeRenderHeight = 2100;
 inline constexpr float kResolutionScaleMin = 0.35f;
-inline constexpr float kResolutionScaleMax = 2.00f;
+// 2.75 renders ~8008x5775 (8K-class width). The "Keith David" F1 tier lands on
+// true 8K width (7680, scale ~2.64); this ceiling leaves a little headroom above
+// it. Everything is a uniform multiplier, so 2912:2100 (Halo's VR aspect) is
+// preserved at every value. Above ~1.76 (5k-class) is extremely heavy; the F1
+// menu warns there (see menu.cpp) but nothing is blocked.
+inline constexpr float kResolutionScaleMax = 2.75f;
+// F1/help "past this is very heavy" threshold: ~5k-class width (5120/2912).
+inline constexpr float kResolutionScaleHeavy = 1.76f;
+// Draw-distance trim: fraction of the engine's stock render far-clip distance
+// (stock 10240 world units). 1.00 = full stock draw distance. The floor reaches
+// deep enough to pull the far plane INTO the playable scene (~512 units), so low
+// settings cull real terrain/objects, not just the distant skybox. Most levels
+// only start visibly culling below ~0.25 because nearby geometry is closer than
+// the far plane; the lowest settings clip near geometry (hard pop-in) for frames.
+inline constexpr float kDrawDistanceMin = 0.05f;
+inline constexpr float kDrawDistanceMax = 1.00f;
 inline constexpr float kHudCurvatureMin = 0.00f;
 inline constexpr float kHudCurvatureMax = 1.00f;
 inline constexpr float kHudAspectMin = 0.50f;
@@ -93,6 +108,23 @@ struct Config
     // positive moves it out of your face. Never touches aim.
     float gun_forward_m = -0.14f;
 
+    // Raise the muzzle EFFECT origin — the flash and the point bullets appear
+    // to leave — along the gun's own up axis, in meters. Reach only; Halo 3 and
+    // ODST resolve their muzzle markers on the visible weapon already.
+    //
+    // Reach's effect markers resolve against the stock, head-anchored weapon,
+    // so the mod re-parents them onto the controller-driven gun. That transfer
+    // is translation-only and preserves the authored marker offset exactly,
+    // which lands the origin on the barrel line but at the authored height —
+    // reported in-headset as sitting a few inches low. This trims that, and
+    // ONLY that: it is applied after the projectile's own origin and direction
+    // are resolved, so where rounds actually land is untouched.
+    //
+    // 0 = the authored marker height (previous behavior). Positive = up along
+    // the barrel, so it rolls with the gun instead of staying world-vertical.
+    // ~0.11 is the reported "four or five inches". Tune LIVE in the F1 menu.
+    float muzzle_height_m = 0.0f;
+
     // Experimental gun-mounted VR zoom screen. R3 is isolated from Halo's
     // native zoom so the full VR gun/body remain visible; scope_zoom is the
     // fixed 4:3 lens restored on every activation before right-stick adjustment.
@@ -121,10 +153,57 @@ struct Config
 
     // Halo's internal raster scale, applied by the launcher on the next game
     // start. ANY value from kResolutionScaleMin to kResolutionScaleMax is
-    // honored exactly; the named tiers (potato .50, low .67, medium .80,
-    // high 1.00, ultra 1.10, keith david 1.50) are only F1 shortcuts.
+    // honored exactly; the named tiers (potato .50, low .75, medium 1.00,
+    // high 1.30, ultra 1.80, keith david 2.64 = 8K width) are only F1 shortcuts.
     // The OpenXR projection remains at the headset's full size.
     float resolution_scale = 1.0f;
+
+    // Fit the desktop game window to your monitor while the HEADSET keeps
+    // rendering at the full resolution_scale size. On a monitor smaller than the
+    // render (e.g. an 8K render on a 1080p panel), MCC's window overflows the
+    // screen and its menu buttons ("Halo 3", Quit) land off the edge where the
+    // mouse can't reach them. With this on, MCC still draws the full-size frame
+    // (so the headset picture and the gun alignment never change) but the visible
+    // window is shrunk to fit and the GPU downscales the picture into it for free
+    // -- no extra render pass, no measurable cost. OFF by default; when off the
+    // desktop window behaves exactly as it always has. Like resolution_scale,
+    // this takes effect on the next game start (close MCC and relaunch).
+    bool fit_desktop_window = false;
+
+    // The VR frame is submitted inside MCC's desktop Present, so MCC's own
+    // V-Sync would pace the HEADSET at the DESKTOP monitor's refresh -- a 60 Hz
+    // desktop capping a 120 Hz headset. With this on we present the desktop
+    // mirror unlocked and let the OpenXR runtime's reported display period be
+    // the only clock, so 72/90/120/144 Hz headsets each pace themselves. The
+    // desktop mirror may tear; the headset never does (the compositor owns it).
+    // ON by default -- the headset must never inherit the desktop's refresh.
+    bool desktop_present_unlocked = true;
+
+    // Image quality (mod-owned, applied live when each eye is expanded into the
+    // headset — universal to every title, no restart). These replace/augment the
+    // plain linear upscale that made edges shimmer even at high resolution.
+    //
+    // Upscale/resolve filter: 0 = linear (the old behavior), 1 = sharp
+    // (Keys bicubic, a=-0.75). Sharp is the default and the single biggest clarity
+    // win, since the game usually renders BELOW the headset's per-eye resolution
+    // and the mod upscales the difference.
+    int upscale_filter = 1;
+
+    // RCAS-based 2x-overdrive sharpening, 0.00 = off, 1.00 = max. Same five
+    // texture loads/one pass; the intentionally aggressive top can ring or clip.
+    float sharpness = 0.30f;
+
+    // Anti-aliasing on the finished eye: 0 off, 1 FXAA, 2 FXAA Strong, 3 genuine
+    // SMAA 1x, 4 SMAA 1x followed by FXAA Strong. SMAA modes are optional and
+    // heavier; Off/FXAA do not run their passes or retain the third eye target.
+    int aa_mode = 0;
+
+    // Render draw-distance trim, applied live to every title's shared
+    // render_far_clip_distance debug var (stock 10240 world units), resolved by
+    // name — no hardcoded addresses. 1.00 = full stock draw distance (no
+    // change); lower culls distant geometry earlier for CPU headroom in stereo.
+    // Halo 3, ODST, and Reach all honor it. Takes effect immediately, no restart.
+    float draw_distance = 1.0f;
 
     // (The 0x2EEFC8 placement-slider experiment is retired: measured 2026-07-19,
     // that struct holds colors/alpha/animation only — Halo's HUD has no position
@@ -193,7 +272,11 @@ struct Config
 
     // VRIK arm IK: bend the first-person arm (shoulder planted, elbow solved,
     // hand+gun to the controller) instead of rigid-parenting the whole
-    // assembly. ON = articulated arm; OFF = the previous rigid parent.
+    // assembly. ON = articulated arm (the accepted, working Halo 3 / ODST
+    // behavior); OFF = the previous rigid parent. Required on Halo 3 / ODST, so
+    // it stays ON by default. Reach's first-person weapon RENDERING is still
+    // experimental (its FP layer warps), but that is a Reach render-path issue,
+    // not the IK math — do not disable IK globally to work around it.
     bool arm_ik = true;
 
     // Floating-hands presentation (ON by default). Shows only the hands and the
@@ -228,7 +311,8 @@ struct Config
     // Halo 3's camera motion blur. In two-render stereo its "previous frame"
     // camera is the other eye's, smearing bright content into repeated echoes
     // (the long-standing first-eye ghost). Off is also the VR comfort
-    // standard. 0 = blur scales forced to zero (default), 1 = engine values.
+    // standard. 0 = title-native blur amount suppressed (default), 1 = engine
+    // values.
     bool motion_blur = false;
 
     // (bullet_snap retired: the composed-wrist snap spun the right hand and
@@ -245,6 +329,16 @@ struct Config
     // changes, to locate the reticle "on target" (enemy red) state and the
     // per-element visibility flags. Log-only; changes nothing.
     bool hud_probe = false;
+
+    // DIAGNOSTIC (off by default; set fsr_probe=1 in the cfg to investigate
+    // MCC's built-in FSR). Log-only: on each distinct slot-0 render target MCC
+    // binds, records its width/height/format/bind-flags and the current
+    // viewport. When MCC's FSR is toggled on/off, a new line reveals whether FSR
+    // makes the scene render into a SMALLER target (so the mod must capture the
+    // pre-upscale image) or changes the VIEWPORT rect (so the mod's projection
+    // assumptions break). Changes nothing; it only observes. See
+    // docs/RESOLUTION-FSR-INVESTIGATION.md.
+    bool fsr_probe = false;
 
     // DIAGNOSTIC (off by default; set bullet_probe=1 in the cfg for the
     // fire-hook hunt). On each shot, logs the camera (where Halo spawns your

@@ -218,6 +218,17 @@ int APIENTRY wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int)
         ReadResolutionScale(primaryExists ? primaryConfig : legacyConfig);
     const int renderWidth = ScaleEven(kNativeRenderWidth, resolutionScale);
     const int renderHeight = ScaleEven(kNativeRenderHeight, resolutionScale);
+    // Hand the DLL the EXACT render surface size we are launching with, so that
+    // when fit_desktop_window is on it can force MCC's swapchain backbuffer to
+    // this exact size (matching this ScaleEven, so the two can never disagree)
+    // and preserve it through window resize. The child inherits these because
+    // CreateProcessW is given a NULL environment block. Harmless when the fit is
+    // off -- the DLL only reads them in that case.
+    wchar_t envBuf[16];
+    swprintf_s(envBuf, L"%d", renderWidth);
+    SetEnvironmentVariableW(L"HALO3XR_RENDER_W", envBuf);
+    swprintf_s(envBuf, L"%d", renderHeight);
+    SetEnvironmentVariableW(L"HALO3XR_RENDER_H", envBuf);
     wchar_t renderArgs[96];
     swprintf_s(renderArgs, L" -WINDOWED -ResX=%d -ResY=%d",
                renderWidth, renderHeight);

@@ -1,8 +1,23 @@
 #pragma once
 
 #include <d3d11.h>
+#include <cstdint>
 
 struct IDXGISwapChain;
+
+#if HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE
+#include "../common/reach_render_logic.h"
+
+struct ReachVrRenderAccess
+{
+    ReachDisplaySurfaceProof proof{};
+    ID3D11Texture2D* source = nullptr;
+    ID3D11Texture2D* eyes[2]{};
+    ID3D11DeviceContext* context = nullptr;
+    uint64_t preparedSerial = 0;
+    bool active = false;
+};
+#endif
 
 // Called once on the DLL's background init thread. Creates the OpenXR instance
 // and finds the headset (slow), so the render thread never blocks on it.
@@ -12,8 +27,29 @@ void VR_InitInstance();
 // submitted before Present; after Present returns, OpenXR supplies the exact
 // predicted display time that Halo will use while rendering its next frame.
 void VR_BeforePresent(IDXGISwapChain* swapchain);
-void VR_AfterPresent(IDXGISwapChain* swapchain);
+void VR_AfterPresent(IDXGISwapChain* swapchain, int64_t presentStartQpc,
+                     int64_t presentEndQpc, HRESULT presentResult);
 void VR_OnResizeBuffers(IDXGISwapChain* swapchain);
+void VR_AfterResizeBuffers(IDXGISwapChain* swapchain);
+
+// Existing title worker only: drains and formats completed transition traces.
+// Render, camera, and palette hooks only publish fixed-size POD records.
+void VR_FramePacingWorkerPoll();
+
+// Worker-thread-only Reach display/resource proof. The private candidate calls
+// this after its loaded-image proof; normal builds never reference it.
+void VR_ReachRenderCandidate_ColdPoll();
+#if HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE
+ReachPreparedFrameToken VR_ReachPreparedFrame(
+    const ReachModuleEpoch& epoch);
+bool VR_ReachDisplayReady(const ReachModuleEpoch& epoch);
+bool VR_ReachBeginRenderAccess(
+    const ReachModuleEpoch& epoch,
+    const ReachPreparedFrameToken& prepared,
+    ReachVrRenderAccess& access);
+bool VR_ReachCopyEye(ReachVrRenderAccess& access, int eye);
+void VR_ReachEndRenderAccess(ReachVrRenderAccess& access);
+#endif
 
 // Timing beacon from Halo's camera-copy hook. The first call after
 // VR_AfterPresent proves how quickly the freshly predicted pose reaches the
@@ -53,6 +89,12 @@ bool VR_IsStereoEnabled();
 // synchronized/unfocused session commonly publishes false while the headset is
 // idle; game hooks must not treat the resulting absent eye raster as failure.
 bool VR_ShouldRenderPreparedFrame();
+// The application-frame cadence implied by xrWaitFrame's reported period
+// (0 until the first valid period). This is not the physical panel refresh.
+float VR_HeadsetRefreshHz();
+// True once xrWaitFrame is driving our cadence, i.e. the headset owns pacing and
+// the desktop present is free to run unlocked.
+bool VR_IsFramePacingOwned();
 // Called on the render thread when Halo stops driving its level camera. Makes
 // every 3D path inactive immediately and drops references to Halo's scene
 // target before MCC switches to its shell or another resident game engine.
@@ -117,7 +159,29 @@ bool VR_GetLeftControllerPose(float outQuat[4], float outPos[3]);
 // weapon reticle is redirected into the controller-ray quad texture instead
 // of being drawn at the center of either VR eye.
 bool VR_BeginAuthoredReticleCapture();
+// Reach-only hide entry: same lazy resource creation, but it never refuses
+// because crosshair=0. Reach has no visibility predicate and its CHUD alpha
+// write is inert, so this redirect is the only way its native crosshair can
+// be kept off the eye - including when the user asks for no crosshair at all.
+bool VR_BeginAuthoredReticleRedirect();
 void VR_EndAuthoredReticleCapture();
+// Reach prepares every allocation and swapchain/RTV object on its cold title
+// worker before installing the mandatory HREK hook. The prepared begin/end
+// pair then performs only the accepted render-state redirect in the hot hook.
+enum class AuthoredReticlePreparationResult : uint8_t
+{
+    NotReady,
+    Ready,
+    Failed,
+};
+bool VR_CanPrepareAuthoredReticleResources();
+AuthoredReticlePreparationResult VR_PrepareAuthoredReticleResources();
+// Reach can issue more than one qualifying outer render in a prepared frame.
+// Invalidate the prior attempt before each newly admitted stereo transaction so
+// an authored no-crosshair state cannot inherit an earlier attempt's texture.
+void VR_InvalidatePreparedReachAuthoredReticleCapture();
+bool VR_BeginPreparedAuthoredReticleCapture();
+bool VR_EndPreparedAuthoredReticleCapture();
 // M3: the game layer sets this when the crosshair is over an enemy (engine
 // target-lock). While true, the floating reticle repaints red like the OG HUD.
 void VR_SetReticleEnemy(bool enemy);
@@ -146,6 +210,40 @@ struct VrPadState
     bool clickL = false, clickR = false, menu = false;
 };
 void VR_GetPadState(VrPadState& out);
+#if HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE
+// One immutable, exact-serial OpenXR tracking snapshot for Reach's complete
+// outer visibility + inner stereo transaction. The reader is lock-free and
+// fails immediately if publication is changing; render hooks never wait on the
+// controller/head-pose critical section.
+struct ReachVrEyeSnapshot
+{
+    float position[3]{};
+    float orientation[4]{0.0f, 0.0f, 0.0f, 1.0f};
+    float fov[4]{}; // left, right, up, down
+};
+
+struct ReachVrRenderSnapshot
+{
+    uint64_t preparedSerial = 0;
+    float headOrientation[4]{0.0f, 0.0f, 0.0f, 1.0f};
+    float headPosition[3]{};
+    // The shared weapon aim after two-hand adjustment and controller-local
+    // mount calibration. Position remains the raw right-controller position.
+    bool rightAimValid = false;
+    float rightAimOrientation[4]{0.0f, 0.0f, 0.0f, 1.0f};
+    float rightAimPosition[3]{};
+    // Raw tracked left-controller pose for title-specific support-hand work.
+    bool leftControllerValid = false;
+    float leftControllerOrientation[4]{0.0f, 0.0f, 0.0f, 1.0f};
+    float leftControllerPosition[3]{};
+    VrPadState pad{};
+    ReachVrEyeSnapshot eyes[2]{};
+};
+
+bool VR_ReachGetRenderSnapshot(
+    const ReachPreparedFrameToken& prepared,
+    ReachVrRenderSnapshot& snapshot);
+#endif
 // Universal scope state is owned by the VR controller input path and consumed
 // by the render/compositor path. It is independent of Halo's native zoom.
 void VR_SetScopeActive(bool active);

@@ -42,4 +42,6 @@ enum TitleCapability : uint32_t
     TitleCapability_ArmIk = 1u << 3,
     TitleCapability_RuntimeModes = 1u << 4,
     TitleCapability_RoomScale = 1u << 5,
+    TitleCapability_ControllerInput = 1u << 6,
+    TitleCapability_Haptics = 1u << 7,
 };

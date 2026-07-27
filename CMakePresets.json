@@ -9,13 +9,16 @@
     {
       "name": "release",
       "displayName": "Halo MCC VR cumulative Release",
-      "description": "x64 Halo 3 + ODST build with tests enabled",
+      "description": "x64 cumulative build: Halo 3 + ODST + Halo: Reach, all permanent with gated ownership",
       "generator": "Visual Studio 17 2022",
       "architecture": "x64",
       "binaryDir": "${sourceDir}/out/build/release",
       "cacheVariables": {
         "BUILD_TESTING": "ON",
         "FETCHCONTENT_BASE_DIR": "${sourceDir}/out/deps",
+        "FETCHCONTENT_SOURCE_DIR_OPENXR": "${sourceDir}/out/deps/openxr-src",
+        "FETCHCONTENT_SOURCE_DIR_MINHOOK": "${sourceDir}/out/deps/minhook-src",
+        "FETCHCONTENT_SOURCE_DIR_IMGUI": "${sourceDir}/out/deps/imgui-src",
         "HALOMCCVR_EXPERIMENTAL_ODST_BRINGUP": "ON"
       }
     }

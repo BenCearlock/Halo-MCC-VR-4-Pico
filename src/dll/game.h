@@ -1,5 +1,29 @@
 #pragma once
 
+#include <cstdint>
+
+#include "../common/runtime_types.h"
+
+// Monotonic counters written by render/palette hooks and sampled at OpenXR
+// frame boundaries. Hooks only touch relaxed atomics; formatting and file I/O
+// stay on the existing 50 ms title worker.
+struct GameFramePerfCounters
+{
+    uint64_t viewRenders = 0;
+    uint64_t fpPaletteRequests[3]{};
+    uint64_t fpPaletteFullSolves[3]{}; // eye 0, eye 1, outside an eye pass
+    uint64_t fpPaletteCacheHits[3]{};
+    uint64_t fpPaletteCacheStores[3]{};
+    uint64_t fpPaletteCacheFull[3]{};
+    uint64_t zoomLogWrites = 0;
+    uint64_t viewRateLogWrites = 0;
+    uint64_t paletteRateLogWrites = 0;
+    uint64_t cameraRateLogWrites = 0;
+    uint64_t fpDriverRateLogWrites = 0;
+};
+
+void Game_ReadFramePerfCounters(GameFramePerfCounters& out);
+
 // The Halo 3 engine (halo3.dll) loads only once you enter a level. This module
 // waits for it, then (M1) drives the in-game camera from the headset. Runs on
 // its own threads and never blocks rendering.
@@ -8,11 +32,38 @@ void Game_Init();
 bool Game_IsHooked();
 bool Game_IsHeadTracking(); // true while F2 head tracking is on
 bool Game_IsCameraOnlyBringup(); // private ODST camera core; no gameplay features
+// True only while the exact Reach stereo + mandatory authored-crosshair
+// transaction owns the active title. Used to admit its frame-bound authored
+// quad without granting unrelated shared gameplay capabilities.
+bool Game_OwnsReachAuthoredReticle();
+// Identity of the crosshair art Reach last captured. Unchanged value means the
+// authored reticle already in the swapchain is still correct and does not need
+// re-uploading this frame.
+uint64_t Game_GetReachAuthoredCrosshairKey();
+// Identity of the crosshair art captured this frame, for any title. 0 means
+// nothing was captured. The compositor re-uploads the authored reticle only
+// when this changes, so a static crosshair costs no swapchain work.
+// True when the active title's authored-crosshair capture hooks are installed,
+// so the captured widget is the crosshair and the procedural reticle must stay
+// invisible. False means the procedural reticle IS the crosshair.
+bool Game_TitleCapturesAuthoredCrosshair();
+uint64_t Game_GetAuthoredCrosshairKey();
+// Called once per displayed frame, before any capture, so the per-frame
+// accumulation starts clean and a static crosshair yields a stable key.
+void Game_ResetAuthoredCrosshairKey();
+// Atomically rejects the active Reach authored-reticle transaction after a
+// frame-bound upload failure. The title worker performs verified teardown;
+// there is no procedural, transparent, or flat-crosshair substitute.
+void Game_RejectReachAuthoredReticle(uint32_t expectedGeneration,
+                                     const char* reason);
 bool Game_AllowsSharedGameplayFeatures();
 bool Game_AllowsSharedControllerInput();
-bool Game_AllowsOdstMotionAim(); // narrow ODST-only weapon-aim capability
+bool Game_HasTitleCapability(uint32_t requiredCapabilities);
 bool Game_CanToggleImmersiveView();
 bool Game_ProcessPresentationDetachRequest();
+// Render-thread emergency transaction used only after OpenXR session failure.
+// Disarms title ownership before VR releases retained presentation resources.
+void Game_DetachForVrRuntimeFailure();
 
 // HUD layout: hud_size/hud_aspect drive Halo's safe-frame floats, while
 // hud_curvature offsets the adjacent authored destination_offset_z in the
@@ -49,6 +100,10 @@ void Game_MapMoveStick(float& mx, float& my);
 // death and the shell, where the same stick navigates the game's own menus and
 // must pass through as a plain analog stick (see input.cpp / GitHub #9).
 bool Game_MoveStickIsLocomotion();
+// True while an armed tracked camera consumes the OpenXR turn action. The
+// XInput hook must then suppress stock RX/RY so the game cannot create a second
+// camera motion underneath the HMD-owned view.
+bool Game_VrOwnsLookStick();
 // Hooks XInputGetState in every loaded xinput DLL; returns how many are
 // hooked. Safe to call repeatedly until it succeeds.
 int Input_InstallXInputHook();
@@ -74,4 +129,8 @@ float Game_GetZoomFactor();
 // flash, reticle and bullets stay on one ray as the user trims the mount.
 // Symmetric half-frustum tangents from Halo's active world camera.
 void Game_GetProjectionTangents(float& tanX, float& tanY);
-void Game_GetRenderHalfFov(int eye, float& halfX, float& halfY);
+// Returns the exact symmetric raster FOV for the frame being submitted. Reach
+// fails closed when its two eye projections are absent or belong to another
+// prepared frame, so OpenXR never receives stale Halo 3 projection metadata.
+bool Game_GetRenderHalfFovs(
+    uint64_t preparedFrameSerial, float halfX[2], float halfY[2]);

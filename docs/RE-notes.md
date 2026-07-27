@@ -89,13 +89,19 @@ The user confirmed that this frees the shotgun left arm. The removed synthetic p
 - The launcher scales both dimensions by the same preset and rounds to even
   values. The existing normalized eye blit then expands the complete source eye
   into the full-size OpenXR projection, preserving the lens frame and aspect.
-- The restart-applied presets are Potato 50% (1456x1050), Low 67% (1952x1408),
-  Medium 80% (2330x1680), High 100% (2912x2100), Ultra 110% (3204x2310), and
-  Keith David 150% (4368x3150). Legacy or arbitrary config values normalize to
-  the nearest tier; the tier boundaries are the midpoints 0.585, 0.735, 0.90,
-  1.05, and 1.30, applied identically in config.cpp, launcher.cpp, and menu.cpp.
-- Low 67% is headset-confirmed with Toolkit scaling disabled. The other tiers
-  require headset coverage; do not describe them as validated yet.
+- resolution_scale is free-form (0.35..2.75). Any value in range is honored
+  exactly; the named F1 tiers are only shortcuts and do NOT snap the slider or a
+  hand-typed value (the pre-2026-07-20 nearest-tier normalization was removed).
+  kResolutionScaleMax and the clamp are shared by config.cpp, launcher.cpp, and
+  menu.cpp so the launcher and menu can never disagree.
+- 8K-class tiers (2026-07-26): Potato 50% (1456x1050), Low 75% (2184x1576),
+  Medium 100% (2912x2100), High 130% (3786x2730), Ultra 180% (5242x3780,
+  ~5k-class), and Keith David 264% (7688x5544, ~true 8K width). The ceiling is
+  275% (~8008x5775). All uniform, so the 2912:2100 VR aspect is preserved.
+  kResolutionScaleHeavy (1.76, ~5k width) is the F1/help "very heavy, can crash
+  weak GPUs" warning threshold — warning text only, nothing is blocked.
+- These tiers are constants-only and headset-pending; do not describe any tier
+  as validated until headset coverage confirms it renders and stays stable.
 - Enabling OpenXR Toolkit FSR produced tiled/overlapping regions in the observed
   VR View, consistent with an incompatibility around the current stereo-array
   presentation rather than ordinary low-resolution softness. The exact
@@ -140,3 +146,95 @@ The user confirmed that this frees the shotgun left arm. The removed synthetic p
   submitted imageRect. Keep the projection full-sized and scale Halo's source
   raster uniformly.
 - Never treat an RVA in this document as a shipping address. The matching signature in source is the implementation authority.
+
+## Halo: Reach HUD layout (2026-07-26)
+
+- Reach's curvature record is NOT Halo 3's `s_chud_curvature_info`. Proven from
+  the official HREK `chud_globals_definition` export plus HREK's own code: the
+  `chud_curvature_info_block` load-time postprocess function
+  (`reach_tag_test.exe 0x8E7170`, primary of the chunks `0x8E71D3` and
+  `0x8E7284`; it is the code behind `"Curvature points are invalid.  Defaulting
+  to no curvature"`) receives the record in `rdx` and writes the identity
+  curvature grid to `+0x04..+0x4B`, which pins the record start.
+- Record layout: `+0x00` res flags, `+0x04` nine curvature points,
+  `+0x4C` screen transform basis, `+0x94` virtual width, `+0x98` virtual height,
+  `+0x9C` sensor origin, `+0xA4` sensor radius, `+0xA8` vehicle 3d sensor radius,
+  `+0xAC` blip radius, `+0xB0` four minimap points, `+0xD0` global safe frame
+  horiz., `+0xD4` global safe frame vert., `+0xD8/+0xDC` safe-frame dings.
+  The safe-frame pair therefore sits 60 bytes after virtual width, not 24.
+- Three skins (default, dervish, monitor) each author five curvature records.
+  Only `fullscreen wide{720p fullscreen}` applies to a fullscreen VR render, so
+  the anchor targets three records - the same one-per-skin rule Halo 3 uses.
+  Those three differ in sensor origin Y (656/650/656) and sensor radius
+  (72/68/72), and dervish alone authors nonzero minimap points, so the adapter
+  wildcards those bytes. Authored safe frames are 0.86/0.87, 0.86/0.87 and
+  0.87/0.87 - close enough to Halo 3's 0.87 that one shared `hud_size` value
+  lands in the same place in both games.
+- **Reach has no `dest offset z`.** Its curvature is the nine-point grid, and
+  `0x8E7170` is reached through the block's tag-definition descriptor
+  (`.data` qword at `0x208A260`, beside the block's name string at `0x1874120`),
+  not from any call site - it is a load-time postprocess, so the derived basis at
+  `+0x4C` is computed once when the block loads. Writing the authored points at
+  runtime is therefore inert, exactly like the CHUD alpha array. `hud_curvature`
+  is deliberately not written for Reach and the log says so. Making it live
+  requires writing the derived basis, or re-running Reach's own builder over the
+  record after writing points; that is a separate candidate.
+- Reach's HUD height has no implementation: `hud_vertical_offset` uses the
+  `chud_compute_anchor_basis` hook and Reach's homolog is still unlocated.
+
+## Reach authored CHUD crosshair (2026-07-27) - all verified against retail
+
+- **`chud_draw_widget` in retail is `haloreach.dll+0x2DA364`.** HREK's compiled
+  version does NOT byte-match MCC's build: a signature that `reach_tag_play.exe`
+  and `sapien_play.exe` agree on byte-for-byte across 49 instructions matches
+  retail **zero** times. Do not try to port HREK bytes for this function. The
+  address was found by tracing the call graph forward from the already-proven
+  `kReachPlayerViewRenderRva` (`0x0026C6DC`): `player_view_render` calls a
+  per-player CHUD dispatcher at `0x2C29F8`, which calls the widget draw at
+  `0x2C2BF1`.
+- **ABI: arguments 3 and 4 are full 32-bit values**, not short/byte. Proven by
+  `0x2DA39D mov r12d, r8d`, `0x2DA41D cmp r12d, dword ptr [rdi+4]`, and
+  `0x2DA39A mov eax, r9d`. Declaring them narrower truncates the widget index
+  on the way back into the engine and crashes at `0x2ED80C`
+  (`mov eax,[rcx+0x98]`) on an invalid Blam pool handle. This was four
+  identical headset crashes.
+- **`descriptor+4` is a WIDGET INDEX, not the scripting class.** `0x2ED80C` is
+  a three-tier index accessor: counts at `+0x98`/`+0xA4`/`+0xB4`, strides
+  `0x27`/`0x21`/`0x20`, returning a widget record.
+- **The scripting class lives on the owning COLLECTION**, reached through
+  `descriptor+3`. Reach's own sequence at `0x2DA68A`-`0x2DA6EC`:
+  ```
+  globalPtr  = *(module + 0xC1A600)
+  handle     = *(globalPtr + (arg4 & 0xFFFF)*8 + 4)
+  chudDef    = pool[handle>>28] + handle*4
+  collHandle = *(chudDef + 4)
+  collection = pool[collHandle>>28] + (collHandle + descriptor[3]*0x37)*4
+  class      = *(collection + 4)
+  ```
+  `pool[i]` is `*(module + 0x04E39F20 + i*8)`. The class offset is confirmed
+  independently by the official tag definition: a collection begins with a
+  4-byte `artist name` string id, then the `scripting class` char enum.
+- **Why per-widget class filtering can never work:** across all 64 official CHUD
+  tag exports, 1092 of 1143 drawn bitmap widgets author their class as
+  `undefined/use parent` and inherit it from the collection. Only 51 carry an
+  explicit class. Filtering per widget catches those 51 and nothing else.
+- Halo 3 and ODST hide their crosshair by hooking a boolean visibility
+  predicate and returning false. Reach has no such predicate, which is why it
+  redirects the render target instead.
+
+## Authored crosshair publishing (all titles, 2026-07-27)
+
+- The aim quad renders `g_reticleChain`; `UploadAuthoredReticle` is the only
+  writer of captured art into it.
+- That upload is a blocking OpenXR swapchain acquire/wait/copy/release. Doing
+  it every frame costs ~4-5ms of `renderWindow` - measured, and the entire
+  difference between fitting a 120Hz budget (8.33ms) and missing it and halving
+  to 60. It is now gated on the captured art's identity changing.
+- The procedural reticle and the authored art share one swapchain. For a title
+  that captures, the procedural reticle is fully transparent, so repainting it
+  ERASES the captured widget. Once the swapchain holds authored art it must be
+  held, not refreshed.
+- `Game_TitleCapturesAuthoredCrosshair()` reports whether the capture hooks are
+  actually installed. Use it rather than a title list: the previous hardcoded
+  lists went stale for both Reach and ODST and each time produced an opaque
+  procedural crosshair painted over art the title had already captured.

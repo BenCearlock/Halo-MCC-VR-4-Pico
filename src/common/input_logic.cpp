@@ -78,6 +78,22 @@ float BlendXInputMotors(uint16_t lowFrequencyMotor, uint16_t highFrequencyMotor)
     return blended > 1.0f ? 1.0f : blended;
 }
 
+HapticPeakSample SampleHapticPeak(float peak, float latest)
+{
+    const float p = peak < 0.0f ? 0.0f : (peak > 1.0f ? 1.0f : peak);
+    const float l = latest < 0.0f ? 0.0f : (latest > 1.0f ? 1.0f : latest);
+    HapticPeakSample sample;
+    sample.apply = p > l ? p : l;
+    sample.carry = l;
+    return sample;
+}
+
+uint32_t NormalizeVirtualXInputSetStateResult(
+    uint32_t originalResult, uint32_t userIndex, bool hasVibrationRequest)
+{
+    return userIndex == 0 && hasVibrationRequest ? 0u : originalResult;
+}
+
 bool PausePresentationInputAllowed(bool sharedGameplayOwner)
 {
     return sharedGameplayOwner;

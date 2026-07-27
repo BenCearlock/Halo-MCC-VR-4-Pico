@@ -34,3 +34,6 @@ tools/*.CT
 
 # Third-party source kept locally for reference (praydog/UEVR) — not ours to ship
 reference/
+
+# Python bytecode from the read-only Reach probe tools
+tools/reach-probes/__pycache__/

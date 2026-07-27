@@ -7,6 +7,7 @@
 #include "game.h"
 #include "vr.h"
 #include "menu.h"
+#include "title_adapter.h"
 #include "../common/log.h"
 #include "../common/config.h"
 #include "../common/input_logic.h"
@@ -72,6 +73,8 @@ namespace
         if (!pad.valid)
             return;
 
+        const bool sharedGameplayInput =
+            Game_AllowsSharedGameplayFeatures();
         const MenuChordResult chord =
             g_menuChord.Update(GetTickCount64(), pad.clickL, pad.clickR);
         if (chord.toggled)
@@ -81,8 +84,9 @@ namespace
         // into Halo enters native zoom state, which hides the normal VR gun and
         // body even if we restore the eye FOV. Disabled/non-gameplay input still
         // passes through unchanged.
-        const bool scopeAvailable = g_config.scope_enabled &&
-            Game_IsHeadTracking() && !Game_IsCameraOnlyBringup();
+        const bool scopeAvailable = sharedGameplayInput &&
+            g_config.scope_enabled && Game_IsHeadTracking() &&
+            !Game_IsCameraOnlyBringup();
         const ScopeToggleUpdate scope = g_scopeToggle.Update(
             scopeAvailable, pad.clickR, chord.consumeClicks || Menu_IsOpen());
         if (scope.changed && scopeAvailable)
@@ -97,17 +101,40 @@ namespace
             return;
         }
 
-        const MenuChordResult pauseChord =
-            g_pauseChord.Update(GetTickCount64(), pad.y, pad.b);
-        if (pauseChord.toggled)
-            Input_RequestPauseToggle();
+        MenuChordResult pauseChord{};
+        if (PausePresentationInputAllowed(sharedGameplayInput))
+        {
+            pauseChord =
+                g_pauseChord.Update(GetTickCount64(), pad.y, pad.b);
+            if (pauseChord.toggled)
+                Input_RequestPauseToggle();
+        }
+        else
+        {
+            g_pauseChord.Reset();
+        }
+
+        // Reach only: the left trigger and the left X button trade places, so
+        // the grenade lands on X and the Spartan armour ability lands on the
+        // trigger. The VR->XInput map above is otherwise ONE profile shared by
+        // every title; Halo 3 and ODST have no armour ability and keep X on
+        // reload/action, so this is gated on the active title rather than
+        // changing the shared map. Both inputs are on the left hand either way.
+        const bool swapLeftHandActions =
+            TitleAdapter_GetActiveTitle() == GameTitle::HaloReach;
+        // The trigger is analog and X is a click. Neither Reach action is
+        // pressure-sensitive, so cross them at the same 0.6 threshold the grips
+        // already use, and drive the trigger fully on from the click.
+        const bool xPressed = swapLeftHandActions ? pad.trigL > 0.6f : pad.x;
+        const float leftTrigger =
+            swapLeftHandActions ? (pad.x ? 1.0f : 0.0f) : pad.trigL;
 
         WORD btn = state->Gamepad.wButtons;
         if (scopeAvailable)
             btn &= ~XINPUT_GAMEPAD_RIGHT_THUMB;
         if (pad.a) btn |= XINPUT_GAMEPAD_A;
         if (pad.b && !pauseChord.consumeClicks) btn |= XINPUT_GAMEPAD_B;
-        if (pad.x) btn |= XINPUT_GAMEPAD_X;
+        if (xPressed) btn |= XINPUT_GAMEPAD_X;
         if (pad.y && !pauseChord.consumeClicks) btn |= XINPUT_GAMEPAD_Y;
         if (pad.clickL && !chord.consumeClicks) btn |= XINPUT_GAMEPAD_LEFT_THUMB;
         if (pad.clickR && !chord.consumeClicks && !scopeAvailable)
@@ -127,8 +154,7 @@ namespace
                 g_startPulseUntilMs.store(inputNow + 350);
                 LOG("ODST input: Menu/Start latched for native polling");
             }
-            if (PausePresentationInputAllowed(
-                    Game_AllowsSharedGameplayFeatures()) &&
+            if (PausePresentationInputAllowed(sharedGameplayInput) &&
                 !Game_HasAuthoritativePauseState())
                 VR_RequestPausePresentation(!VR_IsPausePresentationTarget());
         }
@@ -139,7 +165,7 @@ namespace
         if (pad.gripR > 0.6f) btn |= XINPUT_GAMEPAD_RIGHT_SHOULDER;
         state->Gamepad.wButtons = btn;
 
-        const BYTE tl = (BYTE)(pad.trigL * 255.0f);
+        const BYTE tl = (BYTE)(leftTrigger * 255.0f);
         const BYTE tr = (BYTE)(pad.trigR * 255.0f);
         if (tl > state->Gamepad.bLeftTrigger) state->Gamepad.bLeftTrigger = tl;
         if (tr > state->Gamepad.bRightTrigger) state->Gamepad.bRightTrigger = tr;
@@ -168,6 +194,17 @@ namespace
             if (pad.moveY < -0.5f) btn |= XINPUT_GAMEPAD_DPAD_DOWN;
             if (pad.moveX > 0.5f) btn |= XINPUT_GAMEPAD_DPAD_RIGHT;
             if (pad.moveX < -0.5f) btn |= XINPUT_GAMEPAD_DPAD_LEFT;
+            // Left stick CLICK becomes the controller's left centre button
+            // (Back/View) while the D-pad gesture is held. ODST puts its map
+            // and objectives screen behind that button and VR players had no
+            // way to reach it. This is deliberately scoped to the gesture: the
+            // stick is already acting as a D-pad here, so its click has no
+            // other meaning, and normal play keeps L3 untouched.
+            if (pad.clickL && !chord.consumeClicks)
+            {
+                btn &= ~XINPUT_GAMEPAD_LEFT_THUMB;
+                btn |= XINPUT_GAMEPAD_BACK;
+            }
             state->Gamepad.wButtons = btn;
             // No walking while navigating.
             state->Gamepad.sThumbLX = 0;
@@ -216,13 +253,12 @@ namespace
             if (!g_overrideLogged.exchange(true))
                 LOG("M3: VR aim override active (right stick steered by the controller)");
         }
-        else if (OdstVrOwnsLookStick(
-                     Game_IsCameraOnlyBringup(), Game_IsHeadTracking()))
+        else if (Game_VrOwnsLookStick())
         {
-            // Match Halo 3 camera ownership during the private ODST bring-up:
+            // Match Halo 3 camera ownership in every armed camera-core title:
             // ApplyVrTurn consumes turnX directly from the OpenXR pad, while
             // the tracked HMD exclusively owns pitch. Do not also feed either
-            // axis into ODST's stock camera/aim integrator.
+            // axis into the stock camera/aim integrator.
             state->Gamepad.sThumbRX = 0;
             state->Gamepad.sThumbRY = 0;
         }
@@ -282,8 +318,9 @@ namespace
             r = ERROR_SUCCESS;
         }
         // Controller admission is separate from shared gameplay ownership.
-        // The private ODST camera-only build may expose ordinary gamepad input
-        // while motion aim and every Halo 3 gameplay transform stay blocked.
+        // Private ODST camera-only and Reach controller-only stages may expose
+        // ordinary gamepad input while motion aim and every title-runtime
+        // gameplay transform stay blocked.
         // Gate only decides whether to MERGE VR motion, not whether the pad
         // exists: hold the connection above and skip the merge when gated off.
         if (!Game_AllowsSharedControllerInput())
@@ -365,13 +402,24 @@ namespace
 
     DWORD ProcessSetState(DWORD result, DWORD user, XINPUT_VIBRATION* vibration)
     {
-        if (!Game_AllowsSharedControllerInput())
-            return result;
         if (user != 0 || !vibration)
             return result;
+        const DWORD connectedResult = static_cast<DWORD>(
+            NormalizeVirtualXInputSetStateResult(result, user, true));
+        if (!Game_HasTitleCapability(TitleCapability_Haptics))
+        {
+            // A title/arm transition can close the capability gate before the
+            // game's zero-motor update arrives. Clear our retained request on
+            // every gated call so an earlier rumble cannot resume when the
+            // next title becomes armed. Capability policy suppresses only the
+            // effect: slot 0 remains the same connected virtual controller
+            // exposed by GetState/GetCapabilities.
+            VR_SetGameHaptics(0.0f);
+            return connectedResult;
+        }
         VR_SetGameHaptics(BlendXInputMotors(
             vibration->wLeftMotorSpeed, vibration->wRightMotorSpeed));
-        return ERROR_SUCCESS;
+        return connectedResult;
     }
 
     template <int Slot>

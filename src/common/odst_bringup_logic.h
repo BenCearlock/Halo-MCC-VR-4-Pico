@@ -7,6 +7,21 @@ constexpr uint64_t kOdstCameraFreshMs = 500;
 constexpr uint64_t kOdstCameraSoftTimeoutMs = 750;
 constexpr uint64_t kOdstCameraHardTimeoutMs = 5000;
 constexpr uint64_t kOdstCameraStableMs = 1000;
+// ODST's camera tail boolean toggles roughly every 100ms during ordinary play
+// (observed live: tail=[0,1,0,0,0,0,0,0] alternating with
+// tail=[0,1,0,0,0,0,0,1] about ten times a second). A single not-fresh poll is
+// therefore normal engine behaviour, not a lost camera. Gaps shorter than this
+// do not restart the stability interval; anything longer is a genuine loss - a
+// pause, a level unload or a title exit - and does.
+constexpr uint64_t kOdstCameraFreshGapToleranceMs = 350;
+// Native-pause REINSTALL debounce (stage 1). A pause returns to the exact camera
+// the hooks were just removed from -- not a fresh level -- so the reinstall gate
+// does not need the full fresh-level stability interval. The real arm-safety guard
+// is unchanged: after reinstall the render thread still holds the accepted
+// one-second kOdstCameraStableMs fresh-ordinary-camera interval (stage 2) before
+// stereo arms. Shortening only stage 1 cuts the post-pause VR drop-out without
+// letting the mod arm into a still-transitional pause-exit camera.
+constexpr uint64_t kOdstPauseRearmStableMs = 250;
 constexpr float kOdstFirstPersonBlendMin = 0.95f;
 
 struct OdstFpSkeletonLayout
@@ -257,21 +272,41 @@ class OdstFreshCameraDebounce
 public:
     bool Update(uint64_t now, bool cameraFresh)
     {
-        if (!cameraFresh)
+        if (cameraFresh)
         {
-            m_freshSince = 0;
-            return false;
+            m_lastFreshMs = now;
+            if (!m_freshSince)
+                m_freshSince = now;
         }
-        if (!m_freshSince)
-            m_freshSince = now;
-        return now >= m_freshSince &&
+        else
+        {
+            // Restarting on every not-fresh poll meant the interval could
+            // never complete while the tail boolean toggled, so ODST armed
+            // only when it happened to catch a lucky quiet gap - slow, and
+            // frequently never at all after a quick pause and unpause.
+            const bool briefGap = m_lastFreshMs != 0 &&
+                now >= m_lastFreshMs &&
+                now - m_lastFreshMs <= kOdstCameraFreshGapToleranceMs;
+            if (!briefGap)
+            {
+                m_freshSince = 0;
+                m_lastFreshMs = 0;
+                return false;
+            }
+        }
+        return m_freshSince != 0 && now >= m_freshSince &&
             now - m_freshSince > kOdstCameraStableMs;
     }
 
-    void Reset() { m_freshSince = 0; }
+    void Reset()
+    {
+        m_freshSince = 0;
+        m_lastFreshMs = 0;
+    }
 
 private:
     uint64_t m_freshSince = 0;
+    uint64_t m_lastFreshMs = 0;
 };
 
 // A level-unload fallback must not accept the same stale camera bytes as a
@@ -327,15 +362,21 @@ private:
 
 // Native pause is a safe pre-shutdown boundary for the private camera hooks.
 // After removing them, do not reinstall on a stale pause-menu camera: require
-// the native pause byte to clear and the ordinary camera to remain live for the
-// same full stability interval used by initial auto-arm.
+// the native pause byte to clear, the ordinary camera to be seen live at least
+// once, and a short settle window (kOdstPauseRearmStableMs) to elapse. The gate
+// is deliberately flicker-tolerant: with the copy hook removed the live camera
+// array is sampled directly and reads ready/not-ready frame-to-frame, so ONLY a
+// genuine re-pause restarts the window -- a momentary not-ready sample does not
+// (headset log 2026-07-24: a continuous-ready reset stalled the rearm for tens
+// of seconds). Stage 2's fresh-camera arm debounce still proves real stability
+// before stereo re-engages, so a slightly-early reinstall cannot arm on garbage.
 class OdstPauseRearmGate
 {
 public:
     void Block()
     {
         m_blocked = true;
-        m_readySince = 0;
+        m_pauseClearedSince = 0;
         m_readyObserved = false;
     }
 
@@ -345,28 +386,32 @@ public:
         if (!titleActive)
         {
             m_blocked = false;
-            m_readySince = 0;
+            m_pauseClearedSince = 0;
             m_readyObserved = false;
             return;
         }
         if (!m_blocked)
             return;
-        if (nativePaused || !cameraActive)
+        // A genuine (re-)pause is the ONLY event that restarts the settle
+        // window. A single not-ready sample from the live, un-hooked camera
+        // array is flicker, not a re-pause, and must not reset progress.
+        if (nativePaused)
         {
-            m_readySince = 0;
+            m_pauseClearedSince = 0;
             m_readyObserved = false;
             return;
         }
-        if (!m_readyObserved)
-        {
-            m_readySince = now;
+        // Native pause has cleared: start the settle window on the first tick,
+        // and latch that the ordinary camera has been seen live at least once.
+        if (!m_pauseClearedSince)
+            m_pauseClearedSince = now;
+        if (cameraActive)
             m_readyObserved = true;
-            return;
-        }
-        if (now >= m_readySince && now - m_readySince > kOdstCameraStableMs)
+        if (m_readyObserved && now >= m_pauseClearedSince &&
+            now - m_pauseClearedSince > kOdstPauseRearmStableMs)
         {
             m_blocked = false;
-            m_readySince = 0;
+            m_pauseClearedSince = 0;
             m_readyObserved = false;
         }
     }
@@ -376,6 +421,6 @@ public:
 
 private:
     bool m_blocked = false;
-    uint64_t m_readySince = 0;
+    uint64_t m_pauseClearedSince = 0;
     bool m_readyObserved = false;
 };

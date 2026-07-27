@@ -1,10 +1,35 @@
 #pragma once
 
 #include "../common/title_registry.h"
+#include "../common/title_runtime_state.h"
 
-const TitleDescriptor* TitleAdapter_PollLoaded();
+struct TitleAdapterRuntimeSnapshot
+{
+    TitleRuntimeSnapshot runtime{};
+    bool ownershipPending = false;
+};
+
+const TitleDescriptor* TitleAdapter_PollLoaded(uint64_t observedAtMs);
 const TitleDescriptor* TitleAdapter_GetActive();
 GameTitle TitleAdapter_GetActiveTitle();
 uint64_t TitleAdapter_GetActiveTitleEpochMs();
+
+uint32_t TitleAdapter_GetGeneration(GameTitle title);
+TitleRuntimeAvailabilitySnapshot TitleAdapter_GetAvailability();
+bool TitleAdapter_GetCandidate(
+    GameTitle title, uint64_t heartbeatFreshForMs,
+    TitleRuntimeCandidate& candidate);
+TitleAdapterRuntimeSnapshot TitleAdapter_GetRuntimeSnapshot(
+    uint64_t nowMs, const TitleRuntimeHeartbeatPolicy& policy,
+    GameTitle retainedOwner = GameTitle::None);
+bool TitleAdapter_PublishLifecycle(
+    GameTitle title, uint32_t generation,
+    const TitleRuntimeLifecycle& lifecycle);
+bool TitleAdapter_PublishMode(
+    GameTitle title, uint32_t generation, RuntimeMode mode);
+bool TitleAdapter_PublishHeartbeat(
+    GameTitle title, uint32_t generation, uint64_t heartbeatMs);
+bool TitleAdapter_ClearHeartbeat(GameTitle title, uint32_t generation);
+
 void TitleAdapter_SetRuntimeMode(RuntimeMode mode);
 RuntimeMode TitleAdapter_GetRuntimeMode();

@@ -1,0 +1,1497 @@
+{
+  "schema_version": 1,
+  "status": "CAMERA_CULLING_PATCHY_FOG_HEADSET_PASS_REACH_FORCED_FLOATING_HANDS_PARTIAL_FP_CAMERA_NESTED_WORKSPACE_CORRECTION_PENDING",
+  "hook_eligible": false,
+  "hook_eligibility_scope": "PRELIMINARY_HELPER_CANDIDATES_ONLY; permanent main_render_view/player_view_render transaction is described separately below",
+  "accepted_baseline": {
+    "release": "MCC_VR_ALPHA_0.2.2",
+    "runtime_source_commit": "3a2a11bfc66b36e70f60282e91c9d5436f2e18d1"
+  },
+  "new_work_evidence_policy": {
+    "effective_date": "2026-07-26",
+    "allowed_sources": [
+      "official HREK",
+      "official Reach mod tools"
+    ],
+    "forbidden_sources": [
+      "retail binary analysis",
+      "Reclaimer"
+    ],
+    "archived_retail_fields": "historical context only; not admissible proof for new runtime work"
+  },
+  "retail_module": {
+    "name": "haloreach.dll",
+    "sha256": "738DD2D24EA3AEA12E1EE9AA4A61094BF116027D42004C35A19E5048608B0894",
+    "pe_timestamp": "0x68A0EFE1",
+    "size_of_image": "0x04EDA000"
+  },
+  "editing_kit": {
+    "name": "HREK",
+    "build": "2023.07.17.176677.1-QFE1",
+    "camera_evidence_binary": {
+      "name": "reach_tag_test.exe",
+      "sha256": "CBDD8448A87A433B0DFFC0DE47D06DB7A18B4BF868B96B057135DAA86790ABA8",
+      "pe_timestamp": "0x64B47B50",
+      "size_of_image": "0x06247000"
+    },
+    "required_roots": [
+      "tags",
+      "data"
+    ]
+  },
+  "hrek_authored_crosshair_candidate": {
+    "status": "UNTESTED",
+    "headset_accepted": false,
+    "accepted_pointer_advanced": false,
+    "evidence_scope": "OFFICIAL_HREK_AND_OFFICIAL_REACH_MOD_TOOLS_ONLY",
+    "hrek_build": "2023.07.17.176677.1-QFE1",
+    "retail_binary_evidence_used": false,
+    "reclaimer_evidence_used": false,
+    "official_binaries": {
+      "reach_tag_test": {
+        "name": "reach_tag_test.exe",
+        "sha256": "CBDD8448A87A433B0DFFC0DE47D06DB7A18B4BF868B96B057135DAA86790ABA8",
+        "role": "source-rich CHUD enum, ordering, and chud_draw_widget semantics"
+      },
+      "reach_tag_play": {
+        "name": "reach_tag_play.exe",
+        "sha256": "450DFFE824DDE4C9866E4448491B8B41D82995DC93159260A4DEF07D059E732E",
+        "role": "optimized chud_draw_widget production-layout variant"
+      },
+      "sapien_play": {
+        "name": "sapien_play.exe",
+        "sha256": "1FDA21569B38C189EC88124C1A682DCCED8FBEE11ACFD4D2605F46663B26175B",
+        "role": "independent optimized chud_draw_widget production-layout variant"
+      }
+    },
+    "chud_scripting_class_enum": {
+      "binary": "reach_tag_test.exe",
+      "pointer_array_rva": "0x0207F340",
+      "definition_and_count_rva": "0x0207F388",
+      "count": 9,
+      "values": {
+        "0": "undefined/use parent",
+        "1": "weapon stats",
+        "2": "crosshair",
+        "3": "shield",
+        "4": "grenades",
+        "5": "messages",
+        "6": "motion sensor",
+        "7": "chapter title",
+        "8": "cinematics"
+      },
+      "runtime_selector": {
+        "descriptor_signed_class_byte_offset": "0x04",
+        "required_value": 2,
+        "widget_name_selection_forbidden": true
+      }
+    },
+    "official_chud_tag_exports": {
+      "tool": "official HREK tool.exe export-tag-to-xml",
+      "source_glob": "tags\\ui\\chud\\*.chud_definition",
+      "ignored_evidence_root": "out\\hrek-evidence\\chud",
+      "exported_definition_count": 63,
+      "top_level_widget_collection_count": 283,
+      "crosshair_class_collection_count": 85,
+      "definition_count_with_crosshair_class": 55,
+      "exports_committed": false,
+      "assault_rifle": {
+        "collection_artist_name": "crosshair",
+        "scripting_class": "crosshair",
+        "widget": "ar_reticule",
+        "external_input_a": "weapon autoaim target",
+        "authored_color_outputs": [
+          "normal",
+          "enemy",
+          "friendly"
+        ],
+        "runtime_semantics": "preserve authored normal, hostile-red, and friendly-green state"
+      }
+    },
+    "chud_draw_widget": {
+      "abi": "five arguments: output user, descriptor, widget index, alternate path, draw state",
+      "development_semantics": {
+        "binary": "reach_tag_test.exe",
+        "rva": "0x00922AF0",
+        "descriptor_argument": 2,
+        "descriptor_incoming_register": "RDX",
+        "descriptor_retained_register": "R13",
+        "signed_class_byte_offset": "0x04"
+      },
+      "unique_entry_aob": "48 8B C4 44 89 48 20 48 89 50 10 55 56 57 41 54 41 55 41 56 41 57 48 8D 68 A9 48 81 EC C0 00 00 00",
+      "unique_entry_length": 33,
+      "optimized_variants": {
+        "reach_tag_play": {
+          "rva": "0x0056B15C",
+          "aob_match_count": 1,
+          "body_size": "0x424",
+          "body_sha256": "81EBDE1BB1CF9337C01BA861B0CAF70980EBF6871DE079334B5BFB77ABA8978E",
+          "descriptor_move": {
+            "offset": "0x45",
+            "bytes": "4C 8B F2",
+            "meaning": "RDX to R14"
+          },
+          "fifth_argument_load": {
+            "offset": "0x4A",
+            "bytes": "4C 8B 4D 7F"
+          },
+          "class_read": {
+            "offset": "0x2E1",
+            "prefix_bytes": "41 0F BE 56 04 E8",
+            "rel32_wildcard_length": 4,
+            "suffix_offset": "0x2EB",
+            "suffix_bytes": "48 8B D0"
+          }
+        },
+        "sapien_play": {
+          "rva": "0x008265F4",
+          "aob_match_count": 1,
+          "body_size": "0x483",
+          "body_sha256": "C0EA71FA6BD0D26CA2EBAAED58FA182FE0CD8288274D3459271AD62CA2B9099E",
+          "descriptor_move": {
+            "offset": "0x45",
+            "bytes": "4C 8B FA",
+            "meaning": "RDX to R15"
+          },
+          "fifth_argument_load": {
+            "offset": "0x4B",
+            "bytes": "4C 8B 4D 7F"
+          },
+          "class_read": {
+            "offset": "0x33C",
+            "prefix_bytes": "41 0F BE 57 04 E8",
+            "rel32_wildcard_length": 4,
+            "suffix_offset": "0x346",
+            "suffix_bytes": "48 8B D0"
+          }
+        }
+      },
+      "non_recursion_proof": {
+        "complete_hashed_bodies_disassembled": true,
+        "decoded_call_or_tail_jump_to_own_entry_count": 0,
+        "local_backward_branch_reaches_entry": false,
+        "sapien_indirect_call": "stack-local receiver +0x10 dispatch; not the five-argument CHUD entry",
+        "detour_original_trampoline_call_count": 1
+      },
+      "runtime_admission": {
+        "bridge_is_mandatory_for_reach_vr_transaction": true,
+        "loaded_entry_match_count_must_equal": 1,
+        "match_must_be_executable": true,
+        "unwind_function_begin_must_equal_match": true,
+        "complete_body_size_and_fixed_layout_must_match_one_exact_hrek_variant": true,
+        "official_body_sha256_pins_static_evidence_and_non_recursion_proof": true,
+        "official_body_sha256_is_loaded_title_admission_requirement": false,
+        "reason_body_sha256_is_not_runtime_requirement": "official link layouts have deliberately wildcarded rel32 operands",
+        "zero_multiple_boundary_body_size_or_layout_mismatch": "reject installation before the Reach camera/VR core acquires ownership",
+        "pre_ownership_mismatch_outcome": "no Reach VR hook or alternate Reach VR mode is armed",
+        "mixed_vr_with_flat_stock_crosshair_mode_permitted": false,
+        "procedural_or_approximation_fallback": false,
+        "retail_rva_or_layout_consumed": false
+      },
+      "resource_and_hot_capture_contract": {
+        "cold_preparation_function": "VR_PrepareAuthoredReticleResources",
+        "cold_preparation_result_states": ["NotReady", "Ready", "Failed"],
+        "session_device_not_ready_is_retryable_without_generation_latch": true,
+        "worker_install_requires_release_published_running_session_device_readiness": true,
+        "readiness_published_only_after_xr_begin_session_and_frame_wait_worker_start": true,
+        "readiness_revoked_before_stopping_or_fatal_drain": true,
+        "cold_preparation_before_any_hook_creation": true,
+        "cold_preparation_lock": "Reach display resource lock",
+        "cold_required_runtime_objects": [
+          "D3D device",
+          "D3D immediate context",
+          "OpenXR session"
+        ],
+        "cold_preallocated_resources": [
+          "reticle OpenXR swapchain",
+          "every reticle swapchain RTV",
+          "private authored-reticle texture",
+          "private authored-reticle RTV"
+        ],
+        "cold_failure_disposition": "reject installation before hook creation or ownership",
+        "reach_hot_begin_function": "VR_BeginPreparedAuthoredReticleCapture",
+        "reach_hot_end_function": "VR_EndPreparedAuthoredReticleCapture",
+        "reach_hot_end_completion_required": true,
+        "every_admitted_outer_attempt_invalidates_prior_attempt_authored_readiness": true,
+        "reach_hot_path_prebuilt_resources_only": true,
+        "reach_hot_path_allocation_signature_scan_logging_or_lazy_creation": false,
+        "halo3_odst_accepted_lazy_path_unchanged": true,
+        "capture_loss": {
+          "suppress_class_2_draw": true,
+          "invalidate_current_eye_pair_immediately": true,
+          "disarm_immediately": true,
+          "parity_failure_latch_scope": "exact title-module generation",
+          "request_verified_teardown": true,
+          "claimed_transaction_reruns_stock_renderer": false,
+          "matching_inner_calls_suppressed_while_teardown_pending": true,
+          "reinstall_same_generation": false,
+          "next_attempt_requires_fresh_module_generation": true
+        },
+        "verified_teardown": {
+          "reach_hook_count": 6,
+          "disable_before_removal": true,
+          "callback_counter_quiescence_required": true,
+          "frozen_thread_detour_and_trampoline_rip_quiescence_required": true,
+          "remove_hooks_and_release_module_only_after_proof": true
+        }
+      },
+      "owned_draw_decision_contract": {
+        "closed_actions": [
+          "DrawStock",
+          "Suppress",
+          "CaptureAuthored",
+          "RejectTransaction"
+        ],
+        "owned_unreadable_descriptor": "RejectTransaction",
+        "owned_eye_index_outside_0_1": "RejectTransaction",
+        "hot_hook_owner_requires_active_title_halo_reach": true,
+        "hot_hook_and_compositor_owner_require_exact_live_adapter_generation": true,
+        "matching_in_flight_eye_loses_ownership": "mark eye failed, suppress the abandoned CHUD pass, and prohibit eye publication",
+        "reject_transaction_action": "invalidate current eye pair, latch exact generation, disarm, and request verified teardown",
+        "automatic_stock_draw_allowed_for": [
+          "draw outside Reach-owned stereo transaction",
+          "readable scripting class other than 2"
+        ],
+        "explicit_kill_reticle_0_user_choice_remains_stock": true,
+        "required_pair_observes_class_2_without_completed_capture": "RejectTransaction before final eye copy",
+        "pair_observes_no_class_2": "authored no-crosshair state; submit no reticle quad and never reuse prior-attempt art"
+      }
+    },
+    "native_chud_ordering": {
+      "binary": "reach_tag_test.exe",
+      "player_view_render_rva": "0x00834490",
+      "chud_draw_screen_ldr_call": "0x008354AE -> 0x008B67C0",
+      "chud_draw_screen_ldr_source_name": "chud_draw_screen_LDR",
+      "later_path": "0x008354E5 -> 0x008355A0",
+      "chud_draw_screen_call": "0x00835682 -> 0x008B6300",
+      "chud_draw_screen_source_name": "chud_draw_screen",
+      "both_native_chud_phases_precede_player_view_return": true,
+      "capture_scope": "same per-eye world, first-person, native-CHUD transaction"
+    },
+    "shared_configuration_behavior": {
+      "crosshair_1_kill_reticle_1": "capture class-2 authored widget from configured eye and suppress its flat copy in the opposite eye",
+      "crosshair_0": "suppress class-2 widget",
+      "kill_reticle_0": "explicit user-configured stock drawing, not an automatic fallback",
+      "right_eye_first": "selects the one authored-capture eye",
+      "evidence_or_capture_failure": "invalidate Reach ownership and run verified teardown; do not select another reticle mode",
+      "no_class_2_emitted_in_exact_pair": "submit no reticle quad as Reach's authored state"
+    },
+    "reach_compositor_admission": {
+      "active_title_must_equal": "HaloReach",
+      "exact_completed_eye_pair_required": true,
+      "both_eye_copy_serials_must_equal_current_prepared_serial": true,
+      "live_ownership_required": [
+        "camera core installed",
+        "camera core armed",
+        "teardown not requested",
+        "VR enabled",
+        "stereo enabled"
+      ],
+      "world_swapchain_acquire_result_required": "XR_SUCCESS",
+      "world_swapchain_wait_result_required": "XR_SUCCESS",
+      "both_world_eye_resolves_must_succeed": true,
+      "world_swapchain_release_result_required": "XR_SUCCESS",
+      "class_2_emitted_when_authored_crosshair_required_must_have_completed_capture": true,
+      "captured_authored_texture_ready_and_serial_must_equal_current_prepared_serial": true,
+      "authored_swapchain_acquire_result_required": "XR_SUCCESS",
+      "authored_swapchain_wait_result_required": "XR_SUCCESS",
+      "authored_upload_must_succeed_before_layer_submission": true,
+      "reach_authored_swapchain_release_result_required": "XR_SUCCESS",
+      "timeout_or_session_loss_pending_policy": "abort complete Reach layer set and enter terminal session recovery",
+      "begun_frame_failure_policy": "submit empty xrEndFrame with no layers and no reference to a potentially outstanding image",
+      "fresh_session_policy": "clear the terminal Reach swapchain abort latch only when the exclusive frame-wait worker starts for the new session",
+      "reach_upload_failure_enters_legacy_swapchain_maintenance": false,
+      "live_exact_ownership_rechecked_after_upload": true,
+      "reach_projection_queued_before_upload_result": false,
+      "upload_failure_clears_both_copied_eye_serials": true,
+      "upload_failure_can_submit_world_projection": false,
+      "upload_failure_can_submit_authored_quad": false,
+      "world_upload_or_release_failure_can_submit_scope_layer": false,
+      "controller_aim_capability_alone_can_admit_reach": false,
+      "exact_generation_upload_rejection": {
+        "captured_generation_passed_to_game_owner": true,
+        "active_title_revalidated": true,
+        "adapter_generation_revalidated": true,
+        "installed_owner_revalidated": true,
+        "stale_generation_can_disarm_current_owner": false,
+        "matching_failure_action": "invalidate eye pair, disarm, latch exact generation, and request verified teardown"
+      }
+    },
+    "hud_layout": {
+      "implementation_status": "WITHHELD_FOR_SEPARATE_HREK_PROVEN_CANDIDATE",
+      "title_capability_hud_enabled": false,
+      "skin_count": 3,
+      "curvature_records_per_skin": 5,
+      "total_curvature_records": 15,
+      "default_dervish_pairs": [
+        "0.86/0.87",
+        "0.90/0.90",
+        "0.87/0.91",
+        "0.87/0.85",
+        "0.91/0.93"
+      ],
+      "monitor_values_differ": true,
+      "halo3_or_odst_anchor_record_count_or_destination_offset_reused": false
+    }
+  },
+  "required_runtime_proof": [
+    "loaded_image_uniqueness",
+    "executable_range",
+    "abi",
+    "callers",
+    "data_flow",
+    "hrek_semantics",
+    "consumed_layout_fields"
+  ],
+  "player_view_transaction": {
+    "status": "CAMERA_CULLING_PATCHY_FOG_HEADSET_PASS_SCALE_PERFORMANCE_H3_ODST_PENDING",
+    "retail": {
+      "main_render_game": {
+        "function_rva": "0x000C33F8",
+        "function_end_rva_exclusive": "0x000C3B1E"
+      },
+      "player_view_array": {
+        "rva": "0x029F2B90",
+        "slot_count": 4,
+        "stride": "0x00000A40",
+        "initializer_rva": "0x00006210",
+        "initializer_end_rva_exclusive": "0x00006246",
+        "constructor_rva": "0x0025B0A8",
+        "runtime_index_multiply_rva": "0x000C366A",
+        "runtime_pointer_increment_rva": "0x000C3879"
+      },
+      "setup": {
+        "function_rva": "0x0026C204",
+        "function_end_rva_exclusive": "0x0026C6DC",
+        "normal_call_site_rva": "0x000C36D6",
+        "rasterizer_workspace_rva": "0x00C9FAE0",
+        "camera_pair_data_size": "0x000002A8",
+        "render_scope_snapshot_size": "0x000002B0",
+        "workspace_layout": {
+          "primary_compact": { "offset": "0x000", "size": "0x090" },
+          "primary_derived": { "offset": "0x090", "size": "0x0C4" },
+          "secondary_compact": { "offset": "0x154", "size": "0x090" },
+          "secondary_derived": { "offset": "0x1E4", "size": "0x0C4" },
+          "camera_stack_callback": { "offset": "0x2A8", "size": "0x008" }
+        },
+        "return_to_main_render_game_rva": "0x000C36DB",
+        "instructions_to_normal_render_call": 16,
+        "calls_or_branches_before_normal_render_call": 0
+      },
+      "main_render_view": {
+        "function_rva": "0x000C31F4",
+        "function_end_rva_exclusive": "0x000C33F7",
+        "function_size": 515,
+        "instruction_count": 115,
+        "body_sha256": "95DF3EFFF9AC6EE29887D1272CCA8D7BF3E58F87041BAD8032107825B733FE89",
+        "entry_aob": "40 53 56 57 48 81 EC 80 00 00 00 0F 29 74 24 70 48 8B 05 05 6E A3 00 48 33 C4 48 89 44 24 68 41",
+        "static_executable_match_count": 1,
+        "normal_call_site_rva": "0x000C3730",
+        "normal_return_rva": "0x000C3735",
+        "alternate_call_site_rva": "0x001D3864",
+        "alternate_return_rva": "0x001D3869",
+        "direct_rel32_caller_count": 2,
+        "alternate_semantics": "SCREENSHOT_TILE_BLOOM_SLOT0",
+        "production_routing": {
+          "normal_return": "STEREO_ELIGIBLE_AFTER_ALL_OTHER_GATES",
+          "alternate_return": "STOCK_ORIGINAL_EXACTLY_ONCE",
+          "unknown_return": "STOCK_ORIGINAL_EXACTLY_ONCE"
+        },
+        "abi": {
+          "rcx": "rasterizer_camera_workspace",
+          "rdx": "player_view_pointer",
+          "r8d": "player_window_index"
+        }
+      },
+      "player_view_render": {
+        "function_rva": "0x0026C6DC",
+        "function_end_rva_exclusive": "0x0026CFE6",
+        "function_size": 2314,
+        "body_sha256": "2628D1189621EACED7C95A1F295815D70E7783054F1C3CBA46799F838CC33C60",
+        "entry_aob": "48 8B C4 48 89 58 10 48 89 70 18 48 89 78 20 55 41 54 41 55 41 56 41 57 48 8D A8 28 FF FF FF 48 81 EC B0 01 00 00 0F 29 70 C8 0F 29 78 B8 48 8B 05 ?? ?? ?? ?? 48 33 C4 48 89 85 80 00 00 00 8B 81 A4 03 00 00",
+        "static_executable_match_count": 1,
+        "direct_rel32_caller_count": 1,
+        "call_site_rva": "0x000C33C4",
+        "post_call_continuation_rva": "0x000C33C9",
+        "abi": "void __fastcall(player_view*)",
+        "candidate_status": "EXACT_INNER_BOUNDARY_PROVEN_DOUBLE_CALL_RUNTIME_UNPROVEN",
+        "outer_normal_owner_tls_token_required": true,
+        "immediate_return_distinguishes_outer_caller": false,
+        "avoids_repeating_main_render_view_prelude": true,
+        "last_window_flag_offset": "0x0A30",
+        "last_window_candidate_policy": "first eye false; final eye receives original stock byte; preserve final actual post-call byte; runtime unvalidated"
+      },
+      "active_view_scope": {
+        "global_rva": "0x04E389A8",
+        "set_rva": "0x000C323C",
+        "camera_stack_push_call_rva": "0x000C3246",
+        "camera_stack_push_rva": "0x00251C08",
+        "camera_stack_depth_rva": "0x00B43ABC",
+        "camera_stack_pointer_slots_rva": "0x00C878A8",
+        "camera_stack_callback_rva": "0x0026BFD4",
+        "empty_pre_push_depth": -1,
+        "accepted_pre_push_depth_min": -1,
+        "accepted_pre_push_depth_max": 2,
+        "pushed_depth_min": 0,
+        "pushed_depth_max": 3,
+        "push_skips_when_prior_depth_at_least": 3,
+        "outer_token_captures_pre_push_depth": true,
+        "inner_admission_depth_rule": "0 <= current_depth && current_depth <= 3 && current_depth == outer_pre_push_depth + 1",
+        "inner_admission_top_rule": "top pointer == admitted normal workspace",
+        "inner_admission_callback_rule": "workspace+0x2A8 == module+0x26BFD4",
+        "camera_stack_pop_call_rva": "0x000C33CE",
+        "camera_stack_pop_rva": "0x00251C50",
+        "clear_rva": "0x000C33D3"
+      },
+      "camera_rebuild_transaction": {
+        "stock_order_proven_before_active_scope": true,
+        "inside_active_scope_call_safety_proven": false,
+        "frustum_helper": {
+          "rva": "0x00287F58",
+          "abi": "bool __fastcall(compact_camera*, float[4]*)",
+          "output_size": "0x10"
+        },
+        "projection_builder": {
+          "rva": "0x002884BC",
+          "abi": "void __fastcall(compact_camera*, float[4]*, derived_block*, float)",
+          "normal_fourth_argument": 0.0,
+          "output_size": "0xC4"
+        },
+        "camera_state_updater": {
+          "rva": "0x00286F9C",
+          "retail_argument_count": 2,
+          "destination_player_view_offset": "0x03B0",
+          "sparse_touched_history_state_envelope": "0xC8",
+          "render_camera_pointer_global_rva": "0x04E38A90"
+        },
+        "projection_matrix_builder": {
+          "rva": "0x0028AF8C",
+          "destination_player_view_offset": "0x0490",
+          "stock_transaction_size": "0x2D0",
+          "last_direct_write_offset": "0x2C0",
+          "projection_offset_input": "player_view+0x470 float[2], zeroed by the preceding normal camera-state updater"
+        },
+        "rollback": {
+          "workspace": "0x2B0",
+          "player_view_camera_state": "offset 0x3B0 size 0xC8",
+          "player_view_current_matrices": "offset 0x490 size 0x2D0",
+          "player_view_previous_matrices_if_touched": "offset 0x760 size 0x2D0",
+          "render_camera_pointer_global": "validate expected player_view+0x3B0; re-arm per eye; preserve final stock zero; no blind final restore",
+          "whole_player_view_snapshot_forbidden": true,
+          "last_window_flag_excluded": true
+        }
+      },
+      "native_motion_blur_parity": {
+        "headset_evidence_source": "86864bd088867a8e67950eb7d013d1c29d9f2d45",
+        "headset_result": "FINITE_MAX_ONLY_ZERO_CONFIRMED_ALPHA_FOG_PERSISTS_OPPOSITE_HEAD_MOTION",
+        "failed_suppression_source": "facf6b0713ace0432e709916184d938fc553f4b1",
+        "failed_suppression_dll_sha256": "38BEEF66535A01E0AAC76A6FCFA52117183EEE305F2512663654DB29D6C492A0",
+        "failed_suppression_evidence": "out/test-runs/facf6b0-reach-alpha-fog-fail-20260724-072511Z",
+        "finite_suppression_source": "03f0bffbec5a4bdbe0b0784b47aeafc581505f1b",
+        "finite_suppression_dll_sha256": "456584DF50DF7B7941008BCF23EBC488F24938EE3D2C5B2E8F6A6FEEB182F6BB",
+        "finite_suppression_evidence": "out/test-runs/03f0bff-reach-alpha-persists-live-20260724-125506Z",
+        "finite_live_controls": {
+          "motion_blur_max": 0.0,
+          "motion_blur_scale": 0.35
+        },
+        "finite_suppression_result": "FINITE_MAX_ONLY_ZERO_CONFIRMED_ALPHA_FOG_PERSISTS_OPPOSITE_HEAD_MOTION",
+        "causal_disposition": "NATIVE_MOTION_BLUR_RULED_OUT_SCREEN_ALIGNED_PATCHY_FOG_ISOLATED",
+        "retail_water_renderer_setup_argument_rva_range": "0x0026C956..0x0026C967",
+        "retail_water_renderer_setup_target_rva": "0x0025795C",
+        "hrek_water_renderer_setup_target_rva": "0x00812670",
+        "water_renderer_previous_origin_use": "player_view_previous_matrices+0xF0..+0xF8 only for greater-than-five-world-unit movement/camera-cut flag",
+        "retail_current_matrix_block": "player_view+0x490",
+        "retail_previous_matrix_block": "player_view+0x760",
+        "retail_distortion_constant_builder_rva": "0x00287398",
+        "retail_max_over_scale_divide_rva": "0x00287561",
+        "retail_scaled_max_over_double_scale_divide_rva": "0x002875AD",
+        "hrek_apply_distortions_call_rva": "0x008351E6",
+        "hrek_distortion_motion_blur_call_rva": "0x00835201",
+        "hrek_distortion_constant_builder_rva": "0x0086B670",
+        "hrek_constant_block_rva_range": "0x0086BA8F..0x0086BC2F",
+        "hrek_max_over_scale_divide_rva": "0x0086BBA9",
+        "hrek_scaled_max_over_double_scale_divide_rva": "0x0086BBF9",
+        "controls": {
+          "motion_blur_max": {
+            "retail_entry_rva": "0x00B3A1C8",
+            "retail_value_rva": "0x00B44600",
+            "hrek_entry_rva": "0x0201BA70",
+            "hrek_value_rva": "0x02059054",
+            "authored_value": 0.08,
+            "debug_type": 6
+          },
+          "motion_blur_scale": {
+            "retail_entry_rva": "0x00B3A1E0",
+            "retail_value_rva": "0x00B44604",
+            "hrek_entry_rva": "0x0201BA88",
+            "hrek_value_rva": "0x02059058",
+            "authored_value": 0.35,
+            "debug_type": 6
+          }
+        },
+        "shared_config": "motion_blur",
+        "vr_default": "OFF",
+        "production_resolution": "EXACT_NAME_AFTER_PINNED_IMAGE_PREFLIGHT_THEN_REQUIRE_EXACT_RETAIL_VALUE_RVAS_DISTINCT_POSITIVE_FINITE_SCALE_AND_FINITE_NONNEGATIVE_MAX",
+        "render_policy": "PRESERVE_OR_REASSERT_POSITIVE_AUTHORED_SCALE_AND_ZERO_ONLY_MAX_AT_EXACT_NORMAL_ADMITTED_REACH_STEREO_BOUNDARY_WITHOUT_LOGGING_ALLOCATION_LOCKING_OR_SCANNING",
+        "config_enabled_policy": "RESTORE_LATEST_AUTHORED_VALUES",
+        "teardown": "DISABLE_ALL_SIX_REACH_HOOKS_PROVE_CALLBACK_AND_RELAY_WRAPPER_RIP_QUIESCENCE_THEN_RESTORE_OR_RETAIN_AND_RETRY",
+        "camera_culling_history_eye_order_projection_capture_depth_controller_changed": false
+      },
+      "screen_aligned_patchy_fog": {
+        "headset_observation": "TRANSLUCENT_FOG_LAYER_MOVES_OPPOSITE_HEAD_INSTEAD_OF_REMAINING_WORLD_STATIONARY",
+        "retail_gate_test_rva": "0x0026CC59",
+        "retail_skip_jump_rva": "0x0026CC60",
+        "retail_flags_rva": "0x00CA0240",
+        "retail_skip_mask": "0x08",
+        "retail_patchy_call_rva": "0x0026CC65",
+        "retail_patchy_target_rva": "0x0026EFEC",
+        "retail_callback_rva": "0x0026F16C",
+        "retail_renderer_rva": "0x0029C510",
+        "retail_atmosphere_call_rva": "0x0026CC54",
+        "retail_atmosphere_target_rva": "0x0026D5B4",
+        "hrek_block_rva_range": "0x0083505F..0x0083516B",
+        "hrek_callback_rva": "0x00836B40",
+        "hrek_renderer_rva": "0x00894460",
+        "hrek_semantics": [
+          "Patchy Fog Global Parameters",
+          "_surface_patchy_fog_buffer0",
+          "_surface_patchy_fog_buffer1"
+        ],
+        "identity_proof": "EXACT_PLAYER_VIEW_BODY_HASH_PLUS_SEVEN_REL32_EDGES_MAPPED_FLAG_AND_LIVE_RIP_TARGET_CHECK",
+        "production_policy": "SET_ONLY_BIT_0X08_AROUND_EACH_ADMITTED_VR_EYE_ORIGINAL_CALL_AND_RESTORE_ONLY_THAT_BIT_IN_FINALLY",
+        "stock_nested_screenshot_fallback_affected": false,
+        "atmosphere_fog_changed": false,
+        "headset_result": "PASS_B0710DC_OPPOSITE_HEAD_LAYER_REMOVED",
+        "headset_result_source": "b0710dc01b1b6e5deec64830a42d33f19e1a52f1",
+        "headset_result_package": "out/candidates/b0710dc-reach-camera-20260724-132647552Z",
+        "headset_result_dll_sha256": "FF43BC89C5AFEC799DA43EB78EC58CC173B113DEC208FEE69E5F2B6235376C35",
+        "headset_result_launcher_sha256": "AAE13DBDB454DEF58D4922F08C1D7E981E3AE408D84368182540F7D59D043615",
+        "headset_result_evidence": "out/test-runs/b0710dc-reach-patchy-fog-headset-20260724-132935Z",
+        "headset_result_log_sha256": "4A1B86F38E4799D2A48FF04E70F6316CAC4B7214AC7180BBAE8E6D2BA2F012",
+        "headset_result_remaining_observations": [
+          "WORLD_SCALE_SLIGHTLY_SMALL_VERSUS_HALO3_ODST",
+          "STEREO_PERFORMANCE_DIP"
+        ]
+      },
+      "physical_world_scale": {
+        "headset_observation_source": "b0710dc01b1b6e5deec64830a42d33f19e1a52f1",
+        "headset_observation": "WORLD_SCALE_SLIGHTLY_SMALL_VERSUS_HALO3_ODST",
+        "prior_reach_world_units_per_meter": 0.33,
+        "accepted_odst_world_units_per_meter": 0.32808399,
+        "candidate_reach_world_units_per_meter": 0.32808399,
+        "candidate_formula": "1.0 / 3.048",
+        "prior_tracked_position_excess_percent": 0.584,
+        "apparent_world_size_correction_percent": 0.584,
+        "head_and_eye_invariant": "SAME_REACH_TITLE_CONSTANT_FOR_ROOM_SCALE_TRANSLATION_AND_EXACT_OPENXR_EYE_POSITION",
+        "halo3_odst_changed": false,
+        "controller_world_position_policy": "WITHHELD_UNTIL_REACH_SPECIFIC_AIM_IK_EVIDENCE_THEN_REQUIRE_SAME_CONSTANT",
+        "headset_result": "PENDING"
+      },
+      "pre_inner_visibility": {
+        "ordering": "AFTER_NORMAL_SETUP_BEFORE_PLAYER_VIEW_RENDER",
+        "cluster_lookup_call_rva": "0x000C3320",
+        "cluster_lookup_target_rva": "0x00273458",
+        "cluster_lookup_secondary_compact_lea_rva": "0x00273468",
+        "cluster_lookup_secondary_compact_offset": "0x0154",
+        "visibility_build_call_rva": "0x000C335C",
+        "visibility_build_target_rva": "0x0027F408",
+        "secondary_compact_workspace_offset": "0x0154",
+        "secondary_derived_workspace_offset": "0x01E4",
+        "hrek_profile_name": "player_view_compute_visibility",
+        "hrek_cluster_lookup_call_rva": "0x00833A2E",
+        "hrek_cluster_lookup_target_rva": "0x00839230",
+        "production_live_edge_verification": true,
+        "production_policy": "ONE_HEAD_CENTER_BINOCULAR_UNION_BEFORE_ONE_STOCK_VISIBILITY_PASS",
+        "per_eye_cull_input": "ACTUAL_SYMMETRIC_FIXED_ASPECT_RASTER_CORNERS_ROTATED_BY_RUNTIME_EYE_ORIENTATION",
+        "eye_origin_policy": "HEAD_CENTER_VISIBILITY_WITH_RUNTIME_TRANSLATION_APPLIED_PER_RASTER_MATCHES_ACCEPTED_HALO3_ODST",
+        "exact_finite_distance_translated_eye_coverage_claimed": false,
+        "native_visibility_projection_count": 1,
+        "dynamic_near_plane_evidence": {
+          "compact_camera_offset": "0x64",
+          "retail_projection_read_rva": "0x002884F4",
+          "hrek_projection_read_rva": "0x00823553",
+          "hrek_assertion": "camera->z_near>=0.0f",
+          "retail_visibility_copy_rva": "0x002A2046",
+          "hrek_visibility_copy_rva": "0x0081E8E8",
+          "production_policy": "EVIDENCE_FOR_FUTURE_TRANSLATED_NEAR_CORNER_COVERAGE_NOT_CONSUMED_BY_THIS_CANDIDATE"
+        },
+        "tracking_snapshot": "TWO_FIXED_SLOTS_WRITER_CLAIM_READER_PIN_EXACT_PREPARED_SERIAL_NO_RENDER_HOOK_LOCKS",
+        "outer_workspace_rollback_size": "0x02A8",
+        "outer_player_view_rollback": "bounded 0x3B0 through 0xA30 inclusive; preserve final last-window byte",
+        "coherent_pre_ownership_player_view_state": "head-center player-view camera and matrices rebuilt before visibility; claimed failure rejects and suppresses",
+        "camera_stack_callback_excluded_from_outer_rollback": true,
+        "whole_outer_or_visibility_double_call_forbidden": true,
+        "teardown": "disable all six installed Reach hooks; prove callback plus wrapper/trampoline relay RIP quiescence; remove/free only after proof; retained cleanup cannot rearm"
+      },
+      "late_chud_call_sites": [
+        "0x0026CE28",
+        "0x0026CEC9"
+      ],
+      "stock_present": {
+        "outer_main_render_call_rva": "0x000C2FAA",
+        "outer_present_call_rva": "0x000C3000",
+        "present_wrapper_rva": "0x0025113C",
+        "present_vcall_rva": "0x002511AA"
+      },
+      "final_display_target": {
+        "status": "STATIC_IDENTITY_PROVEN_RUNTIME_DESCRIPTOR_INCOMPLETE",
+        "surface_group_index": 1,
+        "surface_group_descriptor_rva": "0x00BB9288",
+        "runtime_group_rva": "0x00C8E520",
+        "descriptor_flags": "0x00000021",
+        "descriptor_format": "DXGI_FORMAT_R8G8B8A8_UNORM",
+        "descriptor_sample_count": 1,
+        "expected_specialization_count": 4,
+        "runtime_surface_count_offset": "0x58",
+        "runtime_surface_array_offset": "0x60",
+        "surface_entry_size": "0x88",
+        "surface_entry_rtv_offset": "0x08",
+        "surface_entry_srv_offset": "0x18",
+        "selected_specialization_index_global_rva": "0x04E38A08",
+        "selected_index_player_view_offset": "0x03A4",
+        "selected_rtv_cache_rva": "0x00CA02E0",
+        "creation_function_rva": "0x00266F90",
+        "creation_function_end_rva_exclusive": "0x002670FC",
+        "swapchain_global_rva": "0x04E38868",
+        "swapchain_get_buffer_rva": "0x00266FE0",
+        "cleanup_function_rva": "0x002670FC",
+        "cleanup_function_end_rva_exclusive": "0x00267250",
+        "swapchain_buffer_count": 1,
+        "swapchain_swap_effect": "DXGI_SWAP_EFFECT_DISCARD",
+        "swapchain_usage": [
+          "DXGI_USAGE_SHADER_INPUT",
+          "DXGI_USAGE_RENDER_TARGET_OUTPUT"
+        ],
+        "late_native_chud_when_executed_binds_display_group": true,
+        "same_swapchain_used_by_stock_present": true,
+        "halo3_scene_color_identity_rule_reusable": false,
+        "first_capture_route": "COLD_VALIDATE_BUFFER0_THEN_COPYRESOURCE_AFTER_EACH_PLAYER_VIEW_RENDER",
+        "direct_rtv_redirect_first_candidate": false,
+        "production_cold_validator_compiled": true,
+        "production_cold_validator_runtime_result": "UNTESTED",
+        "production_copyresource_reachable": false
+      }
+    },
+    "hrek_homolog": {
+      "binary": "reach_tag_test.exe",
+      "main_render_game_rva": "0x001CB8D0",
+      "main_render_game_end_rva_exclusive": "0x001CC001",
+      "main_render_view_inline_start_rva": "0x001CBE36",
+      "main_render_view_inline_end_rva_exclusive": "0x001CBF51",
+      "main_render_view_inline_sha256": "BE74AAB4964CF29044406B8E0774AC916D747714E70B62AD76A4B028C16A8DF5",
+      "player_view_array_rva": "0x04D8AED0",
+      "player_view_stride": "0x00000A40",
+      "setup_function_rva": "0x00837F80",
+      "setup_call_site_rva": "0x001CBD3A",
+      "player_view_render_rva": "0x00834490",
+      "player_view_render_end_rva_exclusive": "0x00835598",
+      "player_view_render_size": 4360,
+      "player_view_render_body_sha256": "21C52A3135F31D1C1D55C73CA2EE66A36A10780D74B190E7FA873A716A6830B2",
+      "player_view_render_call_site_rva": "0x001CBF22",
+      "player_view_render_normal_call_site_rva": "0x001CBF22",
+      "player_view_render_direct_call_sites": [
+        "0x001CBF22",
+        "0x001CC790"
+      ],
+      "active_view_set_call_rva": "0x001CBE89",
+      "active_view_clear_call_rva": "0x001CBF33",
+      "active_view_setter_rva": "0x00837B70",
+      "active_view_global_rva": "0x04D86C00",
+      "source": "render/views/render_player_view.cpp",
+      "active_view_assertion_lines": [
+        2504,
+        2505,
+        2507,
+        2508
+      ]
+    },
+    "ordering": {
+      "strict_world_then_weapon": false,
+      "world_and_first_person_subpasses_interleave": true,
+      "executed_final_first_person_precedes_late_native_chud": true,
+      "post_render_continuation_precedes_active_view_clear": true,
+      "post_main_render_view_capture_precedes_stock_present": true,
+      "first_person_and_chud_phases_are_conditional": true,
+      "main_render_view_slot0_prelude_must_not_repeat": true,
+      "wait_for_gpu_block_can_skip_before_flag_test": true,
+      "wait_for_gpu_stock_flag_consumed_once_when_block_executes": true,
+      "final_eye_actual_post_call_flag_must_persist": true,
+      "wait_for_gpu_final_eye_policy_runtime_validated": false
+    },
+    "armed_render_candidate": {
+      "status": "PERMANENT_ALL_OR_NOTHING_RUNTIME_HOOKS_ON_UNACCEPTED_HEADSET_CANDIDATE",
+      "build_option": "HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE",
+      "build_option_requires_controller_bringup": false,
+      "implementation": [
+        "src/common/reach_render_logic.h",
+        "src/common/reach_chud_logic.h",
+        "src/dll/reach_render_candidate.h",
+        "src/dll/reach_render_candidate.cpp",
+        "src/dll/reach_render_preflight.h",
+        "src/dll/reach_render_preflight.cpp",
+        "src/dll/game.cpp",
+        "src/dll/d3d11_hook.cpp",
+        "src/dll/vr.h",
+        "src/dll/vr.cpp"
+      ],
+      "implemented_gates_and_runtime_paths": [
+        "canonical_main_inner_and_frustum_signature_bytes",
+        "full_frustum_match_count_expected_rva_and_executable_range_gate",
+        "exact_normal_screenshot_unknown_outer_return_classification",
+        "slot0_workspace_player_view_and_pre_push_depth_validation",
+        "opaque_epoch_bound_preflight_freshness_prepared_frame_and_direct_copy_tokens",
+        "worker_only_exact_backing_file_loaded_pe_camera_signature_body_hash_edge_and_fixed_range_preflight",
+        "exact_one_expected_rva_executable_fp_interpolation_and_palette_aobs",
+        "cold_present_buffer0_specialization0_record0_structural_device_context_and_exact_copy_shape_validation",
+        "monotonic_display_resource_revision_nonce_and_live_continuity_gate",
+        "resize_view_drift_title_exit_and_module_generation_invalidation",
+        "freshness_exact_serial_nonce_time_live_state_and_one_time_owner_consumption",
+        "monotonic_generation_non_reentrant_single_serial_outer_token_live_selection_and_keyed_cleanup",
+        "exact_inner_return_active_view_depth_top_callback_render_owner_and_specialization_validation",
+        "strict_one_second_freshness_advanced_only_by_valid_transactions",
+        "halo3_compatible_configurable_eye_pass_order",
+        "checked_first_pass_false_final_pass_original_last_window_policy",
+        "bounded_workspace_camera_state_and_matrix_rollback_layout_and_owner_coupled_cleanup_tokens",
+        "outer_main_render_view_inner_player_view_render_fp_interpolation_fp_palette_fp_camera_and_HREK_CHUD_detours",
+        "exact_prepared_serial_lock_free_head_pad_two_eye_corrected_right_aim_and_raw_left_pose_snapshot",
+        "stock_only_exact_spartan_elite_layout_learning_then_later_pair_activation",
+        "bounded_120_node_live_graph_rigid_marker_attachment_parenting_and_exact_body_only_articulation",
+        "pre_visibility_head_center_binocular_angular_union_camera_commit",
+        "coherent_head_center_pre_ownership_player_view_state",
+        "reach_native_motion_blur_exact_slot_resolution_positive_scale_max_only_zero_and_quiescent_restore",
+        "reach_patchy_fog_exact_gate_call_flag_and_per_eye_bit_only_finally_restore",
+        "two_eye_engine_camera_rebuild_copyresource_and_projection_fov_publication",
+        "callback_wrapper_and_minhook_relay_rip_quiescent_teardown"
+      ],
+      "withheld_or_headset_pending": [
+        "reach_native_hud_layout",
+        "reach_controller_projectile_reticle_and_two_arm_ik_exact_dll_headset_acceptance",
+        "reach_corrected_nested_first_person_camera_swap_exact_dll_headset_acceptance",
+        "exact_finite_distance_cull_coverage_for_translated_eye_origins",
+        "reach_exact_physical_world_scale_headset_result",
+        "reach_performance_cadence_headroom_followup",
+        "halo3_and_odst_regression_for_this_exact_shared_binary"
+      ],
+      "loaded_image_preflight_compiled": true,
+      "display_copy_readiness_compiled": true,
+      "runtime_result": "86864bd passed stereo, projection, 6DOF, stick/head coherence, and head-owned culling; 03f0bff proved finite max-only native blur suppression while the opposite-head layer persisted; b0710dc then passed exact per-eye patchy-fog suppression with the layer gone and the image good. Camera-only 6e12536 produced no visible FP change; a1dcb7 then made the forced-floating-hands palette path a little better while gun/both-hands projection and apparent travel remained wrong. Static retail/HREK review proved both used an impossible outer-workspace gate while visible FP rebuilds run in nested workspace 0xCFAC20; the corrected camera candidate is pending. Exact 1/3.048 physical scale and performance cadence also remain follow-ups; b0710dc's low cadence began before Reach loaded or stereo armed and is not a patchy-fog regression",
+      "title_hook_plan": "REACH_CAMERA_CORE",
+      "runtime_capabilities": [
+        "STEREO",
+        "CONTROLLER_AIM",
+        "ARM_IK",
+        "RUNTIME_MODES",
+        "ROOM_SCALE",
+        "CONTROLLER_INPUT",
+        "HAPTICS"
+      ],
+      "runtime_hooks_permitted": true,
+      "engine_memory_mutation_reachable": true,
+      "copyresource_reachable": true,
+      "stereo_action_reachable": true,
+      "headset_accepted": false,
+      "accepted_pointer_advanced": false
+    },
+    "remaining_runtime_proof": [
+      "close_peripheral_geometry_result_under_head_center_visibility_policy",
+      "exact_reach_world_scale_parity_and_no_scale_swim_under_room_motion",
+      "performance_cadence_at_supported_reduced_internal_resolution",
+      "atmospheric_depth_fog_remains_authored_and_world_stationary",
+      "pause_cinematic_split_screen_device_loss_and_title_transition_observation",
+      "exact_dll_headset_validation_then_halo3_and_odst_regression"
+    ],
+    "headset_acceptance_complete": false,
+    "accepted_release_eligible": false
+  },
+  "runtime_observer": {
+    "status": "OBSERVATIONS_REVIEWED_INCOMPLETE",
+    "executable": "reach-runtime-observer.exe",
+    "implementation": [
+      "tools/reach_runtime_observer.cpp",
+      "src/common/reach_observer_logic.h"
+    ],
+    "runbook": "docs/REACH-RUNTIME-OBSERVER.md",
+    "execution_model": "STANDALONE_EXTERNAL_READ_ONLY",
+    "required_launch": "STOCK_MCC_ANTI_CHEAT_DISABLED",
+    "requested_process_access": [
+      "PROCESS_QUERY_INFORMATION",
+      "PROCESS_VM_READ"
+    ],
+    "prohibited_operations": [
+      "process_memory_write",
+      "process_memory_protection_change",
+      "thread_or_dll_injection",
+      "debug_attach",
+      "thread_suspend",
+      "hook_or_detour_installation",
+      "mcc_file_write"
+    ],
+    "refuses_loaded_module": "halo3xr.dll",
+    "file_policy": {
+      "only_file_write": "exclusive_new_self_log",
+      "overwrites_existing_log": false,
+      "canonical_path_api": "GetFinalPathNameByHandleW",
+      "canonical_path_form": "FILE_NAME_NORMALIZED|VOLUME_NAME_GUID",
+      "resolves_output_parent_reparse_points": true,
+      "creates_log_relative_to_held_parent_handle": true,
+      "holds_output_parent_without_delete_share_through_create": true,
+      "handle_relative_create_api": "NtCreateFile",
+      "handle_relative_create_disposition": "FILE_CREATE",
+      "handle_relative_create_options": [
+        "FILE_NON_DIRECTORY_FILE",
+        "FILE_SYNCHRONOUS_IO_NONALERT",
+        "FILE_OPEN_REPARSE_POINT"
+      ],
+      "rejects_alternate_data_stream_leaf": true,
+      "refuses_executable_inside_derived_pinned_steam_mcc_install": true,
+      "refuses_output_inside_derived_pinned_steam_mcc_install": true,
+      "first_log_line_includes_observer_sha256": true,
+      "self_hash_uses_already_open_running_executable_handle": true,
+      "running_executable_handle_denies_write_share": true
+    },
+    "loaded_image_preflight": {
+      "backing_file_sha256": true,
+      "machine_timestamp_and_size_of_image": true,
+      "main_render_view_executable_aob_exactly_once_at_expected_rva": true,
+      "main_render_view_body_sha256": true,
+      "frustum_executable_prefix_bytes": 24,
+      "frustum_executable_prefix_exactly_once_at_expected_rva": true,
+      "canonical_frustum_aob_bytes": 25,
+      "canonical_frustum_terminal_byte_checked_by_source_5d34180": false,
+      "current_source_checks_canonical_frustum_aob": true,
+      "rel32_edge_count": 6,
+      "fixed_ranges_require_committed_readable_mem_image": true,
+      "mapping_and_contamination_rechecked": true,
+      "sole_title_rechecked_in_final_snapshot": true,
+      "rerun_after_each_observed_unload_reload": true,
+      "module_poll_interval_ms": 100,
+      "complete_same_base_reload_between_polls_can_be_missed": true
+    },
+    "sampling": {
+      "active_view_global_rva": "0x04E389A8",
+      "player_view_array_rva": "0x029F2B90",
+      "player_view_slot_count": 4,
+      "player_view_stride": "0x00000A40",
+      "rasterizer_workspace_rva": "0x00C9FAE0",
+      "rasterizer_workspace_size": "0x000002A8",
+      "primary_compact_camera_offset": "0x00000000",
+      "primary_compact_camera_size": "0x00000090",
+      "secondary_compact_camera_offset": "0x00000154",
+      "primary_compact_camera_validated": true,
+      "secondary_compact_camera_validated": true,
+      "both_cameras_required_for_usable_sample": true,
+      "primary_secondary_byte_equality_required": false,
+      "pointer_workspace_pointer_torn_read_guard": true,
+      "freshness_isolated_per_player_slot": true,
+      "unique_fresh_player_slot_required": true,
+      "multiple_fresh_slots_reset_all_windows": true,
+      "freshness_max_gap_ms_exclusive": 500,
+      "stable_span_ms_exclusive_minimum": 1000,
+      "stable_span_basis": "last_minus_first_usable_transaction",
+      "stable_minimum_transaction_count": 2,
+      "short_pulse_may_be_missed": true,
+      "missed_poll_is_inconclusive": true,
+      "nonzero_slot_required_for_runtime_stride_corroboration": true,
+      "slot_zero_only_stride_result": "INCONCLUSIVE"
+    },
+    "preflight_only_exit_nonzero": true,
+    "preflight_only_result": "INCONCLUSIVE",
+    "observed_runtime_results": [
+      {
+        "review_status": "ACCEPTED_LIMITED_RUNTIME_CORROBORATION",
+        "observed_local_date": "2026-07-23",
+        "observer_source_commit": "5d34180ca935e7e32d0b1b2beffb014d198c774f",
+        "observer_package": "out/diagnostics/5d34180-reach-runtime-observer-20260723-233050073Z",
+        "observer_executable_sha256": "AC43FA4F65256DF1CB46B9C0471DDA97E3120265AEDC876E0A3A73FC6A86CF6A",
+        "run_directory": "out/test-runs/5d34180-stock-reach-observer-20260724-025036448Z",
+        "log": {
+          "bytes": 18295,
+          "sha256": "3C36AF1F06FC428E914AB0C71330838587B020335EFBF2B017F8EF178768212D"
+        },
+        "duration_seconds": 480,
+        "reported_result": "OBSERVATIONS_RECORDED_UNASSESSED",
+        "totals": {
+          "preflight_passes": 2,
+          "unloads": 1,
+          "ambiguity_entries": 3,
+          "snapshot_failures": 0,
+          "observed_transactions": 29507,
+          "valid_cameras": 29496,
+          "invalid_cameras": 0,
+          "outside_array": 0,
+          "multi_owner": 0,
+          "stable_windows": 7
+        },
+        "generation_scope": "OBSERVER_ADMISSION_SESSION_NOT_DISTINCT_MODULE_MAPPING",
+        "generations": [
+          {
+            "generation": 1,
+            "module_base": "0x7FF9FAFB0000",
+            "terminal_reason": "ambiguous title residency",
+            "transactions": 11248,
+            "valid_cameras": 11238,
+            "invalid_cameras": 0,
+            "outside_array": 0,
+            "torn_snapshots": 10,
+            "multi_owner": 0,
+            "stable_windows": 5,
+            "longest_fresh_ms": 73500,
+            "slot_mask": "0x1"
+          },
+          {
+            "generation": 2,
+            "module_base": "0x7FF9FAFB0000",
+            "terminal_reason": "Reach unload/title exit",
+            "transactions": 18259,
+            "valid_cameras": 18258,
+            "invalid_cameras": 0,
+            "outside_array": 0,
+            "torn_snapshots": 1,
+            "multi_owner": 0,
+            "stable_windows": 2,
+            "longest_fresh_ms": 134875,
+            "slot_mask": "0x1"
+          }
+        ],
+        "observed_slots": [
+          0
+        ],
+        "runtime_stride_corroborated": false,
+        "observed_ambiguity_reset_and_readmission": true,
+        "observed_unload": true,
+        "observed_reappearance_after_unload_in_ambiguous_residency": true,
+        "observed_unload_then_unambiguous_preflight": false
+      }
+    ],
+    "loaded_image_proof_complete": false,
+    "loaded_image_proof_scope": "MAIN_EXACT_FRUSTUM_UNIQUE_24_BYTE_PREFIX_ONLY",
+    "continuous_freshness_proof_complete": true,
+    "continuous_freshness_proof_scope": "OBSERVED_SLOT0_SINGLE_OWNER_ONLY_IN_TWO_ADMISSION_SESSIONS",
+    "lifecycle_proof_complete": false,
+    "capture_target_static_identity_complete": true,
+    "capture_target_proof_complete": false,
+    "proof_complete": false,
+    "hook_eligible": false
+  },
+  "native_weapon_ik_bypass": {
+    "behavior": "bypass native flat-screen support-hand weapon IK so the shared controller solver owns both arms",
+    "retail": {
+      "control_name": "debug_animation_fp_weapon_ik_disable",
+      "control_type": 5,
+      "name_rva": "0x009F2AD8",
+      "descriptor_rva": "0x00B3AEB8",
+      "descriptor_value_pointer_published": false,
+      "value_rva": "0x04E38B61",
+      "decision_aob_rva": "0x002B506E",
+      "decision_aob": "41 0F B7 86 2C 53 00 00 66 85 C0 0F 8E 52 02 00 00 38 1D DC 3A B8 04 0F 85 46 02 00 00 48 8B 15 C6 88 99 00 0F BF C8",
+      "static_executable_match_count": 1,
+      "compare_rva": "0x002B507F",
+      "branch_rva": "0x002B5085",
+      "disabled_epilogue_rva": "0x002B52D1"
+    },
+    "hrek": {
+      "binary": "reach_tag_test.exe",
+      "control_name": "debug_animation_fp_weapon_ik_disable",
+      "control_type": 5,
+      "name_rva": "0x017E93B8",
+      "descriptor_rva": "0x0201AD98",
+      "descriptor_value_pointer_published": true,
+      "value_rva": "0x04F40A60",
+      "decision_aob_rva": "0x008D3152",
+      "decision_aob": "0F B7 86 2C 53 00 00 66 85 C0 0F 8E 29 02 00 00 80 3D F7 D8 66 04 00 0F 85 1C 02 00 00 0F BF C8",
+      "static_executable_match_count": 1,
+      "compare_rva": "0x008D3162",
+      "branch_rva": "0x008D3169",
+      "disabled_epilogue_rva": "0x008D338B"
+    },
+    "static_proof_complete": true,
+    "headset_accepted": false
+  },
+  "native_projectile_origin": {
+    "evidence_status": "HISTORICAL_REJECTED_DO_NOT_USE_FOR_NEW_RUNTIME_WORK",
+    "future_proof_source": "fresh official HREK/Reach mod-tools evidence only",
+    "behavior": "for only the local output-user-0 primary first-person weapon transaction, select the stock marker-derived weapon origin while preserving the stock projectile direction",
+    "retail": {
+      "projectile_fire": {
+        "function_rva": "0x004C2710",
+        "function_end_rva_exclusive": "0x004C4923",
+        "function_size": 8723,
+        "body_sha256": "F924A4C5D333268264654F22746417A7D0D006850150D73C0D5944694EA77F92",
+        "entry_aob": "48 89 5C 24 20 55 56 57 41 54 41 55 41 56 41 57 48 8D AC 24 C0 D9 FF FF B8 40 27 00 00 E8 ?? ?? ?? ?? 48 2B E0 0F 29 B4 24 30 27 00 00 0F 29 BC 24 20 27 00 00 44 0F 29 84 24 10 27 00 00 44 0F 29 8C 24 00 27 00 00",
+        "static_executable_match_count": 1,
+        "abi": "void __fastcall(int weapon_datum_index,int16 barrel_index,void* firing_context,bool simulation_or_prediction)",
+        "direct_rel32_caller_count": 1,
+        "direct_rel32_call_site_rva": "0x004B63BE",
+        "wrapper_rva": "0x004B6318",
+        "wrapper_end_rva_exclusive": "0x004B640A",
+        "wrapper_upstream_rel32_call_sites": [
+          "0x00435EB6",
+          "0x004B62FE"
+        ]
+      },
+      "origin_decision": {
+        "containing_block_rva": "0x004C30AC",
+        "containing_block_end_rva_exclusive": "0x004C30F4",
+        "containing_block_size": 72,
+        "containing_block_sha256": "A1353752177431FBE68800410302A23ABB5DBEC5B8384F105E6B0D87C5B84C66",
+        "containing_block_aob": "42 8B 04 A6 F3 41 0F 59 C8 C1 E8 02 F3 0F 58 D0 F3 0F 58 D1 F3 44 0F 5F F2 41 22 C5 75 0A 41 83 BE CC 01 00 00 FF 74 7A 84 C0 74 1C 48 8B 45 08 F2 0F 10 84 05 F0 09 00 00 8B 84 05 F8 09 00 00 F2 0F 11 45 E8 89 45 F0",
+        "static_executable_match_count": 1,
+        "decision_rva": "0x004C30C5",
+        "decision_size": 5,
+        "decision_bytes": "41 22 C5 75 0A",
+        "decision_sha256": "9EBF607CD187ED0E26B7FCE95DF3926F3533A2D1B3B25785027B00E34BE3FB67",
+        "stock_false_continuation_rva": "0x004C30CA",
+        "weapon_origin_continuation_rva": "0x004C30D4",
+        "marker_origin_copy_start_rva": "0x004C30D8",
+        "marker_origin_copy_end_rva_exclusive": "0x004C30F4",
+        "stock_semantics": "barrel flag bit 2 selects the already-computed marker origin at frame offset 0x9F0 instead of the stock camera-origin value",
+        "projectile_direction_unchanged": true
+      },
+      "output_user_weapon_slot": {
+        "function_rva": "0x002B1218",
+        "function_end_rva_exclusive": "0x002B1273",
+        "function_size": 91,
+        "body_sha256": "ADBB51CBA6CBD7628E7D7B94B4AD0B4DF6C431D2F89BE315657A434B8B478DA9",
+        "entry_aob": "41 83 CA FF 44 8B DA 41 3B CA 74 4B 65 48 8B 04 25 58 00 00 00 44 8B 05 ?? ?? ?? ?? BA A0 06 00 00 4E 8B 0C C0 48 63 C1 48 69 C8 A8 53 00 00 33 C0 49 03 0C 11 8B D0 48 83 C1 3C 44 39 19 74 14 FF C0 48 FF C2 48 81 C1 78 29 00 00 48 83 FA 02 7C E9 EB 03 44 8B D0 41 8B C2 C3",
+        "static_executable_match_count": 1,
+        "abi": "int __fastcall(int output_user_index,int weapon_datum_index)",
+        "first_person_consumer_function_rva": "0x00120FDC",
+        "first_person_consumer_function_end_rva_exclusive": "0x001210D3",
+        "first_person_consumer_rel32_call_site_rva": "0x0012101A",
+        "output_user_stride": "0x000053A8",
+        "slot_count": 2,
+        "slot_stride": "0x00002978",
+        "weapon_datum_offset": "0x0000003C",
+        "primary_slot_index": 0,
+        "not_found_result": -1
+      },
+      "first_person_marker_composer": {
+        "function_rva": "0x0011BFB0",
+        "function_end_rva_exclusive": "0x0011C00E",
+        "entry_aob": "48 89 5C 24 08 57 48 83 EC 60 48 8B DA 45 33 D2 0F B7 52 02 45 32 DB 83 C8 FF 49 8B F8 66 3B C2 74 26 39 41 3C 74 21 4C 8D 44 24 20 E8 ?? ?? ?? ?? 48 8D 53 0C 4C 8B C7 48 8D 4C 24 20 E8 ?? ?? ?? ??",
+        "static_executable_match_count": 1,
+        "abi": "BoneMatrix* __fastcall(void* first_person_weapon,const marker_record* marker,BoneMatrix* output,bool first_person)",
+        "marker_node_index_offset": "0x02",
+        "authored_marker_matrix_offset": "0x0C",
+        "marker_query_call_rva": "0x0011BFDC",
+        "marker_query_target_rva": "0x00120FDC",
+        "matrix_compose_call_rva": "0x0011BFED",
+        "matrix_compose_target_rva": "0x000A90D8",
+        "result_semantics": "final record-space marker matrix after interpolated first-person node plus authored local marker composition"
+      }
+    },
+    "hrek": {
+      "binary": "reach_tag_test.exe",
+      "projectile_fire_function_rva": "0x00DE4290",
+      "projectile_fire_function_end_rva_exclusive": "0x00DE8198",
+      "origin_consumer_start_rva": "0x00DE5289",
+      "origin_consumer_end_rva_exclusive": "0x00DE52CA",
+      "barrel_flag_definition_source": "official HREK weapon tag definition",
+      "projectiles_use_weapon_origin_name": "projectiles use weapon origin",
+      "projectiles_use_weapon_origin_bit": 2,
+      "projectiles_use_weapon_origin_mask": "0x00000004",
+      "projectile_fires_in_marker_direction_name": "projectile fires in marker direction",
+      "projectile_fires_in_marker_direction_bit": 15,
+      "projectile_fires_in_marker_direction_mask": "0x00008000",
+      "projectile_fires_in_marker_direction_excluded": true,
+      "first_person_weapon_validate_call_site_rva": "0x003723EA",
+      "first_person_weapon_validate_rva": "0x008D2670",
+      "first_person_weapon_slot_for_datum_rva": "0x008CEED0",
+      "official_assault_rifle_barrel_flags": "empty",
+      "official_assault_rifle_marker": "primary_trigger",
+      "official_assault_rifle_marker_centered_and_forward_axis": "+X",
+      "official_assault_rifle_primary_trigger": {
+        "weapon_xml": "out/hrek-evidence/assault_rifle.weapon.xml",
+        "render_model_xml": "out/hrek-evidence/assault_rifle.render_model.xml",
+        "marker_group_index": 10,
+        "node_index": 0,
+        "flags": "has node relative direction",
+        "translation": [0.233427, 0.0000000190735, 0.0512855],
+        "quaternion": [0.0, 0.0, 0.000000238419, 1.0],
+        "scale": 0.01,
+        "direction": [1.0, 0.0, 0.0]
+      },
+      "world_marker_builder_rva": "0x00D3B0E0",
+      "world_marker_builder_wrapper_rva": "0x00D47970",
+      "firing_frame_world_origin_offset": "0x1070",
+      "retail_homolog_firing_frame_world_origin_offset": "0x09F0"
+    },
+    "rejected_runtime_scope": {
+      "output_user_index": 0,
+      "required_slot_index": 0,
+      "incoming_full_weapon_datum_must_match": true,
+      "ai_remote_third_person_and_vehicle_weapons_excluded_by_exact_slot_match": true,
+      "shared_weapon_tag_mutation_forbidden": true,
+      "marker_direction_flag_mutation_forbidden": true,
+      "stock_player_aim_direction_preserved": true,
+      "composed_marker_generation_and_weapon_datum_must_match": true,
+      "composed_marker_world_translation_written_to_local_slot0_firing_frame": true,
+      "stock_marker_query_consumes_once_corrected_interpolation_source": true,
+      "duplicate_post_query_transform_removed": true,
+      "marker_query_nested_and_fallback_branches_are_exclusive": true,
+      "marker_query_fallback_requires_generation_and_local_slot0_datum": true,
+      "composer_requires_same_marker_query_corrected_serial": true,
+      "composer_uses_published_center_root_after_outer_scope": true,
+      "serial_gated_once_only_marker_query_write_explicitly_user_approved": true,
+      "centimeter_constants_removed": true,
+      "candidate_status": "FAILED_HEADSET_REVERTED_TO_STOCK"
+    },
+    "runtime_disposition": {
+      "projectile_origin": "stock",
+      "first_person_marker_query": "stock",
+      "first_person_marker_composer": "stock",
+      "firing_frame_write": false,
+      "projectile_origin_relay": false,
+      "fallback_or_approximation": false,
+      "packaging_gate_forbids_reintroduction": true
+    },
+    "candidate_results": [
+      {
+        "status": "FAILED_NO_PRIMARY_TRIGGER_PUBLICATION_DOES_NOT_ADVANCE_ACCEPTED_POINTER",
+        "source_commit": "2e1cbcba330dd9bc91c50db984680ae189905dca",
+        "package": "out/candidates/2e1cbcb-reach-fp-parity-20260725-170408078Z",
+        "dll_sha256": "6DC481CBCB7A2BF9CB4055C22D292C7D7539AC983D1EA52ED77F1BDC9B3F3C3F",
+        "user_observation": "projectile and muzzle flash remained unaligned",
+        "log_proved": [
+          "marker_composer_installed",
+          "marker_query_live_source_transform_executed"
+        ],
+        "log_did_not_prove": [
+          "primary_trigger_world_matrix_published",
+          "primary_trigger_world_origin_copied_to_firing_frame"
+        ],
+        "static_disposition": "post-query marker delta duplicated the interpolation transform and composer publication incorrectly required the expired outer pair scope",
+        "revert_commit": "984aa18"
+      },
+      {
+        "status": "REJECTED_PROJECTILE_MARKER_RUNTIME_LINEAGE_REVERTED_TO_STOCK",
+        "source_commit": "354327bb0d033e081fb95e46cb74010c36c2e083",
+        "package": "out/candidates/354327b-reach-fp-parity-20260725-172635238Z",
+        "package_manifest_status": "UNTESTED_LOCAL_CANDIDATE",
+        "dll_sha256": "9131E8337D26204ADE9E3B71AB08354BE975073D28C2614B093259201C4CEFAB",
+        "headset_result_attribution": "runtime lineage rejected; this exact installed DLL hash was not separately confirmed for the current observation"
+      },
+      {
+        "status": "FAILED_CURRENT_HEADSET_OBSERVATION_DOES_NOT_ADVANCE_ACCEPTED_POINTER",
+        "source_commit": "f9f4fecee70bccb2d91c77319c438c237d13fb85",
+        "package": "out/candidates/f9f4fec-reach-fp-parity-20260726-144300646Z",
+        "package_manifest_status": "UNTESTED_LOCAL_CANDIDATE",
+        "dll_sha256": "9BC56CC275F374542752941506BE141FA78C22E06417B632F8AC6DF21D3745A8",
+        "user_observation": "projectile origin was too far right and rearward instead of centered in front of the visible barrel",
+        "installed_hash_separately_confirmed": false,
+        "runtime_disposition": "projectile-origin relay, marker-query/composer detours, firing-frame write, and fallback removed; stock behavior restored"
+      }
+    ],
+    "historical_static_proof_recorded": true,
+    "fresh_mod_tools_proof_complete": false,
+    "headset_accepted": false,
+    "accepted_pointer_advanced": false
+  },
+  "preliminary_candidates": [
+    {
+      "id": "viewport",
+      "description": "camera-derived frustum-bounds helper (original viewport hypothesis)",
+      "rva": "0x00287F58",
+      "function_end_rva_exclusive": "0x002881CC",
+      "function_size": 628,
+      "instruction_count": 154,
+      "aob": "40 53 48 83 EC 30 44 0F BF 49 62 4C 8B D9 4C 8B 41 38 48 8B DA 0F BF 51 50",
+      "static_image_match_count": 1,
+      "static_image_mapping": "PAGE_READONLY | SEC_IMAGE_NO_EXECUTE",
+      "executable_section": ".text",
+      "base_relocations_in_function": 0,
+      "direct_callers": [
+        "0x001D2F4C",
+        "0x001D3594",
+        "0x001D3C4D",
+        "0x0025B47C",
+        "0x0025D41A",
+        "0x0026C2FF",
+        "0x0026FB1B",
+        "0x00286DD8",
+        "0x0028DB6D"
+      ],
+      "next_call_target_rva": "0x002884BC",
+      "hrek_homolog": {
+        "binary": "reach_tag_test.exe",
+        "function_rva": "0x00823930",
+        "function_end_rva_exclusive": "0x00823D16",
+        "source": "render/render_cameras.cpp",
+        "parameter_assertion_lines": [
+          443,
+          444
+        ],
+        "render_bounds_assertion_lines": [
+          451,
+          452
+        ]
+      },
+      "remaining_proof": [
+        "live_result_from_production_loaded_image_preflight",
+        "production_exact_normal_return_and_stock_only_alternate_unknown_routing",
+        "production_runtime_enforces_camera_freshness_and_one_second_safety_interval",
+        "production_outer_owner_token_inner_serial_reuse_and_transitive_side_effect_safety",
+        "inside_scope_eye_rebuild_openxr_mapping_and_byte_exact_rollback",
+        "live_cold_buffer0_identity_inner_specialization0_continuity_and_copyresource_success",
+        "pause_cinematic_split_screen_and_transition_observation",
+        "device_loss_title_unload_and_callback_quiescence",
+        "runtime_finite_range_index_and_count_guards",
+        "exact_dll_headset_validation_and_halo3_regression"
+      ],
+      "proof_complete": false
+    },
+    {
+      "id": "first_person_camera_upload",
+      "description": "production Reach first-person camera rebuild and two-pointer constant-upload transaction",
+      "rva": "0x00282D60",
+      "rebuild": {
+        "function_rva": "0x00286C6C",
+        "function_end_rva_exclusive": "0x00286EBC",
+        "function_size": 592,
+        "entry_aob": "48 89 5C 24 08 48 89 74 24 10 57 48 83 EC 40 4C 8B 41 08 48 8D 05 ?? ?? ?? ?? 48 8B D9 0F 29 74 24 30",
+        "static_executable_match_count": 1,
+        "body_sha256": "125656AF65F61F02BA482830D307EBFDD00BBE2DF7264F155613B3FF8FAEFE58",
+        "abi": "void __fastcall(void* first_person_view,bool first_person_enabled)",
+        "compact_source_offset": "0x0008",
+        "compact_size": 144,
+        "outer_default_workspace_rva": "0x00C9FAE0",
+        "nested_workspace_rva": "0x00CFAC20",
+        "nested_compact_offset": "0x0000",
+        "nested_secondary_derived_offset": "0x01E4",
+        "nested_secondary_derived_rva": "0x00CFAE04",
+        "derived_size": 196,
+        "nested_callback_offset": "0x02A8",
+        "nested_callback_rva": "0x0000C380",
+        "first_person_view_rva": "0x00BB8F68",
+        "frustum_call_rva": "0x00286DD8",
+        "projection_call_rva": "0x00286DEF",
+        "current_top_reload_rva_ranges": [
+          "0x00286DAA-0x00286DC5",
+          "0x00286E20-0x00286E48"
+        ],
+        "current_top_derived_select_rva": "0x00286DCA",
+        "uploader_compact_lea_rva": "0x00286E4F",
+        "uploader_tail_jump_rva": "0x00286E6A"
+      },
+      "visible_wrapper_transactions": [
+        {
+          "function_rva": "0x0026DA08",
+          "function_end_rva_exclusive": "0x0026DBFA",
+          "function_size": 498,
+          "body_sha256": "03BCCB8401EBC487394F49C96DDB5B20309F3E1BB9D16F96DD5860D2155EA175",
+          "outer_workspace_lea_rva": "0x0026DAB0",
+          "outer_workspace_rva": "0x00C9FAE0",
+          "nested_workspace_lea_rva": "0x0026DACB",
+          "nested_workspace_rva": "0x00CFAC20",
+          "callback_lea_rva": "0x0026DB78",
+          "callback_rva": "0x0000C380",
+          "push_call_rva": "0x0026DB82",
+          "push_target_rva": "0x00251C08",
+          "view_lea_rvas": ["0x0026DB87"],
+          "first_person_view_rva": "0x00BB8F68",
+          "rebuild_call_rvas": ["0x0026DB93", "0x0026DBAE", "0x0026DBCC"],
+          "rebuild_target_rva": "0x00286C6C",
+          "pop_call_rva": "0x0026DBDB",
+          "pop_target_rva": "0x00251C50"
+        },
+        {
+          "function_rva": "0x0026E2A0",
+          "function_end_rva_exclusive": "0x0026E4FD",
+          "function_size": 605,
+          "body_sha256": "C36932D4D9D1357AD3D50F750A62C51DAE4530F350A7FA4E96AA04DC284171C2",
+          "outer_workspace_lea_rva": "0x0026E38C",
+          "outer_workspace_rva": "0x00C9FAE0",
+          "nested_workspace_lea_rva": "0x0026E393",
+          "nested_workspace_rva": "0x00CFAC20",
+          "callback_lea_rva": "0x0026E3B2",
+          "callback_rva": "0x0000C380",
+          "push_call_rva": "0x0026E459",
+          "push_target_rva": "0x00251C08",
+          "view_lea_rvas": ["0x0026E461", "0x0026E4B0"],
+          "first_person_view_rva": "0x00BB8F68",
+          "rebuild_call_rvas": ["0x0026E468", "0x0026E4B7"],
+          "rebuild_target_rva": "0x00286C6C",
+          "pop_call_rva": "0x0026E4DD",
+          "pop_target_rva": "0x00251C50"
+        },
+        {
+          "function_rva": "0x0026EA78",
+          "function_end_rva_exclusive": "0x0026ED8C",
+          "function_size": 788,
+          "body_sha256": "2B3033F4D4FB62E0AD709F38688D7A4613B2AFDE5CC67432254B51FB4F35A649",
+          "outer_workspace_lea_rva": "0x0026EB4C",
+          "outer_workspace_rva": "0x00C9FAE0",
+          "nested_workspace_lea_rva": "0x0026EB59",
+          "nested_workspace_rva": "0x00CFAC20",
+          "callback_lea_rva": "0x0026EB78",
+          "callback_rva": "0x0000C380",
+          "push_call_rva": "0x0026EC22",
+          "push_target_rva": "0x00251C08",
+          "view_lea_rvas": ["0x0026EC34", "0x0026EC77"],
+          "first_person_view_rva": "0x00BB8F68",
+          "rebuild_call_rvas": ["0x0026EC3B", "0x0026EC7E"],
+          "rebuild_target_rva": "0x00286C6C",
+          "pop_call_rva": "0x0026ED67",
+          "pop_target_rva": "0x00251C50",
+          "role": "documented_final_visible_first_person_wrapper"
+        }
+      ],
+      "uploader": {
+        "function_rva": "0x00282D60",
+        "function_end_rva_exclusive": "0x00282ED9",
+        "function_size": 377,
+        "entry_aob": "48 8B C4 48 89 58 08 55 48 8D 68 A1 48 81 EC C0 00 00 00 0F 29 70 E8 4C 8D 45 F7 0F 29 78 D8 48 8B D9 48 8B C2",
+        "static_executable_match_count": 1,
+        "body_sha256": "F9A6578992870A9F5BF8C733944A83A5A834CC95490D8D0CC7573021F452FD31",
+        "abi": "void __fastcall(const void* compact_camera,const void* derived_projection)"
+      },
+      "hrek_homolog": {
+        "binary": "reach_tag_test.exe",
+        "nested_workspace_getter": {
+          "function_rva": "0x0087C4A0",
+          "body_bytes": "48 8D 05 79 DB 5B 04 C3",
+          "nested_workspace_rva": "0x04E3A020"
+        },
+        "visible_wrapper_transactions": [
+          {
+            "function_rva": "0x00834490",
+            "function_end_rva_exclusive": "0x00835598",
+            "source_name": "player_view_render",
+            "workspace_getter_call_rva": "0x00834A19",
+            "callback_select_rva": "0x00834A21",
+            "callback_rva": "0x0087C780",
+            "push_call_rva": "0x00834A28",
+            "push_target_rva": "0x007E6E60",
+            "view_lea_rva": "0x00834A2F",
+            "first_person_view_rva": "0x04E3A2D0",
+            "rebuild_call_rva": "0x00834A36",
+            "rebuild_target_rva": "0x0087C4B0",
+            "pop_call_rva": "0x00834A72",
+            "pop_target_rva": "0x007E6F50"
+          },
+          {
+            "function_rva": "0x00836080",
+            "function_end_rva_exclusive": "0x008362E2",
+            "body_sha256": "D3201E005EFD274D545C97EC1CC5D1B4B917197E1B330A50ADD5047A1212CEDF",
+            "workspace_getter_call_rva": "0x00836260",
+            "push_call_rva": "0x0083626F",
+            "rebuild_call_rva": "0x0083627D",
+            "pop_call_rva": "0x008362B9"
+          },
+          {
+            "function_rva": "0x008362F0",
+            "function_end_rva_exclusive": "0x008365E7",
+            "body_sha256": "07BC186ABA13DC1563BFF096342CE9DEB571F025D443058363EC5C15AEEF48DF",
+            "workspace_getter_call_rva": "0x008364CE",
+            "push_call_rva": "0x008364DD",
+            "rebuild_call_rva": "0x008364F5",
+            "pop_call_rva": "0x008365B4"
+          }
+        ],
+        "rebuild": {
+          "function_rva": "0x0087C4B0",
+          "function_end_rva_exclusive": "0x0087C6FB",
+          "function_size": 587,
+          "entry_aob": "48 89 5C 24 08 57 48 83 EC 50 0F 29 74 24 40 48 8B 05 ?? ?? ?? ?? 48 33 C4 48 89 44 24 30 48 8B 41 08",
+          "static_executable_match_count": 1,
+          "body_sha256": "84A1A55BBDBF98E6496CC47E9F644602B81617AB7283F94C37A88122B628A4B0",
+          "current_top_accessor_rva": "0x007E7110",
+          "current_top_accessor_call_rvas": ["0x0087C639", "0x0087C679"],
+          "current_top_derived_use_rvas": ["0x0087C655", "0x0087C685"],
+          "derived_offset": "0x01E4",
+          "uploader_call_rva": "0x0087C68C"
+        },
+        "uploader": {
+          "function_rva": "0x008561A0",
+          "function_end_rva_exclusive": "0x008564FD",
+          "function_size": 861,
+          "entry_aob": "48 8B C4 48 89 58 08 48 89 70 10 48 89 78 18 55 41 54 41 55 41 56 41 57 48 8D 68 A1 48 81 EC D0 00 00 00 0F 29 70 C8 0F 29 78 B8",
+          "static_executable_match_count": 1,
+          "body_sha256": "78D0DA6E00ED0E6564AE9FAA78A818EE50243DA2968F7ED55977803B2ABE8AF2"
+        }
+      },
+      "fov_control": {
+        "name": "render_first_person_fov_scale",
+        "type": 6,
+        "retail_name_rva": "0x009EB9F0",
+        "retail_descriptor_rva": "0x00B408E8",
+        "retail_value_rva": "0x00B445F4",
+        "hrek_name_rva": "0x017E2250",
+        "hrek_descriptor_rva": "0x02015350",
+        "hrek_value_rva": "0x0205A0C8",
+        "tag_export_result": "no first-person FOV field exists in the exported weapon, globals, or rasterizer_globals tag definitions"
+      },
+      "candidate_results": [
+        {
+          "status": "FAILED_NO_VISIBLE_CAMERA_CHANGE_DOES_NOT_ADVANCE_ACCEPTED_POINTER",
+          "source_commit": "6e12536ce401772876d55de0821780546af04131",
+          "package": "out/candidates/6e12536-reach-fp-parity-20260725-083057894Z",
+          "dll_sha256": "D5B8479952C5016ED2A636E9D2EFB468DED41C9D1BB44FEDE2BA1779FE0062D2",
+          "launcher_sha256": "A5992094647047E9B3F3E8F218DD606C7635C80151BFE854497EB8363535AA92",
+          "user_observation": "camera-only candidate produced no visible first-person change",
+          "static_disposition": "directly_corroborates_that_the_outer_default_workspace_top_gate_prevented_the_visible_nested_first_person_camera_swap"
+        },
+        {
+          "status": "PARTIAL_FAILED_DOES_NOT_ADVANCE_ACCEPTED_POINTER",
+          "source_commit": "a1dcb7beeb0bec56b3b7c04a6f15a897eaa63fa4",
+          "package": "out/candidates/a1dcb7b-reach-fp-parity-20260725-085113864Z",
+          "dll_sha256": "68793B3052EE2AE60F197526A7A215913FA7EEEFC3BB4177A613EE4AAFFF70A0",
+          "launcher_sha256": "F9C3778B5AD993E26039BA731698A3E2BCD10159F00F6C31C15C5E450DE516FB",
+          "installed_hash_separately_verified": true,
+          "user_observation": "hands were a little better, but gun and both-hands FOV, projection, apparent location, and tracking-distance coverage were incorrect",
+          "log_proved": [
+            "first_person_camera_hook_installed",
+            "reach_camera_core_armed",
+            "private_palette_path_executed_with_reach_fp_forced_floating_hands_active"
+          ],
+          "log_did_not_prove": "post_original_world_camera_substitution_executed",
+          "static_disposition": "outer_default_workspace_top_gate_was_impossible_during_visible_nested_first_person_rebuild_and_outer_plus_0x1E4_was_not_the_live_derived_destination",
+          "correct_destination": "nested_workspace_0x00CFAC20_compact_plus_0_and_derived_plus_0x1E4_0x00CFAE04"
+        }
+      ],
+      "accepted_pointer": "a5524d3fe58e4ed5507c27429ccca52a3d4fdf7d",
+      "corrected_candidate_status": "NESTED_WORKSPACE_FIX_PENDING_HEADSET_VALIDATION",
+      "proof_complete": true,
+      "headset_accepted": false
+    },
+    {
+      "id": "fp_interpolation",
+      "description": "production first-person interpolation source and marker boundary",
+      "rva": "0x000CF1A4",
+      "aob": "48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 57 41 54 41 55 41 56 41 57 48 83 EC 20 33 DB 49 63 F8 38 1D ?? ?? ?? ?? 4D 8B E1 8B EA 4C 63 D9",
+      "static_image_match_count": 1,
+      "abi": "bool __fastcall(int outputUserIndex,int animationIdentity,int fpWeaponSlot,BoneMatrix** outBones,int* outCount)",
+      "direct_rel32_caller_count": 5,
+      "direct_callers": [
+        { "callsite_rva": "0x00121083", "return_rva": "0x00121088", "role": "on_demand_marker_or_attachment_transform" },
+        { "callsite_rva": "0x002AF85A", "return_rva": "0x002AF85F", "role": "fp_builder_palette_source_a" },
+        { "callsite_rva": "0x002AF8F6", "return_rva": "0x002AF8FB", "role": "fp_builder_palette_source_b" },
+        { "callsite_rva": "0x002AFEB4", "return_rva": "0x002AFEB9", "role": "fp_graph_consumer" },
+        { "callsite_rva": "0x002B0ADB", "return_rva": "0x002B0AE0", "role": "fp_graph_consumer" }
+      ],
+      "source_node_bound": 120,
+      "proof_complete": true,
+      "headset_accepted": false
+    },
+    {
+      "id": "visible_palette",
+      "description": "production exact first-person body palette boundary",
+      "rva": "0x002B4EB0",
+      "aob": "48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 57 41 56 41 57 48 83 EC 20 48 8B 05 ?? ?? ?? ?? 49 8B F0 0F B7 C9 4C 8B F2",
+      "static_image_match_count": 1,
+      "spartan_body_outputs": 47,
+      "elite_body_outputs": 41,
+      "spartan_output_to_source_bone_map": [0, 3, 1, 2, 5, 4, 6, 9, 10, 8, 7, 13, 12, 14, 11, 22, 26, 18, 21, 24, 19, 20, 15, 23, 16, 17, 25, 36, 35, 32, 28, 33, 29, 27, 34, 31, 30, 46, 38, 42, 37, 40, 39, 43, 45, 44, 41],
+      "elite_output_to_source_bone_map": [0, 1, 2, 3, 5, 4, 6, 7, 8, 9, 10, 14, 12, 11, 13, 22, 20, 18, 21, 19, 16, 23, 24, 17, 15, 27, 28, 25, 31, 32, 30, 26, 29, 35, 34, 39, 33, 40, 36, 38, 37],
+      "proof_complete": true,
+      "headset_accepted": false
+    },
+    {
+      "id": "special_bone_composer",
+      "description": "headset-disproven non-visible-FP special-bone composer",
+      "rva": "0x00213224",
+      "proof_complete": false,
+      "disposition": "REJECTED_FOR_VISIBLE_FIRST_PERSON_IK"
+    }
+  ]
+}

@@ -33,6 +33,29 @@ MenuPointerHit IntersectMenuQuad(const float origin[3], const float direction[3]
 
 float BlendXInputMotors(uint16_t lowFrequencyMotor, uint16_t highFrequencyMotor);
 
+// Peak-hold haptic sampling. Halo drives controller rumble as short XInput
+// SetState pulses, but the VR frame loop samples the requested amplitude far
+// less often than those pulses arrive. A plain last-value latch therefore
+// aliases a brief gunfire pulse (SetState(high) then SetState(0) within one
+// frame) to zero and drops it, so shooting stops rumbling reliably. Peak-hold
+// keeps the maximum amplitude requested since the last applied frame: `peak` is
+// that running maximum and `latest` the most recent instantaneous value.
+// `apply` = max(peak, latest) and `carry` = latest, so a one-shot pulse fires
+// exactly once and a sustained rumble persists. All values are clamped to [0,1].
+struct HapticPeakSample
+{
+    float apply = 0.0f;
+    float carry = 0.0f;
+};
+
+HapticPeakSample SampleHapticPeak(float peak, float latest);
+
+// The mod owns virtual slot 0 when no physical pad is present. A valid
+// XInputSetState request must therefore observe a connected controller even
+// when title capability policy suppresses the actual haptic effect.
+uint32_t NormalizeVirtualXInputSetStateResult(
+    uint32_t originalResult, uint32_t userIndex, bool hasVibrationRequest);
+
 // Menu/Start is always passed through as controller input, but only a proven
 // Halo 3 gameplay owner may use its edge to change VR pause presentation.
 bool PausePresentationInputAllowed(bool sharedGameplayOwner);

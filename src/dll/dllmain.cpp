@@ -15,6 +15,14 @@
 #define HALOMCCVR_BUILD_ODST "unknown"
 #endif
 
+#ifndef HALOMCCVR_BUILD_REACH
+#define HALOMCCVR_BUILD_REACH "unknown"
+#endif
+
+#ifndef HALOMCCVR_BUILD_REACH_RENDER
+#define HALOMCCVR_BUILD_REACH_RENDER "unknown"
+#endif
+
 // Entry point of the injected DLL. DllMain itself must do almost nothing
 // (Windows holds a global "loader lock" while it runs), so we immediately
 // spawn a thread that does the real setup.
@@ -31,9 +39,11 @@ static DWORD WINAPI InitThread(LPVOID)
     LogInit((dir + L"halo3xr.log").c_str());
     // Commit + compile option identify source/configuration. The timestamp is
     // context only; verify the installed DLL's SHA-256 separately.
-    LOG("HaloMCCVR loaded into pid %lu (source %s, ODST %s, compiled "
+    LOG("HaloMCCVR loaded into pid %lu (source %s, ODST %s, Reach %s, "
+        "ReachRender %s, compiled "
         __DATE__ " " __TIME__ ")", GetCurrentProcessId(),
-        HALOMCCVR_BUILD_COMMIT, HALOMCCVR_BUILD_ODST);
+        HALOMCCVR_BUILD_COMMIT, HALOMCCVR_BUILD_ODST,
+        HALOMCCVR_BUILD_REACH, HALOMCCVR_BUILD_REACH_RENDER);
     const std::wstring primaryConfig = dir + L"halomccvr.cfg";
     const std::wstring legacyConfig = dir + L"halo3xr.cfg";
     ConfigLoadMigrating(primaryConfig.c_str(), legacyConfig.c_str());

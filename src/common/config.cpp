@@ -58,6 +58,11 @@ static void Clamp()
     // to the six installer tiers, so any custom value was silently rounded.)
     g_config.resolution_scale = std::clamp(g_config.resolution_scale,
                                            kResolutionScaleMin, kResolutionScaleMax);
+    g_config.draw_distance = std::clamp(g_config.draw_distance,
+                                        kDrawDistanceMin, kDrawDistanceMax);
+    g_config.upscale_filter = std::clamp(g_config.upscale_filter, 0, 1);
+    g_config.sharpness = std::clamp(g_config.sharpness, 0.0f, 1.0f);
+    g_config.aa_mode = std::clamp(g_config.aa_mode, 0, 4);
     g_config.hud_size = std::clamp(g_config.hud_size, 0.30f, 1.00f);
     g_config.hud_aspect = std::clamp(g_config.hud_aspect, kHudAspectMin, kHudAspectMax);
     g_config.hud_curvature = std::clamp(g_config.hud_curvature,
@@ -73,6 +78,7 @@ static void Clamp()
     g_config.gun_yaw_deg = std::clamp(g_config.gun_yaw_deg, -180.0f, 180.0f);
     g_config.gun_roll_deg = std::clamp(g_config.gun_roll_deg, -180.0f, 180.0f);
     g_config.gun_forward_m = std::clamp(g_config.gun_forward_m, -0.3f, 0.5f);
+    g_config.muzzle_height_m = std::clamp(g_config.muzzle_height_m, -0.3f, 0.3f);
     g_config.scope_zoom = std::clamp(g_config.scope_zoom, 6.0f, 24.0f);
     g_config.scope_screen_width_m = std::clamp(g_config.scope_screen_width_m, 0.04f, 0.25f);
     g_config.scope_screen_right_m = std::clamp(g_config.scope_screen_right_m, -0.30f, 0.30f);
@@ -170,6 +176,8 @@ void ConfigLoad(const wchar_t* path)
             continue; // retired: the composed-wrist snap was reverted (hand spin); accept old cfgs quietly
         else if (!strcmp(key, "hud_probe"))
             g_config.hud_probe = atoi(val) != 0;
+        else if (!strcmp(key, "fsr_probe"))
+            g_config.fsr_probe = atoi(val) != 0;
         else if (!strcmp(key, "bullet_probe"))
             g_config.bullet_probe = atoi(val) != 0;
         else if (!strcmp(key, "weapon_probe"))
@@ -182,6 +190,8 @@ void ConfigLoad(const wchar_t* path)
             g_config.gun_roll_deg = (float)atof(val);
         else if (!strcmp(key, "gun_forward_m"))
             g_config.gun_forward_m = (float)atof(val);
+        else if (!strcmp(key, "muzzle_height_m"))
+            g_config.muzzle_height_m = (float)atof(val);
         else if (!strcmp(key, "scope_enabled"))
             g_config.scope_enabled = atoi(val) != 0;
         else if (!strcmp(key, "scope_zoom"))
@@ -216,6 +226,18 @@ void ConfigLoad(const wchar_t* path)
             g_config.game_brightness = (float)atof(val);
         else if (!strcmp(key, "resolution_scale"))
             g_config.resolution_scale = (float)atof(val);
+        else if (!strcmp(key, "fit_desktop_window"))
+            g_config.fit_desktop_window = atoi(val) != 0;
+        else if (!strcmp(key, "desktop_present_unlocked"))
+            g_config.desktop_present_unlocked = atoi(val) != 0;
+        else if (!strcmp(key, "draw_distance"))
+            g_config.draw_distance = (float)atof(val);
+        else if (!strcmp(key, "upscale_filter"))
+            g_config.upscale_filter = atoi(val);
+        else if (!strcmp(key, "sharpness"))
+            ParseFloatSetting(key, val, g_config.sharpness);
+        else if (!strcmp(key, "aa_mode"))
+            g_config.aa_mode = atoi(val);
         else if (!strcmp(key, "hud_size"))
             g_config.hud_size = (float)atof(val);
         else if (!strcmp(key, "hud_aspect"))
@@ -381,6 +403,8 @@ void ConfigSave()
     fprintf(f, "turn_smooth_deg_s = %.0f\n\n", g_config.turn_smooth_deg_s);
     fprintf(f, "# Hold this controller next to your head to use the left stick as D-pad:\n");
     fprintf(f, "# 0 = left controller, 1 = right controller.\n");
+    fprintf(f, "# While held, clicking the left stick presses the controller's\n");
+    fprintf(f, "# left centre button (Back/View) - ODST's map/objectives screen.\n");
     fprintf(f, "# (default %d)\n", d.dpad_hand);
     fprintf(f, "dpad_hand = %d\n\n", g_config.dpad_hand);
     fprintf(f, "# -------------------------------------------------------------------\n");
@@ -434,6 +458,12 @@ void ConfigSave()
     fprintf(f, "# Negative seats the gun back into your fist.\n");
     fprintf(f, "# (default %.2f, range -0.3 to 0.5)\n", d.gun_forward_m);
     fprintf(f, "gun_forward_m = %.2f\n\n", g_config.gun_forward_m);
+    fprintf(f, "# Raise the muzzle flash / bullet spawn point along the gun's\n");
+    fprintf(f, "# own up axis, in meters. Reach only. Does NOT change where\n");
+    fprintf(f, "# rounds land - only where they appear to come from.\n");
+    fprintf(f, "# (default %.2f, range -0.3 to 0.3; ~0.11 is about 4 inches)\n",
+            d.muzzle_height_m);
+    fprintf(f, "muzzle_height_m = %.2f\n\n", g_config.muzzle_height_m);
     fprintf(f, "# -------------------------------------------------------------------\n");
     fprintf(f, "#  EXPERIMENTAL SCOPE\n");
     fprintf(f, "#  Universal physical placement and performance preferences.\n");
@@ -468,42 +498,103 @@ void ConfigSave()
     fprintf(f, "# How sharp the game renders inside the headset. ANY value in range\n");
     fprintf(f, "# works, so pick your own: 0.90 really means 90%%, not \"rounded to 80\".\n");
     fprintf(f, "# The named tiers are only shortcuts in the F1 menu:\n");
-    fprintf(f, "#   0.50 potato   0.67 low     0.80 medium\n");
-    fprintf(f, "#   1.00 high     1.10 ultra   1.50 keith david\n");
-    fprintf(f, "# %d x %d is 1.00; your value scales both numbers together.\n",
+    fprintf(f, "#   0.50 potato   0.75 low     1.00 medium\n");
+    fprintf(f, "#   1.30 high     1.80 ultra   2.64 keith david (8K-class)\n");
+    fprintf(f, "# %d x %d is 1.00; your value scales both numbers together, so the\n",
             kNativeRenderWidth, kNativeRenderHeight);
+    fprintf(f, "# picture keeps its shape at every setting.\n");
     fprintf(f, "#\n");
-    fprintf(f, "# YES, YOU CAN GO OVER 100%%. Above 1.00 is supersampling: the game\n");
+    fprintf(f, "# YES, YOU CAN GO WAY OVER 100%%. Above 1.00 is supersampling: the game\n");
     fprintf(f, "# renders bigger than the headset needs and the extra detail is\n");
-    fprintf(f, "# squeezed down, which is the cleanest image available. The ceiling\n");
-    fprintf(f, "# is %.2f (%d x %d), well past keith david, and it needs a top-end\n",
+    fprintf(f, "# squeezed down, which is the cleanest image available. Keith David\n");
+    fprintf(f, "# (2.64) is true 8K width. The ceiling is %.2f (%d x %d), and the top\n",
             kResolutionScaleMax,
             (int)(kNativeRenderWidth * kResolutionScaleMax),
             (int)(kNativeRenderHeight * kResolutionScaleMax));
-    fprintf(f, "# card. A bigger number is pulled back to %.2f instead of accepted,\n",
+    fprintf(f, "# end needs a monster GPU. A bigger number is pulled back to %.2f\n",
             kResolutionScaleMax);
-    fprintf(f, "# so a typo (20 instead of 2.0) cannot leave you unable to start.\n");
+    fprintf(f, "# instead of accepted, so a typo (20 instead of 2.0) cannot leave you\n");
+    fprintf(f, "# unable to start.\n");
+    fprintf(f, "#\n");
+    fprintf(f, "# WARNING: anything above about %.2f (~5K wide) is very heavy and can\n",
+            kResolutionScaleHeavy);
+    fprintf(f, "# crash weaker GPUs or refuse to start. Try it in short sessions, and\n");
+    fprintf(f, "# drop back down if the game won't launch.\n");
     fprintf(f, "#\n");
     fprintf(f, "# CLOSE MCC COMPLETELY and relaunch after changing this one.\n");
     fprintf(f, "# The headset projection stays full-size; the complete eye is upscaled.\n");
     fprintf(f, "# (default %.2f, range %.2f to %.2f)\n",
             d.resolution_scale, kResolutionScaleMin, kResolutionScaleMax);
     fprintf(f, "resolution_scale = %.2f\n\n", g_config.resolution_scale);
+    fprintf(f, "# Fit the desktop window to your monitor while the headset keeps the\n");
+    fprintf(f, "# full resolution_scale render above. Turn this on when your render is\n");
+    fprintf(f, "# larger than your monitor and MCC's menu (the \"Halo 3\" tile, Quit)\n");
+    fprintf(f, "# falls off the screen edge where you can't click it. MCC still draws\n");
+    fprintf(f, "# the full frame -- the headset picture and gun alignment do NOT change --\n");
+    fprintf(f, "# the window is just shrunk to fit and the GPU downscales into it (no\n");
+    fprintf(f, "# extra render pass, no measurable cost). 0 = off (default; the window\n");
+    fprintf(f, "# behaves exactly as before). CLOSE MCC COMPLETELY and relaunch after\n");
+    fprintf(f, "# changing this, the same as resolution_scale.\n");
+    fprintf(f, "# (default %d)\n", d.fit_desktop_window ? 1 : 0);
+    fprintf(f, "fit_desktop_window = %d\n\n", g_config.fit_desktop_window ? 1 : 0);
+    fprintf(f, "# Let the HEADSET set the frame rate, not your monitor. The VR frame\n");
+    fprintf(f, "# is submitted inside MCC's desktop present, so MCC's V-Sync would\n");
+    fprintf(f, "# pace your headset at your DESKTOP's refresh -- a 60 Hz desktop\n");
+    fprintf(f, "# capping a 120 Hz headset. With this on, the desktop mirror presents\n");
+    fprintf(f, "# unlocked and the VR runtime's own refresh (72, 90, 120, 144 Hz --\n");
+    fprintf(f, "# whatever your headset reports) is the only clock. The desktop window\n");
+    fprintf(f, "# may tear; the headset never does. 1 = on, 0 = stock passthrough.\n");
+    fprintf(f, "# (default %d)\n", d.desktop_present_unlocked ? 1 : 0);
+    fprintf(f, "desktop_present_unlocked = %d\n\n",
+            g_config.desktop_present_unlocked ? 1 : 0);
+    fprintf(f, "# Draw distance: how far the game renders the whole scene, as a\n");
+    fprintf(f, "# fraction of stock. Applies live to all three games (Halo 3, ODST,\n");
+    fprintf(f, "# Reach). 1.00 = full stock draw distance. Lower brings the far plane\n");
+    fprintf(f, "# in toward you, culling distant terrain and objects (the skybox goes\n");
+    fprintf(f, "# first). Most levels only start visibly culling below ~0.25, since\n");
+    fprintf(f, "# nearby geometry is closer than that; the lowest settings clip near\n");
+    fprintf(f, "# geometry (hard pop-in) in exchange for the most frames. Helps weaker\n");
+    fprintf(f, "# machines; VR is usually CPU-limited, not GPU. No restart needed.\n");
+    fprintf(f, "# (default %.2f, range %.2f to %.2f)\n",
+            d.draw_distance, kDrawDistanceMin, kDrawDistanceMax);
+    fprintf(f, "draw_distance = %.2f\n\n", g_config.draw_distance);
+    fprintf(f, "# Upscale/resolve filter for the headset image: 0 = linear (old),\n");
+    fprintf(f, "# 1 = sharp (strong bicubic). The game usually renders below your\n");
+    fprintf(f, "# headset's per-eye resolution, so the mod upscales the difference;\n");
+    fprintf(f, "# sharp keeps edges crisp instead of the linear shimmer. Live, no restart.\n");
+    fprintf(f, "# (default %d)\n", d.upscale_filter);
+    fprintf(f, "upscale_filter = %d\n\n", g_config.upscale_filter);
+    fprintf(f, "# Sharpening strength (RCAS-based 2x overdrive). 0 = off, 1 = max.\n");
+    fprintf(f, "# The top is intentionally aggressive and can ring/clip; adjust down.\n");
+    fprintf(f, "# Same five taps and one pass as before. Live, no restart.\n");
+    fprintf(f, "# (default %.2f, range 0 to 1)\n", d.sharpness);
+    fprintf(f, "sharpness = %.2f\n\n", g_config.sharpness);
+    fprintf(f, "# Anti-aliasing on the finished image: 0 = off, 1 = FXAA (balanced),\n");
+    fprintf(f, "# 2 = FXAA Strong, 3 = SMAA 1x, 4 = SMAA 1x + FXAA Strong.\n");
+    fprintf(f, "# Mode 4 is the most aggressive. SMAA modes cost more GPU when selected.\n");
+    fprintf(f, "# Smooths jagged edges without a huge render resolution. Live.\n");
+    fprintf(f, "# (default %d)\n", d.aa_mode);
+    fprintf(f, "aa_mode = %d\n\n", g_config.aa_mode);
     fprintf(f, "# HUD size: fraction of the view the HUD lays out into. Smaller pulls\n");
     fprintf(f, "# shields/radar/ammo toward the center so both VR eyes see them.\n");
+    fprintf(f, "# One value for every game: Halo 3, ODST and Reach each write it into\n");
+    fprintf(f, "# their own HUD layout data, so the same number looks the same in all.\n");
     fprintf(f, "# (default %.2f = calibrated stock layout, range 0.30 to 1.00)\n", d.hud_size);
     fprintf(f, "hud_size = %.2f\n\n", g_config.hud_size);
     fprintf(f, "# HUD width/aspect trim after automatic headset correction.\n");
     fprintf(f, "# 1 = automatic, lower = narrower, higher = wider.\n");
+    fprintf(f, "# Applies to Halo 3, ODST and Reach.\n");
     fprintf(f, "# (default %.2f, range %.2f to %.2f)\n",
             d.hud_aspect, kHudAspectMin, kHudAspectMax);
     fprintf(f, "hud_aspect = %.2f\n\n", g_config.hud_aspect);
     fprintf(f, "# HUD curvature: 0 = flat (+0.30), 1 = fully curved (-0.30).\n");
     fprintf(f, "# 0.50 keeps the active game's authored curvature.\n");
+    fprintf(f, "# Halo 3 and ODST only. This does not work in Halo: Reach yet.\n");
     fprintf(f, "# (default %.2f, range %.2f to %.2f)\n",
             d.hud_curvature, kHudCurvatureMin, kHudCurvatureMax);
     fprintf(f, "hud_curvature = %.2f\n\n", g_config.hud_curvature);
     fprintf(f, "# HUD height in virtual-screen pixels. Positive = higher, negative = lower.\n");
+    fprintf(f, "# Halo 3 and ODST only; Reach's HUD anchor function is not located yet.\n");
     fprintf(f, "# (default %+.0f, range %+.0f to %+.0f)\n",
              d.hud_vertical_offset, kHudHeightMin, kHudHeightMax);
     fprintf(f, "hud_vertical_offset = %+.0f\n\n", g_config.hud_vertical_offset);
@@ -538,7 +629,8 @@ void ConfigSave()
     fprintf(f, "# (default %.3f, range -0.05 to 0.25)\n", d.left_grip_forward_m);
     fprintf(f, "left_grip_forward_m = %.3f\n\n", g_config.left_grip_forward_m);
     fprintf(f, "# VRIK arm IK: 1 = bend the arm to your controller (shoulder planted,\n");
-    fprintf(f, "# elbow solved); 0 = rigid-parent the whole arm assembly.\n");
+    fprintf(f, "# elbow solved); 0 = rigid-parent the whole arm assembly. Required on\n");
+    fprintf(f, "# Halo 3 / ODST, so leave it 1.\n");
     fprintf(f, "# (default %d)\n", d.arm_ik ? 1 : 0);
     fprintf(f, "arm_ik = %d\n\n", g_config.arm_ik ? 1 : 0);
     fprintf(f, "# Floating hands: 1 = show only the hands and the guns they hold\n");
@@ -573,6 +665,11 @@ void ConfigSave()
     fprintf(f, "# enemy-red reticle state and per-element HUD flags). Log-only.\n");
     fprintf(f, "# Not in the F1 menu; this file only. (default %d)\n", d.hud_probe ? 1 : 0);
     fprintf(f, "hud_probe = %d\n\n", g_config.hud_probe ? 1 : 0);
+    fprintf(f, "# Diagnostic: 1 logs each distinct scene render target MCC binds\n");
+    fprintf(f, "# (size/format/flags + viewport) so toggling MCC's built-in FSR shows\n");
+    fprintf(f, "# what it changes. Not in the F1 menu; this file only. (default %d)\n",
+            d.fsr_probe ? 1 : 0);
+    fprintf(f, "fsr_probe = %d\n\n", g_config.fsr_probe ? 1 : 0);
     fprintf(f, "# Diagnostic: log camera-vs-muzzle offset on each shot (bullet origin).\n");
     fprintf(f, "# Not in the F1 menu; this file only. (default %d)\n", d.bullet_probe ? 1 : 0);
     fprintf(f, "bullet_probe = %d\n\n", g_config.bullet_probe ? 1 : 0);

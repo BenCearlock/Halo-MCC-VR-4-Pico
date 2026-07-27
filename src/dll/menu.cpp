@@ -11,6 +11,7 @@
 #include "game.h"
 #include "title_adapter.h"
 #include "d3d_state.h"
+#include "d3d11_hook.h"
 #include "../common/log.h"
 #include "../common/config.h"
 
@@ -39,8 +40,78 @@ namespace
     // thread; this lock keeps the two from touching ImGui at the same time.
     CRITICAL_SECTION g_cs;
 
+    // Private message we post to the game window so the fit runs on the window's
+    // own (UI) thread, where touching window size/position is safe.
+    constexpr UINT kFitGameWindowMsg = WM_APP + 0x37;
+
+    // Fit the game window inside the primary monitor's work area, preserving the
+    // render aspect (kNativeRenderWidth:kNativeRenderHeight, constant because
+    // resolution_scale is uniform) so the downscaled desktop picture isn't
+    // distorted. This shrinks only the VISIBLE window; MCC keeps drawing the
+    // full-size frame into the forced full-size backbuffer (d3d11_hook.cpp), so
+    // the headset picture and the gun alignment are unchanged. Runs on the UI
+    // thread.
+    void FitGameWindow(HWND hwnd)
+    {
+        // MCC's decorated window path keeps Slate in a different geometry from
+        // the DXGI-stretched client when the render is larger than the monitor.
+        // That is the path where native shell/pause hit-testing and controller
+        // focus become unusable. Use the game's borderless-window geometry for
+        // the fitted client so MCC has one client rectangle for both display and
+        // native menu input.
+        const LONG_PTR oldStyle = GetWindowLongPtrW(hwnd, GWL_STYLE);
+        const LONG_PTR borderlessStyle =
+            (oldStyle & ~(WS_CAPTION | WS_THICKFRAME | WS_MINIMIZEBOX |
+                          WS_MAXIMIZEBOX | WS_SYSMENU)) |
+            WS_POPUP;
+        const LONG_PTR oldExStyle = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+        const LONG_PTR borderlessExStyle =
+            oldExStyle & ~(WS_EX_DLGMODALFRAME | WS_EX_CLIENTEDGE |
+                           WS_EX_STATICEDGE | WS_EX_WINDOWEDGE);
+        SetWindowLongPtrW(hwnd, GWL_STYLE, borderlessStyle);
+        SetWindowLongPtrW(hwnd, GWL_EXSTYLE, borderlessExStyle);
+
+        HMONITOR mon = MonitorFromWindow(hwnd, MONITOR_DEFAULTTOPRIMARY);
+        MONITORINFO mi{sizeof(mi)};
+        if (!GetMonitorInfo(mon, &mi))
+            return;
+        const int workW = mi.rcWork.right - mi.rcWork.left;
+        const int workH = mi.rcWork.bottom - mi.rcWork.top;
+        if (workW <= 0 || workH <= 0)
+            return;
+        const float aspect = (float)kNativeRenderWidth / (float)kNativeRenderHeight;
+        int w = workW;
+        int h = (int)((float)w / aspect + 0.5f);
+        if (h > workH)
+        {
+            h = workH;
+            w = (int)((float)h * aspect + 0.5f);
+        }
+        const int x = mi.rcWork.left + (workW - w) / 2;
+        const int y = mi.rcWork.top + (workH - h) / 2;
+        if (!SetWindowPos(hwnd, nullptr, x, y, w, h,
+                          SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED))
+        {
+            LOG("fit: borderless SetWindowPos failed (%lu)",
+                static_cast<unsigned long>(GetLastError()));
+            return;
+        }
+        RECT client{};
+        if (GetClientRect(hwnd, &client))
+        {
+            LOG("fit: native MCC window is borderless; client %ldx%ld at (%d,%d)",
+                client.right - client.left, client.bottom - client.top, x, y);
+        }
+    }
+
     LRESULT CALLBACK WndProcHook(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     {
+        // Fit request (posted from Menu_Init) -- run it here on the UI thread.
+        if (msg == kFitGameWindowMsg)
+        {
+            FitGameWindow(hwnd);
+            return 0;
+        }
         // Keep the game rendering and processing input while the user is in the
         // headset. Looking through the headset hands desktop focus to SteamVR,
         // and MCC (like most games) stops drawing and ignores input when it
@@ -63,6 +134,61 @@ namespace
             return 0;
         case WM_MOUSEACTIVATE:
             return MA_ACTIVATE;
+        case WM_WINDOWPOSCHANGING:
+            if (D3D_FitActive())
+            {
+                // MCC believes its client is full-size (we tell it so), so it may
+                // try to size the WINDOW to match and grow it back off-screen.
+                // Clamp any oversize request to a monitor fit. Genuine size
+                // changes only (user drags with SWP_NOSIZE are left alone).
+                WINDOWPOS* pos = (WINDOWPOS*)lp;
+                if (pos && !(pos->flags & SWP_NOSIZE))
+                {
+                    HMONITOR mon = MonitorFromWindow(hwnd, MONITOR_DEFAULTTOPRIMARY);
+                    MONITORINFO mi{sizeof(mi)};
+                    if (GetMonitorInfo(mon, &mi))
+                    {
+                        const int workW = mi.rcWork.right - mi.rcWork.left;
+                        const int workH = mi.rcWork.bottom - mi.rcWork.top;
+                        if (workW > 0 && workH > 0 && (pos->cx > workW || pos->cy > workH))
+                        {
+                            const float aspect =
+                                (float)kNativeRenderWidth / (float)kNativeRenderHeight;
+                            int w = workW;
+                            int h = (int)((float)w / aspect + 0.5f);
+                            if (h > workH) { h = workH; w = (int)((float)h * aspect + 0.5f); }
+                            pos->cx = w;
+                            pos->cy = h;
+                            pos->x = mi.rcWork.left + (workW - w) / 2;
+                            pos->y = mi.rcWork.top + (workH - h) / 2;
+                            pos->flags &= ~SWP_NOMOVE;
+                        }
+                    }
+                }
+            }
+            break;
+        case WM_SIZE:
+            if (D3D_FitActive())
+            {
+                // The window is smaller than the render. Tell MCC its client is
+                // still the full render size so it keeps drawing the full frame
+                // into the (forced full-size) backbuffer instead of shrinking to
+                // the corner -- the black-border crop. The GPU downscales the
+                // full frame into the small window on present. Bracket the call
+                // so our GetClientRect hook returns full ONLY to MCC's resize
+                // code on this stack (never to DXGI's present-time query).
+                unsigned fw = 0, fh = 0;
+                D3D_GetForcedRenderSize(fw, fh);
+                if (fw && fh)
+                {
+                    const LPARAM full = MAKELPARAM((WORD)fw, (WORD)fh);
+                    D3D_SetForcedClientLie(true);
+                    const LRESULT r = CallWindowProcW(g_origWndProc, hwnd, msg, wp, full);
+                    D3D_SetForcedClientLie(false);
+                    return r;
+                }
+            }
+            break;
         }
 
         // Hotkeys act on plain WM_KEYDOWN only. F10 is the one exception:
@@ -125,6 +251,10 @@ namespace
                 !(msg == WM_SYSKEYDOWN && wp == VK_F4))
                 return 0;
         }
+        // Keep native mouse messages in MCC's stock physical client domain. The
+        // prior fit scaled only this path while its separately polled cursor stayed
+        // physical. This candidate tests whether restoring one coordinate domain
+        // stops mouse hover from displacing keyboard/controller menu focus.
         return CallWindowProcW(g_origWndProc, hwnd, msg, wp, lp);
     }
 
@@ -280,6 +410,10 @@ namespace
         ImGui::TextDisabled("0/0/0 keeps the current automatic barrel alignment.");
         changed |= ImGui::SliderFloat("Gun forward offset (m)", &g_config.gun_forward_m, -0.3f, 0.5f, "%.2f");
         ImGui::TextDisabled("Slides gun/arms along your aim. Negative seats the gun back in your fist.");
+        changed |= ImGui::SliderFloat("Muzzle height (m)", &g_config.muzzle_height_m, -0.3f, 0.3f, "%.2f");
+        ImGui::TextDisabled("HALO REACH ONLY for now - Halo 3 and ODST support is coming soon.");
+        ImGui::TextDisabled("Raises the muzzle flash / bullet spawn up the gun's own axis.");
+        ImGui::TextDisabled("Where rounds LAND is unchanged. 0.11 is about four inches.");
         ImGui::Spacing();
         ImGui::Separator();
         ImGui::Text("Experimental gun-mounted zoom screen");
@@ -439,9 +573,12 @@ namespace
         ImGui::TextDisabled("Renders %d x %d.", scaleEven(kNativeRenderWidth, g_config.resolution_scale),
                             scaleEven(kNativeRenderHeight, g_config.resolution_scale));
         struct ResolutionPreset { const char* name; float scale; };
+        // Tiers span the full 0.35..2.75 range. "Keith David" is true 8K width
+        // (7680, scale ~2.64); "Ultra" sits at ~5k, the heavy threshold below.
+        // All uniform, so Halo's 2912:2100 VR aspect is preserved at every tier.
         static const ResolutionPreset kPresets[] = {
-            {"Potato", 0.50f}, {"Low", 0.67f}, {"Medium", 0.80f},
-            {"High", 1.00f}, {"Ultra", 1.10f}, {"Keith David", 1.50f}
+            {"Potato", 0.50f}, {"Low", 0.75f}, {"Medium", 1.00f},
+            {"High", 1.30f}, {"Ultra", 1.80f}, {"Keith David", 2.64f}
         };
         for (int i = 0; i < 6; ++i)
         {
@@ -455,13 +592,51 @@ namespace
         }
         ImGui::TextDisabled("The buttons are shortcuts; the slider takes any value in between,\n"
                             "as does resolution_scale in halomccvr.cfg. Below 1.00x trades\n"
-                            "sharpness for frame rate; above it supersamples.\n"
-                            "Changing this requires a full game restart. Close MCC and relaunch.");
+                            "sharpness for frame rate; above it supersamples. Keith David is\n"
+                            "8K-class. Changing this requires a full game restart.");
+        if (g_config.resolution_scale > kResolutionScaleHeavy)
+            ImGui::TextColored(ImVec4(1.0f, 0.55f, 0.25f, 1.0f),
+                               "[!] Very heavy (~5K and up): can crash weaker GPUs. Test in\n"
+                               "    short sessions and drop this if the game won't start.");
+        ImGui::Spacing();
+        ImGui::Text("Image quality (applies live, every title)");
+        const char* upscaleItems[] = {"Linear (old)", "Sharp (strong bicubic)"};
+        changed |= ImGui::Combo("Upscale filter", &g_config.upscale_filter,
+                                upscaleItems, 2);
+        ImGui::TextDisabled("How the game image is scaled to your headset. The game usually\n"
+                            "renders BELOW your per-eye headset resolution, so this upscales it.\n"
+                            "Sharp keeps edges crisp; Linear is the old soft/shimmery look.");
+        changed |= ImGui::SliderFloat("Sharpening", &g_config.sharpness, 0.0f, 1.0f, "%.2f");
+        ImGui::TextDisabled("RCAS-based 2x overdrive. 0 = off; 1 = twice the prior maximum.\n"
+                            "It uses the same five taps/pass; lower it if the top rings or clips.");
+        const char* aaItems[] = {
+            "Off", "FXAA", "FXAA Strong", "SMAA 1x", "SMAA 1x + FXAA Strong"};
+        changed |= ImGui::Combo("Anti-aliasing", &g_config.aa_mode, aaItems, 5);
+        ImGui::TextDisabled("Smooths jagged edges on the finished image, so a mid/low rig doesn't\n"
+                            "need a huge render resolution. SMAA 1x is the real 3-stage filter;\n"
+                            "the final option adds FXAA Strong for the most aggressive cleanup.\n"
+                            "SMAA costs more GPU only when one of its modes is selected.");
+        ImGui::Spacing();
+        changed |= ImGui::Checkbox("Fit desktop window to my monitor",
+                                   &g_config.fit_desktop_window);
+        ImGui::TextDisabled(
+            "For monitors SMALLER than your render (e.g. a big headset resolution on\n"
+            "a 1080p screen), where MCC's window overflows and you can't click the\n"
+            "\"Halo 3\" tile or Quit. The headset keeps the full resolution above; only\n"
+            "the desktop window shrinks to fit and the GPU downscales into it (no\n"
+            "extra render pass, no measurable cost). OFF by default. Takes effect on\n"
+            "the next launch -- close MCC and relaunch.");
         changed |= ImGui::SliderFloat("Game brightness", &g_config.game_brightness, 0.5f, 2.0f, "%.2f");
         ImGui::TextDisabled("Brightens/darkens the whole game. 1.0 = the game's own brightness.");
         changed |= ImGui::Checkbox("Motion blur", &g_config.motion_blur);
         ImGui::TextDisabled("Off is the VR standard. In stereo the game's blur is fed the wrong\n"
                             "previous frame and smears bright edges into repeating echoes.");
+        changed |= ImGui::SliderFloat("Draw distance", &g_config.draw_distance,
+                                      kDrawDistanceMin, kDrawDistanceMax, "%.2f");
+        ImGui::TextDisabled("1.00 = full stock draw distance. Lower brings the far plane in toward\n"
+                            "you, culling distant terrain/objects (skybox goes first). Most levels\n"
+                            "only start culling below ~0.25; the lowest settings clip near geometry\n"
+                            "(hard pop-in) for the most frames. Live, all three games.");
 
         ImGui::EndTabItem();
         }
@@ -590,6 +765,14 @@ bool Menu_Init(HWND gameWindow, ID3D11Device* device, ID3D11DeviceContext* conte
         LOG("menu: could not hook the game window procedure (%lu)", GetLastError());
         return false;
     }
+
+    // With the fit on, shrink the desktop window to the monitor now that we can
+    // catch its resizes. MCC created it at the full render size (which overflows
+    // small monitors and put the menu off-screen); the shrink keeps MCC drawing
+    // the full-size backbuffer while only the visible window fits. Posted so it
+    // runs on the UI thread.
+    if (D3D_FitActive())
+        PostMessageW(gameWindow, kFitGameWindowMsg, 0, 0);
 
     g_ready = true;
     LOG("menu ready (F1 to toggle)");
