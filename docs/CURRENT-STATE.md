@@ -534,12 +534,62 @@ optional hook restores the single parent by copying the per-eye head camera the
 world was already rendered from into the destination for every non-world call
 site.
 
-**The RAIN is not fixed and does NOT go through this function.** The site
-telemetry from the accepted session proves it: only three of the six call sites
-were ever exercised - site 2 (world render, never corrected), site 3
-(`+0x26FA47`, unidentified), and site 5 (CHUD projection). No rain consumer
-appears. The player reports the rain still rotates with BOTH head and hand,
-which is a separate defect with a separate camera source, still to be located.
+**The RAIN is not fixed.** The site telemetry from the accepted session shows
+only three of the six call sites were ever exercised - site 2 (world render,
+never corrected), site 3 (`+0x26FA47`), and site 5 (CHUD projection).
+
+> **CORRECTION 2026-07-27.** An earlier version of this section concluded from
+> that telemetry that "no rain consumer goes through
+> `render_camera_from_observer_camera` at all; the rain reads a different
+> camera." That was a theory written as a finding, and it is wrong. The weather
+> pass is retail `0x00260830` (homolog of HREK `weather.cpp` `0x00815240`, sole
+> assert `weather.cpp:407`), sole caller `player_view_render` at `0x0026C82F`.
+> It reads the DEFAULT WORKSPACE `0x00C9FAE0` - position `+0x00`, forward
+> `+0x0C`, up `+0x18` - and advects by `pos + fwd*0.15`. That workspace IS
+> `kReachDefaultWorkspaceRva`, and site 2 is what builds it. So the rain does
+> reach this function, through the one site deliberately never corrected.
+>
+> **But that consumer is already head-parented, and correcting site 2 would
+> change nothing.** Order, all measured: the outer main render calls the world
+> camera build at `0x000C36D6` (site 2 fires) BEFORE calling `main_render_view`
+> `0x000C31F4`, which the mod hooks. `ReachMainRenderViewBody` then commits the
+> head-centre camera into `workspace+0x00` AND
+> `workspace+kReachSecondaryCompactOffset` before calling the original, and
+> nothing rebuilds `0xC9FAE0` afterwards. Every `player_view_render` that
+> follows therefore reads a head-derived camera. `0x00260830` is exonerated.
+> **Do not "fix" site 2** - it would risk the accepted Reach 3D for no gain.
+>
+> The real suspect is a DIFFERENT rain consumer. The `render_rain` debug var
+> resolves to `0x00B4444C` (cstring `0x009EB110`, pointer `0x00B40FF0`, entry
+> type 5). It has exactly five readers: `0x002599E8`, `0x0025E318`,
+> `0x0026C6DC` (the path already proven head-parented), `0x0026E7B4`,
+> `0x0026E974`. The strongest suspect is `0x0026E974`, which reads
+> `kReachCameraStackPointers[kReachCameraStackDepth] + 0x154` - the camera
+> STACK (`0x00C878A8` indexed by `0x00B43ABC`), not the workspace - and
+> republishes that position into `0x00B43E20/24/28`. The mod deliberately does
+> not own the camera stack. Next step is offline and costs no headset time:
+> disassemble the four unexamined readers and determine which camera each one
+> reads.
+>
+> Measured dead ends, recorded so they are not retried: HREK
+> `render_rain_sheets.cpp` (`0x00874D70`, `0x008759D0`) has zero callers and
+> zero pointer refs, and retail carries no `rain_sheets` string; and every rain
+> sub-toggle except `render_rain` resolves to a NULL backing global in retail,
+> so the debug-var table gives no further leverage.
+
+**Unjustified write to review in the shipped hook.** The detour is a denylist
+(correct everything except the world site), and two of the sites it corrects
+write PERSISTENT MODULE GLOBALS rather than a transient camera: site 3
+(`+0x26FA47`) and site 4 (`+0x26FB13`) both target `haloreach+0x00C9FF90`, and
+both are called with a NULL source (`xor edx,edx` at `0x26FA39`), i.e. the
+engine is deliberately building a DEFAULT camera there. Site 3 is exercised and
+is being corrected today. Stamping a per-eye VR head camera over a deliberately
+defaulted camera in a global that outlives the eye scope is not justified by any
+evidence we have. Site 5 (CHUD projection) writes a stack camera that dies
+inside `0x2E1430` and is the only correction plausibly responsible for the
+accepted marker/tag fix. Narrowing the denylist to an allowlist of site 5 is
+strictly subtractive and should be done as its own candidate - separately, so
+that if the markers regress it is unambiguous that site 3 was load-bearing.
 
 **Instrumentation defect to fix, not a behavior defect:** the worker logs the
 site table only when the SET of exercised sites changes, so the accepted session

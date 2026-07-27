@@ -10342,6 +10342,22 @@ namespace
     ReachEffectFpMarkerFn g_reachEffectFpMarkerQuery = nullptr;
     std::atomic<uint32_t> g_reachMuzzleRedirects{0};
     std::atomic<uint32_t> g_reachMuzzleReadFailures{0};
+    // Diagnostic, worker-logged only. The 2026-07-27 headset test proved the
+    // hook installs and the first-person query decodes, yet the flash stayed on
+    // the player's face - and nothing in the log could say which branch the
+    // muzzle effect actually takes. These counters separate the three
+    // possibilities that produce identical silence:
+    //   noFpUser  - effect[0x50] low nibble is 0, so the engine itself treats
+    //               this effect as world-only and the redirect can never fire
+    //   fpNone    - a first-person user exists but the output index is 'none'
+    //   alreadyFp - the location was already a first-person location
+    // A bitmask of every distinct effect[0x50] seen is recorded too, because
+    // "which values actually occur" is the fact that decides the real fix.
+    std::atomic<uint32_t> g_reachMuzzleWorldNoFpUser{0};
+    std::atomic<uint32_t> g_reachMuzzleWorldFpNone{0};
+    std::atomic<uint32_t> g_reachMuzzleAlreadyFp{0};
+    std::atomic<uint32_t> g_reachMuzzleFpByteLowMask{0};
+    std::atomic<uint32_t> g_reachMuzzleFpByteHighMask{0};
 
     // Guarded read of the two effect fields the decision needs.
     bool ReachReadEffectFpFields(
@@ -10393,6 +10409,33 @@ namespace
                     fpUserByte, static_cast<unsigned int>(nodeDesignator));
             if (!decision.redirect)
             {
+                // Record WHY, so one run distinguishes the three ways this can
+                // decline. Atomics only - no logging on this path.
+                const short designator =
+                    static_cast<short>(nodeDesignator & 0xFFFFu);
+                if (designator < 0)
+                {
+                    g_reachMuzzleAlreadyFp.fetch_add(
+                        1, std::memory_order_relaxed);
+                }
+                else if ((fpUserByte & 0x0Fu) == 0u)
+                {
+                    g_reachMuzzleWorldNoFpUser.fetch_add(
+                        1, std::memory_order_relaxed);
+                    g_reachMuzzleFpByteLowMask.fetch_or(
+                        1u << (fpUserByte & 0x0Fu), std::memory_order_relaxed);
+                    g_reachMuzzleFpByteHighMask.fetch_or(
+                        1u << ((fpUserByte >> 4) & 0x0Fu),
+                        std::memory_order_relaxed);
+                }
+                else
+                {
+                    g_reachMuzzleWorldFpNone.fetch_add(
+                        1, std::memory_order_relaxed);
+                    g_reachMuzzleFpByteHighMask.fetch_or(
+                        1u << ((fpUserByte >> 4) & 0x0Fu),
+                        std::memory_order_relaxed);
+                }
                 original(effect, nodeDesignator, outMatrix);
                 return;
             }
@@ -14406,6 +14449,11 @@ namespace
             effectLocationCreated ? effectLocation : nullptr;
         g_reachMuzzleRedirects.store(0, std::memory_order_relaxed);
         g_reachMuzzleReadFailures.store(0, std::memory_order_relaxed);
+        g_reachMuzzleWorldNoFpUser.store(0, std::memory_order_relaxed);
+        g_reachMuzzleWorldFpNone.store(0, std::memory_order_relaxed);
+        g_reachMuzzleAlreadyFp.store(0, std::memory_order_relaxed);
+        g_reachMuzzleFpByteLowMask.store(0, std::memory_order_relaxed);
+        g_reachMuzzleFpByteHighMask.store(0, std::memory_order_relaxed);
         for (int site = 0; site < 6; ++site)
         {
             g_reachObserverCameraSiteHits[site].store(
@@ -14665,6 +14713,40 @@ namespace
         }
         return published;
     }
+    // Worker-side only. Reports what the effect-location hook actually saw, so
+    // one short headset run decides the muzzle mechanism instead of a fourth
+    // guess. Silent until something happens, then rate-limited to 30 s.
+    void ReachMuzzleLogTick()
+    {
+        static uint32_t lastTotal = 0;
+        static uint64_t lastReportMs = 0;
+        const uint32_t redirects =
+            g_reachMuzzleRedirects.load(std::memory_order_relaxed);
+        const uint32_t noFpUser =
+            g_reachMuzzleWorldNoFpUser.load(std::memory_order_relaxed);
+        const uint32_t fpNone =
+            g_reachMuzzleWorldFpNone.load(std::memory_order_relaxed);
+        const uint32_t alreadyFp =
+            g_reachMuzzleAlreadyFp.load(std::memory_order_relaxed);
+        const uint32_t failures =
+            g_reachMuzzleReadFailures.load(std::memory_order_relaxed);
+        const uint32_t total =
+            redirects + noFpUser + fpNone + alreadyFp + failures;
+        if (!total || total == lastTotal)
+            return;
+        const uint64_t now = GetTickCount64();
+        if (lastReportMs && now - lastReportMs < 30000)
+            return;
+        lastReportMs = now;
+        lastTotal = total;
+        LOG("REACHFX: effect locations - redirected %u, world/no-fp-user %u, "
+            "world/fp-output-none %u, already-first-person %u, unreadable %u "
+            "(effect+0x50 low nibbles seen 0x%04X, high nibbles 0x%04X)",
+            redirects, noFpUser, fpNone, alreadyFp, failures,
+            g_reachMuzzleFpByteLowMask.load(std::memory_order_relaxed),
+            g_reachMuzzleFpByteHighMask.load(std::memory_order_relaxed));
+    }
+
     // Worker-side only: report which of the six observer-camera call sites are
     // actually exercised, and which ones the head-lock corrected.
     //
@@ -15175,6 +15257,7 @@ namespace
         ReachCineProbeColdPoll(base, size, generation, soleReachTitle);
         ReachPauseColdPoll(base, size, generation, soleReachTitle);
         ReachObserverCameraLogTick();
+        ReachMuzzleLogTick();
         ReachCineProbeLogTick();
         LogReachFpCameraUploadIfReady();
         LogReachFpStatusIfNew();
