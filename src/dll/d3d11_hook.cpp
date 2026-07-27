@@ -12,8 +12,10 @@
 #include "d3d11_hook.h"
 #include "game.h"
 #include "vr.h"
+#include "title_adapter.h"
 #include "../common/config.h"
 #include "../common/log.h"
+#include "../common/runtime_types.h"
 
 // We can't hook "the game's swapchain" directly because it doesn't exist yet
 // when we're injected. Instead we create a throwaway D3D11 device + swapchain
@@ -26,6 +28,8 @@ typedef HRESULT(STDMETHODCALLTYPE* Present1Fn)(IDXGISwapChain1*, UINT, UINT, con
 typedef HRESULT(STDMETHODCALLTYPE* ResizeBuffersFn)(IDXGISwapChain*, UINT, UINT, UINT, DXGI_FORMAT, UINT);
 typedef void(STDMETHODCALLTYPE* OMSetRenderTargetsFn)(ID3D11DeviceContext*, UINT,
     ID3D11RenderTargetView* const*, ID3D11DepthStencilView*);
+typedef void(STDMETHODCALLTYPE* RSSetViewportsFn)(ID3D11DeviceContext*, UINT,
+    const D3D11_VIEWPORT*);
 #if HALOMCCVR_EXPERIMENTAL_ODST_BRINGUP
 typedef void(STDMETHODCALLTYPE* CopyResourceFn)(ID3D11DeviceContext*,
     ID3D11Resource*, ID3D11Resource*);
@@ -35,6 +39,7 @@ static PresentFn g_origPresent = nullptr;
 static Present1Fn g_origPresent1 = nullptr;
 static ResizeBuffersFn g_origResizeBuffers = nullptr;
 static OMSetRenderTargetsFn g_origOMSetRenderTargets = nullptr;
+static RSSetViewportsFn g_origRSSetViewports = nullptr;
 #if HALOMCCVR_EXPERIMENTAL_ODST_BRINGUP
 static CopyResourceFn g_origCopyResource = nullptr;
 #endif
@@ -586,6 +591,47 @@ static void STDMETHODCALLTYPE CopyResourceHook(ID3D11DeviceContext* context,
 }
 #endif
 
+#if HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE
+// Diagnostic only: never changes a viewport, never blocks the call. The CPU
+// side chase for what feeds Reach's HUD safe-frame scale (docs/RE-notes.md,
+// the Reach HUD layout entry) proved the tag record we write is correct,
+// stable, and the only real copy in the process, with zero visible effect.
+// That rules out "wrong address" and "wrong data" and leaves only "the
+// renderer computes the on-screen rectangle some other way". Reading the
+// literal viewport D3D11 actually binds sidesteps needing to find that code:
+// if the HUD's real rectangle changes with hud_size, the CPU-side value feeds
+// it through a path we have not found yet; if it never changes, the config
+// value never reaches rendering at all. Logs at most once every two seconds,
+// only while Reach is the active title, and only distinct viewport shapes
+// (dedup by rounded x/y/w/h) so this cannot spam a busy HUD/UI frame.
+static void LogReachViewportsOnce(UINT count, const D3D11_VIEWPORT* viewports)
+{
+    if (!count || !viewports ||
+        TitleAdapter_GetActiveTitle() != GameTitle::HaloReach)
+        return;
+    static uint64_t lastLogMs = 0;
+    static float lastX = -1.0f, lastY = -1.0f, lastW = -1.0f, lastH = -1.0f;
+    const uint64_t now = GetTickCount64();
+    const D3D11_VIEWPORT& v = viewports[0];
+    const bool changed = fabsf(v.TopLeftX - lastX) > 0.5f ||
+        fabsf(v.TopLeftY - lastY) > 0.5f ||
+        fabsf(v.Width - lastW) > 0.5f || fabsf(v.Height - lastH) > 0.5f;
+    if (!changed && now - lastLogMs < 2000)
+        return;
+    lastLogMs = now;
+    lastX = v.TopLeftX; lastY = v.TopLeftY; lastW = v.Width; lastH = v.Height;
+    LOG("REACHVP: RSSetViewports count=%u vp0=(%.1f,%.1f %.1fx%.1f depth %.3f-%.3f)",
+        count, v.TopLeftX, v.TopLeftY, v.Width, v.Height, v.MinDepth, v.MaxDepth);
+}
+
+static void STDMETHODCALLTYPE RSSetViewportsHook(ID3D11DeviceContext* context,
+    UINT count, const D3D11_VIEWPORT* viewports)
+{
+    LogReachViewportsOnce(count, viewports);
+    g_origRSSetViewports(context, count, viewports);
+}
+#endif
+
 // Log-only: record what MCC's swapchain actually is, plus how its backbuffer
 // compares to the visible window and the monitor. On a monitor smaller than the
 // requested render this shows whether MCC drew the full frame (backbuffer size)
@@ -822,6 +868,14 @@ bool InstallD3D11Hooks()
 #if HALOMCCVR_EXPERIMENTAL_ODST_BRINGUP
     ok = ok && MH_CreateHook(contextVtbl[47], (void*)&CopyResourceHook,
                              (void**)&g_origCopyResource) == MH_OK;
+#endif
+#if HALOMCCVR_EXPERIMENTAL_REACH_RENDER_CANDIDATE
+    // ID3D11DeviceContext::RSSetViewports is vtable slot 44. Diagnostic-only
+    // (see LogReachViewportsOnce); a failed hook here degrades to no viewport
+    // logging, never blocks Halo 3/ODST/Reach rendering.
+    if (MH_CreateHook(contextVtbl[44], (void*)&RSSetViewportsHook,
+                      (void**)&g_origRSSetViewports) != MH_OK)
+        LOG("REACHVP: RSSetViewports hook failed; viewport diagnostic disabled");
 #endif
 
     IDXGISwapChain1* sc1 = nullptr;

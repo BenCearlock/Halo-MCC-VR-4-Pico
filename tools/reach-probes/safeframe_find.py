@@ -84,11 +84,18 @@ PROT = {0x01: "NOACCESS", 0x02: "R", 0x04: "RW", 0x08: "WC",
 TYPE = {0x20000: "PRIVATE", 0x40000: "MAPPED", 0x1000000: "IMAGE"}
 
 
-def scan(h):
+def scan(h, progress=False):
     hits = []
     addr = 0x10000
+    regions = 0
+    t0 = time.time()
     mbi = MEMORY_BASIC_INFORMATION64()
     while addr < 0x7FFFFFFF0000:
+        regions += 1
+        if progress and regions % 20000 == 0:
+            print(f"    ...scanned to 0x{addr:016X} "
+                  f"({regions} regions, {time.time()-t0:.0f}s, "
+                  f"{len(hits)} hit(s) so far)", file=sys.stderr)
         if k32.VirtualQueryEx(h, C.c_void_p(addr), C.byref(mbi),
                               C.sizeof(mbi)) != C.sizeof(mbi):
             addr += 0x1000
@@ -129,8 +136,11 @@ def main():
     if not h:
         print(f"OpenProcess failed: {C.get_last_error()} (run as the same user)")
         return 1
-    print(f"attached to pid {pid}, scanning every readable region...")
-    hits = scan(h)
+    print(f"attached to pid {pid}, scanning every readable region "
+          f"(this can take 30-90s)...")
+    t0 = time.time()
+    hits = scan(h, progress=True)
+    print(f"scan finished in {time.time()-t0:.0f}s", file=sys.stderr)
     print(f"\n{len(hits)} Reach curvature record(s) found "
           f"(the mod's scan only looks at PRIVATE/RW):\n")
     for addr, prot, typ, rec in hits:
@@ -151,6 +161,38 @@ def main():
                         hv = struct.unpack_from("<ff", rec, SAFE_FRAME_OFFSET)
                         line.append(f"{hv[0]:.3f}/{hv[1]:.3f}")
                 print("   " + "   ".join(line))
+        except KeyboardInterrupt:
+            pass
+    elif len(sys.argv) > 1 and sys.argv[1] == "rescan":
+        # Re-run the FULL region scan repeatedly (not just re-read the known
+        # addresses). If Reach ever re-derives this record into a NEW memory
+        # location - a fresh allocation on a resolution/HUD change, a
+        # double-buffered copy, or a per-frame scratch build - a rescan finds
+        # it appearing at a different address while the old one goes stale.
+        # This is slow (full VM walk) so it only re-scans every ~2 seconds.
+        print("\nrescanning the full address space every ~2s (Ctrl+C to stop)...")
+        seen = {addr for addr, *_ in hits}
+        try:
+            while True:
+                time.sleep(2.0)
+                cur = scan(h)
+                cur_addrs = {addr for addr, *_ in cur}
+                newly = cur_addrs - seen
+                gone = seen - cur_addrs
+                if newly or gone:
+                    print(f"  CHANGE: +{len(newly)} new, -{len(gone)} gone")
+                    for addr, prot, typ, rec in cur:
+                        if addr in newly:
+                            t = TYPE.get(typ, hex(typ))
+                            p = PROT.get(prot & 0xFF, hex(prot))
+                            print(f"    NEW  {addr:016X}  {t:8} {p:4}  {show(rec)}")
+                    for addr in gone:
+                        print(f"    GONE {addr:016X}")
+                    seen = cur_addrs
+                else:
+                    hv = [show(r)[11:24] for _, _, _, r in cur[:1]]
+                    print(f"  no new/removed copies ({len(cur)} total)"
+                          + (f"  slot0={hv[0]}" if hv else ""))
         except KeyboardInterrupt:
             pass
     k32.CloseHandle(h)
