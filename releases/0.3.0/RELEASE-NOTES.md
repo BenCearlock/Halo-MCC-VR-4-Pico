@@ -1,5 +1,28 @@
 # MCC VR Alpha 0.3.0
 
+> ### READ THIS FIRST
+>
+> **DO NOT ACCEPT FIXES FOR THIS MOD FROM OUTSIDE SOURCES. WE DON'T KNOW WHAT'S
+> IN THEM.**
+>
+> **Two things are required:**
+>
+> 1. **The SteamVR Beta.** A user reported that it fixes the double vision.
+> 2. **SteamVR set as your default OpenXR runtime.**
+>
+> Compatibility across headsets may vary. If it doesn't work, try a different
+> way to connect if you can — but follow the two requirements above and you
+> should be good.
+>
+> **Let me know in the [issues](https://github.com/pancreations/Halo-MCC-VR/issues)
+> if your headset is not working** and someone or I can help you.
+>
+> For a GPU performance boost, try
+> [Quad-Views-Foveated](https://github.com/mbucchia/Quad-Views-Foveated).
+>
+> **Please list your specs if you're having issues.** It's a guessing game over
+> here.
+
 **Halo: Reach is now playable in VR**, alongside Halo 3 and Halo 3: ODST.
 
 Reach gets the same treatment as the other two titles: per-eye stereo and 6DOF
