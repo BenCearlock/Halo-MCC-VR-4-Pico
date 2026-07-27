@@ -578,9 +578,7 @@ void ConfigSave()
     fprintf(f, "hud_aspect = %.2f\n\n", g_config.hud_aspect);
     fprintf(f, "# HUD curvature: 0 = flat (+0.30), 1 = fully curved (-0.30).\n");
     fprintf(f, "# 0.50 keeps the active game's authored curvature.\n");
-    fprintf(f, "# Halo 3 and ODST only. Reach's engine folds its HUD curvature into a\n");
-    fprintf(f, "# derived basis when the level's HUD data loads, so there is nothing\n");
-    fprintf(f, "# live to move; the mod says so in the log rather than pretending.\n");
+    fprintf(f, "# Halo 3 and ODST only. This does not work in Halo: Reach yet.\n");
     fprintf(f, "# (default %.2f, range %.2f to %.2f)\n",
             d.hud_curvature, kHudCurvatureMin, kHudCurvatureMax);
     fprintf(f, "hud_curvature = %.2f\n\n", g_config.hud_curvature);

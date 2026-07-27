@@ -463,6 +463,14 @@ the game's authored virtual-canvas constants, so the engine's own choice
 between records stops mattering. Do not replace this with render-aspect
 detection.
 
+**`hud_curvature` does not work for Reach.** `hud_size` and `hud_aspect` apply;
+the curvature slider has no effect. Open defect, not a closed question.
+
+**Remaining before a Reach release:**
+- VR crosshair replacement from the CHUD widget.
+- Controller vibration / haptics.
+- Cutscene camera orientation, matching what Halo 3 and ODST already do.
+
 Candidate `c4b6f610e7b0cab64dc0f53b2316db68c63b1e5f` (DLL
 `C1E3952A2B6BB61BF37D8FED2D60F41B1D5657DEA7F462A9AC9684778A0F0476`) follows up
 on the 30-45s delay: the first scan runs before the level's tag data is
