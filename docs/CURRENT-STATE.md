@@ -624,6 +624,63 @@ Acceptance for this candidate: controller rumble in Reach gameplay (gunfire,
 damage) that does not cut in and out, Halo 3 + ODST rumble regression, and a
 log capture spanning the Reach opening cutscene for the probe.
 
+**Headset result (2026-07-27, Winter Contingency):** Reach vibration WORKS
+(user-confirmed; Halo 3/ODST rumble regression still untested). The
+runtime-mode flap is gone (6 transitions all session vs thousands). The
+REACHCINE probe labeled the fields; see the follow-up candidate below. One
+regression appeared: the VR crosshair was absent until 00:47:39 - see below.
+
+### UNTESTED: Reach crosshair-from-frame-one + cutscene cut realign - 2026-07-27
+
+| Identity | Value |
+| --- | --- |
+| Candidate source | `68286d61bc39bd6e312aaf6c6ffc1168e0cb0fab` |
+| Candidate package | `out/candidates/68286d6-reach-fp-parity-20260727-060859139Z` |
+| `halo3xr.dll` SHA-256 | `D0DAC5AC6A44045C81459CD7D3DFE558376195CE04965E6CE6B23ED72720DDFE` |
+| Preserved previous install | `out/deploy-backups/b6fd227-before-68286d6-20260727-060859894Z` |
+| Headset result | **PENDING** |
+
+**Crosshair root cause (log-proven).** The c24a89b session ran key-0 authored
+captures with no visible crosshair from 00:43:58 until 00:47:39, then
+captured normally. `VR_PrepareAuthoredReticleResources` - the cold
+preparation Reach's hot capture entry REQUIRES (it refuses lazy allocation) -
+had NO remaining callers; the call was lost in the 6c772fc/4162290
+cleanup-revert cycle. It kept "working" anyway because the unsettled shared
+snapshot misdetected the title constantly, dropping the capture entry into
+the Halo 3/ODST lazy branch which created the texture by accident. The
+heartbeat settled ownership and removed that crutch; only the 00:47:33-39
+checkpoint boundary (title momentarily unsettled) created the texture. Fix:
+`ReachCameraCore_Poll` cold-prepares on the worker, idempotent, logged once
+per generation; Failed logs loudly and never blocks the camera core. Halo 3
+and ODST were never on the strict path and keep their lazy branch untouched;
+their crosshair behavior is not affected by either the bug or the fix.
+
+**REACHCINE probe findings (now consumed by the realign).** In Reach's
+0x40-byte "cinematic globals": `+0x28` = current-shot start stamp, changes at
+every authored cut (incl. the 00:44:57.7 no-fade cut), frozen during
+gameplay; byte `+0x26` = screen-visible, rises when a fade-black ends,
+anti-correlated with fade floats at `+0x30..0x3C`; the member resets at
+checkpoint boundaries. The 0x10-byte non-deterministic member is the live
+dialog/subtitle line state: `+0x00` line id, `+0x04` duration seconds,
+`+0x08` remaining-time countdown, `+0x0C` a second id - zeros between lines.
+Cut realign: `ReachBuildHeadCullCamera` detects the +0x28/+0x26 edges from
+the same-thread sample; `ReachApplyHeadLook` realigns yaw (only) to the new
+authored facing, Halo 3/ODST semantics; one worker log line per realign.
+
+**Still open from the same session (need their own evidence pass):**
+- Character/navpoint tags (Jorge etc.) project with the aim camera while the
+  world renders with the head camera - correct when aiming at the character,
+  warps as the hand moves away ("two parents"). Same family as the OPEN
+  navpoint-transform investigation (HREK `chud_navpoints.cpp`, retail worker
+  `+0x6C2E68` via TLS slot `+0x30`). The fix direction is feeding the
+  navpoint projection the head camera; needs the worker's camera-source RE.
+- One muzzle flash is drawn at the old screen-centre crosshair position (a
+  second, correct one tracks the gun). Long suspected the same transform
+  family as the navpoints.
+- Subtitles double-vision: likely drawn per-eye with eye-divergent
+  projection (or at infinity) instead of converged HUD depth. New lead: the
+  probe's dialog-line state gives id/duration/remaining for the active line.
+
 ### ACCEPTED: Reach native HUD layout (size + aspect) - 2026-07-27
 
 Headset confirmed by the user: Reach's HUD sliders work. Reach remains
