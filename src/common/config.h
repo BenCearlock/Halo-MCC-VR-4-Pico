@@ -108,6 +108,23 @@ struct Config
     // positive moves it out of your face. Never touches aim.
     float gun_forward_m = -0.14f;
 
+    // Raise the muzzle EFFECT origin — the flash and the point bullets appear
+    // to leave — along the gun's own up axis, in meters. Reach only; Halo 3 and
+    // ODST resolve their muzzle markers on the visible weapon already.
+    //
+    // Reach's effect markers resolve against the stock, head-anchored weapon,
+    // so the mod re-parents them onto the controller-driven gun. That transfer
+    // is translation-only and preserves the authored marker offset exactly,
+    // which lands the origin on the barrel line but at the authored height —
+    // reported in-headset as sitting a few inches low. This trims that, and
+    // ONLY that: it is applied after the projectile's own origin and direction
+    // are resolved, so where rounds actually land is untouched.
+    //
+    // 0 = the authored marker height (previous behavior). Positive = up along
+    // the barrel, so it rolls with the gun instead of staying world-vertical.
+    // ~0.11 is the reported "four or five inches". Tune LIVE in the F1 menu.
+    float muzzle_height_m = 0.0f;
+
     // Experimental gun-mounted VR zoom screen. R3 is isolated from Halo's
     // native zoom so the full VR gun/body remain visible; scope_zoom is the
     // fixed 4:3 lens restored on every activation before right-stick adjustment.

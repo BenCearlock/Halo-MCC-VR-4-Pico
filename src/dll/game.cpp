@@ -10692,10 +10692,40 @@ namespace
             // it is kept exactly as resolved. Only the position moves, off the
             // head and onto the gun.
             (void)rotation;
-            const float newPosition[3] = {
+            float newPosition[3] = {
                 position[0] + (moved.translation[0] - stock.translation[0]),
                 position[1] + (moved.translation[1] - stock.translation[1]),
                 position[2] + (moved.translation[2] - stock.translation[2])};
+            // Headset calibration (muzzle_height_m): the translation-only
+            // transfer above preserves the authored marker offset exactly, so
+            // the origin lands on the barrel line but at the authored height,
+            // which reads as a few inches low in VR. Lift it along the GUN's
+            // own up axis, not world up, so it rolls with the weapon.
+            //
+            // This is the effect origin only. It runs after the projectile's
+            // origin and direction are resolved, so the impact point the user
+            // confirmed as already correct is not touched. Reach-only in
+            // practice: this hook is on Reach's effect-location resolver.
+            const float lift = g_config.muzzle_height_m;
+            if (lift != 0.0f)
+            {
+                // moved is a BoneMatrix, whose 3x3 is row-major with world =
+                // R * local (see ReachRotate above). Halo authors weapon
+                // frames +X forward / +Z up, which the HREK primary_trigger
+                // record corroborates: direction +X along the barrel.
+                const float localUp[3] = {0.0f, 0.0f, 1.0f};
+                float worldUp[3];
+                ReachRotate(moved.rotation, localUp, worldUp);
+                const float length = sqrtf(worldUp[0] * worldUp[0] +
+                    worldUp[1] * worldUp[1] + worldUp[2] * worldUp[2]);
+                if (isfinite(length) && length > 1.0e-4f)
+                {
+                    const float scale =
+                        lift * kReachWorldUnitsPerMeter / length;
+                    for (int i = 0; i < 3; ++i)
+                        newPosition[i] += worldUp[i] * scale;
+                }
+            }
             for (int i = 0; i < 3; ++i)
                 if (!isfinite(newPosition[i]))
                     return false;
