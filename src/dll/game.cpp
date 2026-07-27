@@ -10726,6 +10726,13 @@ namespace
     // onto Reach's compact-camera offsets (pos +0x00, fwd +0x0C, up +0x18). It
     // shares the universal recenter/turn references so F-key recenter and stick
     // turn behave for Reach exactly as for Halo 3 and ODST.
+    // Raised on the render thread when the probed cinematic state shows an
+    // authored camera cut (ReachBuildHeadCullCamera); consumed exactly once by
+    // ReachApplyHeadLook's realign branch in the same frame. The count feeds
+    // the worker's confirmation log line.
+    std::atomic<bool> g_reachCineCutRealign{false};
+    std::atomic<uint32_t> g_reachCineCutCount{0};
+
     bool ReachApplyHeadLook(
         unsigned char* cam, const ReachVrRenderSnapshot& tracking)
     {
@@ -10774,13 +10781,24 @@ namespace
         float* fwd = reinterpret_cast<float*>(cam + 0x0C);
         float* up = reinterpret_cast<float*>(cam + 0x18);
 
-        if (g_needRecenter.exchange(false))
+        // An authored camera cut realigns yaw only, exactly like Halo 3/ODST
+        // at their scene/shot IDs: the current physical head-forward maps to
+        // the new shot's authored facing. A manual recenter additionally
+        // rebaselines the lean/position reference; a cut must not, or leaning
+        // would snap mid-cinematic.
+        const bool manualRecenter = g_needRecenter.exchange(false);
+        const bool cutRealign = g_reachCineCutRealign.exchange(
+            false, std::memory_order_acq_rel);
+        if (manualRecenter || cutRealign)
         {
             g_gameYawRef = atan2f(fwd[1], fwd[0]);
             g_headYawRef = hy;
-            g_headPosRef[0] = hpos[0]; g_headPosRef[1] = hpos[1];
-            g_headPosRef[2] = hpos[2];
-            g_needPosRecenter = false;
+            if (manualRecenter)
+            {
+                g_headPosRef[0] = hpos[0]; g_headPosRef[1] = hpos[1];
+                g_headPosRef[2] = hpos[2];
+                g_needPosRecenter = false;
+            }
         }
         else if (g_needPosRecenter.exchange(false))
         {
@@ -10945,6 +10963,11 @@ namespace
         // Bumped on every successful (re)arm so the worker-side log state
         // rebaselines instead of diffing against a previous generation.
         std::atomic<uint32_t> logReset{0};
+        // Cut-detection history, owned by the render thread inside
+        // ReachBuildHeadCullCamera (single writer, no locking needed).
+        uint32_t cutPrevStamp = 0;
+        bool cutPrevVisible = false;
+        bool cutPrevValid = false;
     };
     ReachCineProbeState g_reachCineProbe;
 
@@ -11133,6 +11156,32 @@ namespace
                     g_aimSeen.store(true, std::memory_order_release);
                 }
             }
+        }
+        // Authored camera-cut detection (probe-proven, headset log
+        // 2026-07-27 00:43-00:48): cinematic-globals +0x28 is the current
+        // shot's start stamp - it changes at every authored cut, including
+        // cuts without a fade, and holds still through ordinary gameplay -
+        // and the byte at +0x26 rises exactly when a fade-to-black ends.
+        // Either edge is an authored discontinuity of the stock camera, so
+        // request the yaw realign ReachApplyHeadLook performs this same
+        // frame. The sampler ran at function entry on this thread, so bufA
+        // is this frame's coherent copy. Fail-open: an unarmed probe means
+        // no realign - stock behavior - never a wrong one.
+        if (g_reachCineProbe.armed.load(std::memory_order_acquire))
+        {
+            const uint32_t shotStamp = g_reachCineProbe.bufA[0x28 / 4];
+            const bool screenVisible =
+                ((g_reachCineProbe.bufA[0x24 / 4] >> 16) & 0xFFu) != 0;
+            if (g_reachCineProbe.cutPrevValid && screenVisible &&
+                (shotStamp != g_reachCineProbe.cutPrevStamp ||
+                 !g_reachCineProbe.cutPrevVisible))
+            {
+                g_reachCineCutRealign.store(true, std::memory_order_release);
+                g_reachCineCutCount.fetch_add(1, std::memory_order_relaxed);
+            }
+            g_reachCineProbe.cutPrevStamp = shotStamp;
+            g_reachCineProbe.cutPrevVisible = screenVisible;
+            g_reachCineProbe.cutPrevValid = true;
         }
         memcpy(headCenter, stockCompact, kReachCompactCameraBytes);
         ApplyVrTurn(tracking.pad);
@@ -14096,12 +14145,14 @@ namespace
         if (!soleReachTitle || !base || !generation)
         {
             g_reachCineProbe.armed.store(false, std::memory_order_release);
+            g_reachCineProbe.cutPrevValid = false;
             return;
         }
         if (g_reachCineProbe.attemptedGeneration.load(
                 std::memory_order_acquire) == generation)
             return;
         g_reachCineProbe.armed.store(false, std::memory_order_release);
+        g_reachCineProbe.cutPrevValid = false;
         g_reachCineProbe.attemptedGeneration.store(
             generation, std::memory_order_release);
 
@@ -14253,6 +14304,18 @@ namespace
                 "misses)", failures);
         }
 
+        // Cutscene-facing confirmation, mirroring the Halo 3/ODST worker-side
+        // report: one line per authored cut the render thread realigned to.
+        static uint32_t lastCutCount = 0;
+        const uint32_t cutCount =
+            g_reachCineCutCount.load(std::memory_order_relaxed);
+        if (cutCount != lastCutCount)
+        {
+            lastCutCount = cutCount;
+            LOG("Reach cutscene facing: realigned to the authored camera "
+                "(cut %u)", cutCount);
+        }
+
         uint32_t copyA[kReachCineMemberADwords];
         uint32_t copyB[kReachCineMemberBDwords];
         uint32_t stableSeq = 0;
@@ -14362,6 +14425,41 @@ namespace
         const ReachModuleEpoch epoch{base, generation};
         const ReachPreflightToken preflight =
             ReachRenderCandidate_GetPreflight(epoch);
+        // Cold-prepare the authored-reticle swapchain/RTVs and the private
+        // capture texture on this worker. Reach's hot CHUD capture entry
+        // REFUSES to run without them (no lazy allocation in the hot hook),
+        // and nothing else creates them for Reach: before the 2026-07-27
+        // heartbeat, the shared snapshot spent most of its time unsettled, so
+        // the capture entry constantly fell into the Halo 3/ODST lazy branch
+        // by title misdetection and created the texture as a side effect.
+        // Settling ownership removed that crutch, and Winter Contingency ran
+        // its first 3.5 minutes with key-0 captures and no crosshair at all
+        // (headset log 2026-07-27 00:43:58-00:47:39). Idempotent and cheap
+        // once created. A Failed result never blocks the camera core - the
+        // feature degrades alone, loudly, per the failure-isolation rule.
+        if (VR_CanPrepareAuthoredReticleResources())
+        {
+            const AuthoredReticlePreparationResult reticlePreparation =
+                VR_PrepareAuthoredReticleResources();
+            static uint32_t preparedLogGeneration = 0;
+            static uint32_t failedLogGeneration = 0;
+            if (reticlePreparation ==
+                    AuthoredReticlePreparationResult::Ready &&
+                preparedLogGeneration != generation)
+            {
+                preparedLogGeneration = generation;
+                LOG("Reach crosshair: authored capture resources "
+                    "cold-prepared for generation %u", generation);
+            }
+            else if (reticlePreparation ==
+                         AuthoredReticlePreparationResult::Failed &&
+                     failedLogGeneration != generation)
+            {
+                failedLogGeneration = generation;
+                LOG("Reach crosshair: authored capture resource preparation "
+                    "FAILED; authored captures stay off this generation");
+            }
+        }
         const bool ready = preflight.Complete() &&
             ReachRenderCandidate_IsPreflightCurrent(preflight) &&
             VR_ReachDisplayReady(epoch) &&
