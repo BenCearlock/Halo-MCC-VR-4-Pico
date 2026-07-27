@@ -400,6 +400,8 @@ void ConfigSave()
     fprintf(f, "turn_smooth_deg_s = %.0f\n\n", g_config.turn_smooth_deg_s);
     fprintf(f, "# Hold this controller next to your head to use the left stick as D-pad:\n");
     fprintf(f, "# 0 = left controller, 1 = right controller.\n");
+    fprintf(f, "# While held, clicking the left stick presses the controller's\n");
+    fprintf(f, "# left centre button (Back/View) - ODST's map/objectives screen.\n");
     fprintf(f, "# (default %d)\n", d.dpad_hand);
     fprintf(f, "dpad_hand = %d\n\n", g_config.dpad_hand);
     fprintf(f, "# -------------------------------------------------------------------\n");

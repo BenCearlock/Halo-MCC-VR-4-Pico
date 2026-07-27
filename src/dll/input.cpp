@@ -178,6 +178,17 @@ namespace
             if (pad.moveY < -0.5f) btn |= XINPUT_GAMEPAD_DPAD_DOWN;
             if (pad.moveX > 0.5f) btn |= XINPUT_GAMEPAD_DPAD_RIGHT;
             if (pad.moveX < -0.5f) btn |= XINPUT_GAMEPAD_DPAD_LEFT;
+            // Left stick CLICK becomes the controller's left centre button
+            // (Back/View) while the D-pad gesture is held. ODST puts its map
+            // and objectives screen behind that button and VR players had no
+            // way to reach it. This is deliberately scoped to the gesture: the
+            // stick is already acting as a D-pad here, so its click has no
+            // other meaning, and normal play keeps L3 untouched.
+            if (pad.clickL && !chord.consumeClicks)
+            {
+                btn &= ~XINPUT_GAMEPAD_LEFT_THUMB;
+                btn |= XINPUT_GAMEPAD_BACK;
+            }
             state->Gamepad.wButtons = btn;
             // No walking while navigating.
             state->Gamepad.sThumbLX = 0;
