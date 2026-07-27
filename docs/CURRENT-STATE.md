@@ -513,6 +513,63 @@ code-first attempts missed it.
 - **Subtitles need a readable plane** (they are the interface text layer, not
   a CHUD widget - see below).
 
+### UNTESTED: Reach native pause state - 2026-07-27
+
+Installed on top of the accepted `716a635` state; does not advance the pointer.
+
+| Identity | Value |
+| --- | --- |
+| Candidate source | `bc74d6345fbf64a1ab6f1ffc6c9e07378a3fadfb` |
+| Candidate package | `out/candidates/bc74d63-reach-fp-parity-20260727-083725972Z` |
+| `halo3xr.dll` SHA-256 | `26A91813CDCA5D4A718E224DCA293AB5D5360CE1B59E11507996D769FA19A398` |
+| `halo3xr_launcher.exe` SHA-256 | `B32C0001F297465C0924E18A85126D0C01F5084FEDF3F9389CA49160BFBA66BF` (unchanged) |
+| Preserved previous install | `out/deploy-backups/b97ed6c-before-bc74d63-20260727-083726732Z` |
+| Installed hash verified separately | yes, matches the manifest |
+| Headset result | **PENDING** |
+
+**The flag was found by observing the running game, not by reading the binary.**
+`haloreach.dll+0x00C1A0E2`, 1 = paused, 0 = running. HREK names the system but
+cannot supply an address: `game_paused` is a registered debug variable whose
+value pointer is null even at runtime (function-backed, unlike
+`render_far_clip_distance`), and the owner is `c_start_menu_pause_component`
+- "Pauses the game while the component exists" - whose symbols are stripped
+from retail. Full derivation, including the exact 45-byte owner signature and
+why the bare store instruction (39 matches) is not usable on its own, is in
+`docs/REACH-SIGNATURE-EVIDENCE.md`.
+
+Three independent lines agree: a read-only writable-page differential across
+three paused and two unpaused captures at different places in the level (2175
+boolean survivors); a code-reference filter over 23 rip-relative byte-access
+forms that reduced those 2175 to **four**, of which this one has one writer and
+eight readers spread through the engine; and a 10 Hz live watch during a
+five-second pause cadence that produced six clean alternating transitions
+4.9-6.2 s apart and eliminated the other three.
+
+**Behavior follows Halo 3, deliberately not ODST.** Halo 3 flips presentation
+and keeps its camera core armed. ODST tears the core down for Save & Quit
+safety, and that is exactly what produced its slow-rearm defect. Reach now
+publishes `RuntimeMode::Paused`, requests head-locked 2D on the pause edge,
+restores stereo on unpause, and keeps the core armed throughout. The armed-core
+locomotion fallback in `Game_MoveStickIsLocomotion` honours pause as well -
+without that it would keep answering "locomotion" during the menu and the
+original stick defect would survive the fix.
+
+Fail-open in every branch: missing, ambiguous, out-of-range or non-boolean
+results log once and leave Reach exactly as it behaved before (always
+`Gameplay` while armed). It never blocks arming and never disarms the camera
+core. Disarm and title-exit both clear the override so a 2D presentation cannot
+be stranded across a transition. Halo 3 and ODST are untouched.
+
+`tools/check-reach-fp-parity.ps1` rejects "optional Reach CHUD hook target
+publication" identically on clean `e748aef`, so that rejection is pre-existing
+and unrelated to this candidate.
+
+Acceptance: in Reach, pausing switches to the flat head-locked view and
+unpausing returns to stereo; the left stick navigates the pause menu instead of
+walking; and Halo 3 + ODST pause behaviour is unchanged. Log lines to expect:
+`Reach pause state: native flag at haloreach.dll+0xC1A0E2` once per level, then
+`Reach pause presentation: native pause entered/exited` per pause.
+
 ## Superseded baseline: authored crosshairs on all three titles - 2026-07-27
 
 **This is the current working baseline.** Halo 3, ODST and Halo: Reach all
