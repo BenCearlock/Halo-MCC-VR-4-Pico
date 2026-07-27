@@ -14226,13 +14226,27 @@ namespace
                     odstHooked = false;
                     if (reason == OdstFallbackReason::UnsupportedCameraMode)
                     {
-                        // Menus and other unproven camera modes can briefly
-                        // resemble an unload/reload without ODST ever leaving.
-                        // Never reinstall behind them in the same title session.
-                        odstRearmGate.BlockUntilTitleExit();
+                        // A menu is a temporary camera mode, not the end of the
+                        // session. Blocking until title exit meant opening
+                        // ODST's menu once permanently killed VR: presentation
+                        // still flipped back to stereo when the menu closed,
+                        // but the camera core stayed torn down behind it, so
+                        // the player was left in a hollow 3D that never
+                        // recovered without leaving the title.
+                        //
+                        // The original concern - that a menu can briefly
+                        // resemble an unload/reload and must not be reinstalled
+                        // behind - is handled by the same gate level
+                        // transitions already use. It requires the camera to be
+                        // observed NOT ready and then ready again, which only
+                        // happens once the menu is gone and gameplay has
+                        // resumed, so the core cannot come back while the menu
+                        // is still up.
+                        odstRearmGate.BlockUntilReload(
+                            cameraReadyBeforeRemoval);
                         odstAttempted = true;
-                        LOG("ODST camera rearm blocked until title exit after "
-                            "unsupported/menu camera mode");
+                        LOG("ODST camera rearm blocked until gameplay resumes "
+                            "after unsupported/menu camera mode");
                     }
                     else if (reason == OdstFallbackReason::NativePause)
                     {
