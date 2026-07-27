@@ -13399,17 +13399,24 @@ namespace
                 fpCamera,
                 reinterpret_cast<void*>(&ReachFpCameraRebuildDetour),
                 reinterpret_cast<void**>(&g_reachOrigFpCameraRebuild)) == MH_OK;
-        // Attempted only after the mandatory chain succeeds, and its result
-        // never feeds the mandatory-failure check below: a bad address or a
-        // failed create here must leave Reach's stereo/hands/HUD exactly as
-        // working as they are today, with only the crosshair staying stock.
-        const bool hudDrawWidgetCreated = fpCameraCreated && MH_CreateHook(
-                hudDrawWidget,
-                reinterpret_cast<void*>(&ReachHudDrawWidgetDetour),
-                reinterpret_cast<void**>(&g_reachOrigHudDrawWidget)) == MH_OK;
-        if (fpCameraCreated && !hudDrawWidgetCreated)
-            LOG("Reach crosshair: chud_draw_widget hook create failed; "
-                "native crosshair stays visible, nothing else affected");
+        // DISABLED 2026-07-27: headset test crashed haloreach.dll seconds
+        // after this hook armed (Windows Application log: exception
+        // 0xC0000005 in haloreach.dll at +0x2ED80C, ~5s after "chud_draw_widget
+        // hook active" logged). The fault address is far from both this hook
+        // (0x2DA364) and player_view_render, consistent with state corruption
+        // manifesting downstream rather than a bad call at the hook site
+        // itself - most likely either a marshalling mismatch against the real
+        // argument widths (the hook signature narrows arg3/arg4 to 16/8 bits;
+        // the real function may pass wider values) or VR_BeginAuthoredReticleCapture
+        // touching D3D state this call site does not expect, since neither
+        // that function nor this exact address had ever executed before this
+        // test. The three-way static match (proven caller, matching argument
+        // shape, matching class-byte read) was real evidence but was not
+        // sufficient to prove runtime safety. Do not re-enable without either
+        // instrumenting the crash directly or finding a different, safer
+        // verification path; kReachHudDrawWidgetRva and the address-finding
+        // method remain valid and documented for that next attempt.
+        const bool hudDrawWidgetCreated = false;
         if (!innerCreated || !outerCreated ||
             !fpInterpolateCreated || !fpPaletteCreated || !fpCameraCreated)
         {
