@@ -11411,8 +11411,35 @@ namespace
         return true;
     }
 
+    // DISABLED 2026-07-27 - this was destroying the art it was meant to
+    // complement. It zeroes the crosshair's OWN alpha/fade-target/fade-duration
+    // record every admitted frame. Reach's CHUD then has a fully faded-out
+    // crosshair, and once an objective event makes it re-evaluate that fade
+    // state it stops emitting the widget at all: the headset log shows
+    // "no class-2 crosshair widget drawn for 2s - the engine stopped emitting
+    // it" with unreadable descriptors 0 and rejects 0, and no recovery line
+    // afterwards. No class-2 draw means nothing to capture, so the authored
+    // quad stops being submitted and the player's crosshair disappears for
+    // the rest of the session. That is the reported "every time an objective
+    // is given, the crosshair disappears".
+    //
+    // It is also redundant. The render-target redirect is what keeps Reach's
+    // flat crosshair off the eye, proven by `crosshair=0` (headset confirmed
+    // 2026-07-27): there the redirect runs with no alpha write at all and no
+    // flat crosshair appears. Suppressing the widget through the engine's own
+    // fade fields was only ever a second belt on top of that, and it costs the
+    // capture source.
+    //
+    // Kept compiled and callable rather than deleted, per the revert rule: if
+    // a future headset test ever shows the flat crosshair leaking through the
+    // redirect, re-enabling this is one line - but fix the leak in the
+    // redirect first, because this write cannot be made safe.
+    constexpr bool kReachSuppressNativeCrosshairAlpha = false;
+
     void SuppressReachNativeCrosshair()
     {
+        if (!kReachSuppressNativeCrosshairAlpha)
+            return;
         if (!g_config.crosshair || !g_config.kill_reticle)
             return;
         if (!g_reachChudTlsIndex)
