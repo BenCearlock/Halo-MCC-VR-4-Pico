@@ -10475,12 +10475,6 @@ namespace
                 // the CaptureAuthored action: the art is captured through the
                 // Suppress path as well, which is why the key stayed 0 and the
                 // skip never engaged.
-                ReachFpCameraEyeScope& scope = g_reachFpCameraEyeScope;
-                scope.captureKey = FoldAuthoredCrosshairKey(
-                    scope.captureKey, widgetIndex, useAlternatePath);
-                g_authoredCrosshairKeyAccum = scope.captureKey;
-                g_authoredCrosshairKey.store(
-                    scope.captureKey, std::memory_order_release);
             }
             if (hideFromEye)
             {
@@ -10494,7 +10488,34 @@ namespace
                 // refusal put the flat stock crosshair back on the eye for
                 // players who asked for none.
                 if (VR_BeginAuthoredReticleRedirect())
+                {
                     captureStarted = true;
+                    // Fold this widget's identity in AFTER the redirect
+                    // begins, never before. Beginning a redirect on a new
+                    // displayed frame is what CLEARS the capture surface and
+                    // resets the per-frame key (see the serial check in
+                    // BeginAuthoredReticleCaptureInternal). Folding first
+                    // published a key describing content, and the clear then
+                    // wiped the surface underneath it - so the key no longer
+                    // described what the surface held, and the compositor
+                    // could publish a blank or partial image over good art.
+                    // That is the crosshair vanishing across a
+                    // cinematic -> gameplay -> objective transition, where
+                    // frames legitimately begin capturing in a different
+                    // order. Folding here means the key is only ever built
+                    // from widgets that actually reached the surface, on the
+                    // surface that survived the clear.
+                    if (isCrosshairClass)
+                    {
+                        ReachFpCameraEyeScope& scope =
+                            g_reachFpCameraEyeScope;
+                        scope.captureKey = FoldAuthoredCrosshairKey(
+                            scope.captureKey, widgetIndex, useAlternatePath);
+                        g_authoredCrosshairKeyAccum = scope.captureKey;
+                        g_authoredCrosshairKey.store(
+                            scope.captureKey, std::memory_order_release);
+                    }
+                }
                 else
                     ReportReachRedirectUnavailable();
             }
