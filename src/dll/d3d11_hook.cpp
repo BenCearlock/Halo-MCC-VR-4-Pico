@@ -612,18 +612,18 @@ static void STDMETHODCALLTYPE OMSetRenderTargetsHook(ID3D11DeviceContext* contex
 static std::atomic<int> g_reachDrawSamplesTaken{0};
 constexpr int kReachDrawSampleBudget = 12;
 
-// The first 64-sample pass (2026-07-26) found the real signature: a run of
-// three sequential quads (indexCount==6, baseVertex 0/4/8, stride 40) at the
-// full-resolution viewport, distinct from a stride-32 mip/blur chain that
-// shrinks through power-of-two sizes. This pass narrows to exactly that shape
-// and reads the actual vertex bytes back (via a CPU-readable staging copy -
-// standard, safe, read-only; the draw call itself is untouched) instead of
-// only the buffer's stride, to see the real screen-space coordinates instead
-// of inferring them.
+// The first 64-sample pass (2026-07-26) found two distinct full-viewport
+// index-count-6 shapes: stride 40 and stride 24, plus an unrelated stride-32
+// mip/blur chain that shrinks through power-of-two sizes (not sampled here).
+// The stride-40 shape was sampled next and its vertices proved to be an exact
+// (0,0)-(1,1) UV quad spanning the FULL screen corner to corner in every
+// sample - a full-screen post-process/compositor pass, not the HUD. This pass
+// switches to the stride-24 shape, the other untried candidate from the same
+// original sweep, and reads its real vertex bytes the same way.
 static bool IsProvenHudQuadShape(
     UINT indexCount, UINT stride, const D3D11_VIEWPORT& vp, float backbufferW)
 {
-    return indexCount == 6 && stride == 40 &&
+    return indexCount == 6 && stride == 24 &&
         vp.Width >= backbufferW - 1.0f;
 }
 
