@@ -3259,6 +3259,29 @@ int main()
         Check(interruptedDebounce.Update(4001, true),
             "only a continuous fresh-camera interval arms ODST after reset");
 
+        // ODST's camera tail boolean toggles about ten times a second during
+        // ordinary play. Restarting the interval on each toggle meant the
+        // camera armed only when it caught a lucky quiet gap, which is why
+        // arming was slow and a quick pause/unpause often never re-armed.
+        OdstFreshCameraDebounce flickerDebounce;
+        Check(!flickerDebounce.Update(1000, true),
+            "the flicker-tolerant debounce still requires a stability interval");
+        Check(!flickerDebounce.Update(1100, false) &&
+                  !flickerDebounce.Update(1200, true) &&
+                  !flickerDebounce.Update(1300, false) &&
+                  !flickerDebounce.Update(1400, true),
+            "a 100ms tail toggle does not arm ODST early");
+        Check(flickerDebounce.Update(2001, true),
+            "a flickering tail no longer restarts the interval, so ODST arms "
+            "one second after the camera first became fresh");
+
+        OdstFreshCameraDebounce sustainedLossDebounce;
+        Check(!sustainedLossDebounce.Update(1000, true) &&
+                  !sustainedLossDebounce.Update(1400, false),
+            "a gap beyond the tolerance is a genuine camera loss");
+        Check(!sustainedLossDebounce.Update(2001, true),
+            "a genuine loss still restarts the full stability interval");
+
         Check(EvaluateOdstHeartbeat(1700, 1000, 0, false, false) ==
                   OdstHeartbeatAction::None,
             "ODST tolerates a short delay before its first heartbeat");

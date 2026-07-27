@@ -7,6 +7,13 @@ constexpr uint64_t kOdstCameraFreshMs = 500;
 constexpr uint64_t kOdstCameraSoftTimeoutMs = 750;
 constexpr uint64_t kOdstCameraHardTimeoutMs = 5000;
 constexpr uint64_t kOdstCameraStableMs = 1000;
+// ODST's camera tail boolean toggles roughly every 100ms during ordinary play
+// (observed live: tail=[0,1,0,0,0,0,0,0] alternating with
+// tail=[0,1,0,0,0,0,0,1] about ten times a second). A single not-fresh poll is
+// therefore normal engine behaviour, not a lost camera. Gaps shorter than this
+// do not restart the stability interval; anything longer is a genuine loss - a
+// pause, a level unload or a title exit - and does.
+constexpr uint64_t kOdstCameraFreshGapToleranceMs = 350;
 // Native-pause REINSTALL debounce (stage 1). A pause returns to the exact camera
 // the hooks were just removed from -- not a fresh level -- so the reinstall gate
 // does not need the full fresh-level stability interval. The real arm-safety guard
@@ -265,21 +272,41 @@ class OdstFreshCameraDebounce
 public:
     bool Update(uint64_t now, bool cameraFresh)
     {
-        if (!cameraFresh)
+        if (cameraFresh)
         {
-            m_freshSince = 0;
-            return false;
+            m_lastFreshMs = now;
+            if (!m_freshSince)
+                m_freshSince = now;
         }
-        if (!m_freshSince)
-            m_freshSince = now;
-        return now >= m_freshSince &&
+        else
+        {
+            // Restarting on every not-fresh poll meant the interval could
+            // never complete while the tail boolean toggled, so ODST armed
+            // only when it happened to catch a lucky quiet gap - slow, and
+            // frequently never at all after a quick pause and unpause.
+            const bool briefGap = m_lastFreshMs != 0 &&
+                now >= m_lastFreshMs &&
+                now - m_lastFreshMs <= kOdstCameraFreshGapToleranceMs;
+            if (!briefGap)
+            {
+                m_freshSince = 0;
+                m_lastFreshMs = 0;
+                return false;
+            }
+        }
+        return m_freshSince != 0 && now >= m_freshSince &&
             now - m_freshSince > kOdstCameraStableMs;
     }
 
-    void Reset() { m_freshSince = 0; }
+    void Reset()
+    {
+        m_freshSince = 0;
+        m_lastFreshMs = 0;
+    }
 
 private:
     uint64_t m_freshSince = 0;
+    uint64_t m_lastFreshMs = 0;
 };
 
 // A level-unload fallback must not accept the same stale camera bytes as a
