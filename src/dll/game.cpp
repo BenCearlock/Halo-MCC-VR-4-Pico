@@ -10268,7 +10268,7 @@ namespace
             {
                 // The magnified world-only scope picture must not receive a
                 // native CHUD widget, but the call still has to happen.
-                if (VR_BeginPreparedAuthoredReticleCapture())
+                if (VR_BeginAuthoredReticleCapture())
                     captureStarted = true;
                 original(userIndex, descriptor, widgetIndex,
                          useAlternatePath, drawState);
@@ -10298,7 +10298,7 @@ namespace
                 isCrosshairClass)
             {
                 // Already-failed eye: hide the widget, but never skip the call.
-                if (VR_BeginPreparedAuthoredReticleCapture())
+                if (VR_BeginAuthoredReticleCapture())
                     captureStarted = true;
                 original(userIndex, descriptor, widgetIndex,
                          useAlternatePath, drawState);
@@ -10337,7 +10337,7 @@ namespace
                 RejectReachChudParityForCurrentEye();
             if (hideFromEye)
             {
-                if (VR_BeginPreparedAuthoredReticleCapture())
+                if (VR_BeginAuthoredReticleCapture())
                     captureStarted = true;
                 else
                     // The redirect IS the mechanism. If it is unavailable
