@@ -610,7 +610,7 @@ static void STDMETHODCALLTYPE OMSetRenderTargetsHook(ID3D11DeviceContext* contex
 // is the most direct way left to find that path without disassembling more
 // of a stripped optimized binary blind.
 static std::atomic<int> g_reachDrawSamplesTaken{0};
-constexpr int kReachDrawSampleBudget = 12;
+constexpr int kReachDrawSampleBudget = 200;
 
 // The first 64-sample pass (2026-07-26) found two distinct full-viewport
 // index-count-6 shapes: stride 40 and stride 24, plus an unrelated stride-32
