@@ -513,6 +513,35 @@ code-first attempts missed it.
 - **Subtitles need a readable plane** (they are the interface text layer, not
   a CHUD widget - see below).
 
+### ACCEPTED: Reach muzzle flash on the gun - 2026-07-27 NEW REACH BASELINE
+
+Headset confirmed: "Oh, you fixed it, dude. This is our new baseline."
+
+| Identity | Value |
+| --- | --- |
+| Accepted source | `b942078c9870509db53ebb5de5dc7d0f32a22a75` |
+| `halo3xr.dll` SHA-256 | `F3CFF979E86A8C9AA12492C7ED29C027CCBFE5B749722F56E62C4799FE47655A` |
+| Branch | `reach/frame-skip` |
+
+The face-stuck muzzle flash was first-person-only particle systems authored on
+non-majority markers. Six weapons were affected (assault_rifle, dmr, needler,
+sniper_rifle, spartan_laser, spike_rifle); the fix rewrites each odd system's
+location u16 in the LOADED tag onto the majority marker (primary_trigger,
+index 0 in all six), per weapon as the player picks it up, restored on
+teardown. Decode chain read from the engine's own emission gate 0x001D4DB4;
+handle table/pool resolved from a unique 20-byte signature. No IK, no bones,
+no code patch. Log proof: "Reach muzzle: RETARGETED ...".
+
+The road there is preserved in this file and the commit history: the proof
+that both flashes are camera-mode-1 systems (a4a2ed4), the eliminations
+(effect-location resolver, CHUD widgets, mode-2 systems, lights), and the
+disabled experiments behind constexpr-false flags.
+
+Outstanding after this baseline: Halo 3 + ODST regression (many new Reach
+hooks since last check); bullets/crosshair-vs-gun-mesh verification pass
+(user-requested, no IK translation); rain (deferred known bug); spartan laser
+side-vent steam now at the muzzle (cosmetic, exempt on request).
+
 ### ACCEPTED: Reach character tags and objective markers off the hand - 2026-07-27
 
 Headset confirmed: "you actually fixed the character tags and objective
