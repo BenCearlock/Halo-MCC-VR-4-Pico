@@ -8064,7 +8064,23 @@ void VR_InvalidatePreparedReachAuthoredReticleCapture()
 
 static bool BeginAuthoredReticleCaptureInternal(bool requirePreparedResources)
 {
-    if (!g_context || !g_config.crosshair ||
+    // `crosshair=0` means "do not show a VR crosshair", and for Halo 3/ODST
+    // refusing here is the whole implementation: they hide their native
+    // reticle through a separate visibility predicate, so declining the
+    // redirect simply leaves stock drawing alone.
+    //
+    // Reach has no such predicate. This redirect IS its only way to keep a
+    // widget off the eye, so refusing it for `crosshair=0` made every
+    // Suppress draw look like capture-target loss to the Reach hook, which
+    // disarms the camera core and tears down all six hooks: turning the
+    // crosshair off killed VR for the whole session. The prepared (Reach)
+    // path therefore stays available regardless of the setting; whether the
+    // captured art is ever shown is decided separately by the compositor,
+    // which still requires g_config.crosshair before uploading or submitting
+    // the quad. So `crosshair=0` in Reach now does exactly what it says:
+    // no crosshair drawn anywhere, VR untouched.
+    if (!g_context ||
+        (!requirePreparedResources && !g_config.crosshair) ||
         !g_stereoEnabled.load(std::memory_order_relaxed) ||
         !g_preparedFrame.begun || g_reticleCaptureState.active)
         return false;

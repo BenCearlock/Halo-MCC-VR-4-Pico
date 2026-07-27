@@ -10262,8 +10262,23 @@ namespace
             g_reachFpCameraEyeScope.generation == cameraGeneration;
     }
 
+    // REACHHUD diagnostic counters. The CHUD hook is a hot hook, so it only
+    // bumps atomics here; every log line is emitted by the 50 ms worker.
+    // Purpose: the 2026-07-27 session lost the VR crosshair mid-level, and the
+    // user's observation ties it to on-screen objective text. These separate
+    // the three candidate mechanisms - the engine stops drawing class-2
+    // widgets, the collection descriptor stops being readable (which rejects
+    // the transaction), or the art key churns and republishes different art -
+    // instead of guessing between them.
+    std::atomic<uint64_t> g_reachChudLastClass2Ms{0};
+    std::atomic<uint32_t> g_reachChudClass2Draws{0};
+    std::atomic<uint32_t> g_reachChudUnreadable{0};
+    std::atomic<uint32_t> g_reachChudRejects{0};
+    std::atomic<uint8_t> g_reachChudLastUnreadablePath{0};
+
     void RejectReachChudParityForCurrentEye() noexcept
     {
+        g_reachChudRejects.fetch_add(1, std::memory_order_relaxed);
         g_reachFpCameraEyeScope.chudParityFailed = true;
         g_reachChudParityFailedGeneration.store(
             g_reachCamera.generation, std::memory_order_release);
@@ -10333,6 +10348,25 @@ namespace
                 resolvedClass == kReachChudCrosshairScriptingClass;
             if (ownsStereo && isCrosshairClass)
                 g_reachFpCameraEyeScope.chudClass2Seen = true;
+            // REACHHUD: atomics only, no logging on this hot hook.
+            if (ownsStereo)
+            {
+                if (isCrosshairClass)
+                {
+                    g_reachChudClass2Draws.fetch_add(
+                        1, std::memory_order_relaxed);
+                    g_reachChudLastClass2Ms.store(
+                        GetTickCount64(), std::memory_order_relaxed);
+                }
+                else if (!descriptorReadable)
+                {
+                    g_reachChudUnreadable.fetch_add(
+                        1, std::memory_order_relaxed);
+                    g_reachChudLastUnreadablePath.store(
+                        static_cast<uint8_t>(useAlternatePath & 0xFFu),
+                        std::memory_order_relaxed);
+                }
+            }
 
             const int stereoEye =
                 g_stereoEye.load(std::memory_order_relaxed);
@@ -10396,7 +10430,12 @@ namespace
             }
             if (hideFromEye)
             {
-                if (VR_BeginAuthoredReticleCapture())
+                // Prepared entry, matching the End below: Reach's resources
+                // are cold-prepared by the worker, so the hot hook never
+                // allocates. This was calling the lazy entry, which both
+                // broke that rule and refused whenever crosshair=0 - and the
+                // refusal below tore the whole transaction down.
+                if (VR_BeginPreparedAuthoredReticleCapture())
                     captureStarted = true;
                 else
                     // The redirect IS the mechanism. If it is unavailable
@@ -10732,6 +10771,7 @@ namespace
     // the worker's confirmation log line.
     std::atomic<bool> g_reachCineCutRealign{false};
     std::atomic<uint32_t> g_reachCineCutCount{0};
+
 
     bool ReachApplyHeadLook(
         unsigned char* cam, const ReachVrRenderSnapshot& tracking)
@@ -14256,6 +14296,73 @@ namespace
         }
     }
 
+    // REACHHUD reporter. Runs on the 50 ms worker and states, in plain terms,
+    // whether Reach is still drawing crosshair widgets, whether descriptors
+    // went unreadable, and what the published art key is doing. One line per
+    // state change; silent while healthy.
+    void ReachChudDiagnosticTick(uint64_t now)
+    {
+        if (!g_reachCamera.armed.load(std::memory_order_acquire))
+            return;
+        static bool class2Present = true;
+        static uint32_t reportedUnreadable = 0;
+        static uint32_t reportedRejects = 0;
+        static uint64_t lastKeyLogMs = 0;
+        static uint64_t loggedKey = 0;
+
+        const uint64_t lastClass2 =
+            g_reachChudLastClass2Ms.load(std::memory_order_relaxed);
+        // Reach legitimately drops the crosshair briefly (reload, melee), and
+        // the published art is deliberately held across those gaps. Two
+        // seconds without a single class-2 draw is a different thing: the
+        // engine stopped emitting the widget entirely, which is what the
+        // player sees as "the crosshair disappeared".
+        const bool present = lastClass2 != 0 && now >= lastClass2 &&
+            now - lastClass2 < 2000;
+        if (present != class2Present)
+        {
+            class2Present = present;
+            if (present)
+                LOG("REACHHUD: crosshair widgets are drawing again "
+                    "(%u class-2 draws total)",
+                    g_reachChudClass2Draws.load(std::memory_order_relaxed));
+            else
+                LOG("REACHHUD: no class-2 crosshair widget drawn for 2s - the "
+                    "engine stopped emitting it; published art is being held "
+                    "(unreadable descriptors %u, rejects %u)",
+                    g_reachChudUnreadable.load(std::memory_order_relaxed),
+                    g_reachChudRejects.load(std::memory_order_relaxed));
+        }
+
+        const uint32_t unreadable =
+            g_reachChudUnreadable.load(std::memory_order_relaxed);
+        if (unreadable != reportedUnreadable && now - lastKeyLogMs >= 2000)
+        {
+            reportedUnreadable = unreadable;
+            lastKeyLogMs = now;
+            LOG("REACHHUD: %u CHUD collection descriptors unreadable "
+                "(last alternate-path flag %u) - those draws stayed stock",
+                unreadable,
+                g_reachChudLastUnreadablePath.load(std::memory_order_relaxed));
+        }
+        const uint32_t rejects =
+            g_reachChudRejects.load(std::memory_order_relaxed);
+        if (rejects != reportedRejects)
+        {
+            reportedRejects = rejects;
+            LOG("REACHHUD: %u eye transactions rejected by the CHUD path",
+                rejects);
+        }
+        const uint64_t key =
+            g_reachAuthoredCrosshairKey.load(std::memory_order_relaxed);
+        if (key != loggedKey)
+        {
+            loggedKey = key;
+            LOG("REACHHUD: published crosshair art key -> %016llX",
+                static_cast<unsigned long long>(key));
+        }
+    }
+
     // 50 ms worker: publish what the engine-thread sampler saw. All logging
     // lives here, off the render path, throttled to 250 ms bursts.
     void ReachCineProbeLogTick()
@@ -14315,6 +14422,7 @@ namespace
             LOG("Reach cutscene facing: realigned to the authored camera "
                 "(cut %u)", cutCount);
         }
+        ReachChudDiagnosticTick(now);
 
         uint32_t copyA[kReachCineMemberADwords];
         uint32_t copyB[kReachCineMemberBDwords];
