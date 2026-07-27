@@ -299,7 +299,20 @@ not assumed stable or equal. The hook copies each untouched graph before
 rigidly applying the right-wrist delta to its live marker/muzzle/attachment
 source, bounded to 120. Visible palettes never consume that mutation.
 
-The same `0x121083` caller is `first_person_weapon_get_marker`, entry
+**CORRECTION (2026-07-27): the name below is wrong.** `haloreach.dll+0x120FDC`
+is NOT `first_person_weapon_get_marker`. It is a bool-taking wrapper whose
+non-first-person path is literally `call 0x120EC4` at `0x1210BE`, and it has
+**exactly one caller** (`0x11BFDC`) - so the previously recorded claim that
+"both consumers reach it" is also false. The effect-location node-matrix
+resolver is `haloreach.dll+0x00120EC4-0x00120FD8`, the instruction-for-
+instruction homolog of HREK `0x36AB70-0x36ACF3` (identified by HREK's own
+`effects.cpp` asserts at lines 7630/7638/7649/7650). `0x120FDC`'s
+first-person path is that getter inlined. Do not adopt a replacement name:
+"get_marker" is not HREK's own name for `0x8CEF90` either. The address, entry
+bounds and signature below are correct and were re-measured unique; only the
+label was wrong.
+
+The same `0x121083` caller, entry
 `haloreach.dll+0x120FDC` through `+0x1210D3`. Its exact entry signature is:
 
 ```text

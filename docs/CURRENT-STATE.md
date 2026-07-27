@@ -989,6 +989,14 @@ at the weapon object's marker. Reach's sim weapon is still wholly stock and
 head-anchored in this build, so a world-space muzzle effect is emitted at the
 player's head: exactly the reported face-stuck flash.
 
+**CORRECTED 2026-07-27 - the label and the "both consumers" claim below are
+both wrong.** `haloreach.dll+0x120FDC` is a bool-taking wrapper with exactly
+ONE caller (`0x11BFDC`); its non-first-person path just calls `0x120EC4`. The
+real effect-location resolver is `0x00120EC4-0x00120FD8`, the homolog of HREK
+`0x36AB70` (HREK `effects.cpp` asserts 7630/7638/7649/7650). See the correction
+in `docs/REACH-SIGNATURE-EVIDENCE.md`. Retained below only as the historical
+text.
+
 The marker query both consumers reach is already proven:
 `first_person_weapon_get_marker`, `haloreach.dll+0x120FDC` through
 `+0x1210D3`, ABI
@@ -1007,12 +1015,48 @@ The user's exact requirements for the remaining HUD work, stated 2026-07-27:
   hand ("two parents"): correct while aiming at the character, warping as the
   hand moves away. This is the shape of a projection consuming the
   first-person/weapon camera while the world renders from the head camera.
-  Related open evidence: HREK `chud_navpoints.cpp` (20 entries, stride
-  `0x88`, `position_worldspace` at `+0x3C`), retail `ai_add_navpoint` ->
-  `+0x1A1A7C` -> worker `+0x6C2E68` reached via TLS slot `+0x30`; the FP
-  nested camera workspace is `haloreach+0x00CFAC20` (compact `+0`, derived
-  `+0x1E4`). The needed fact is which camera/workspace the CHUD 3D
-  projection actually reads - determine it, do not assume it.
+  **SOLVED 2026-07-27 - and the cause is our own code, not the engine.**
+  The needed fact was determined rather than assumed, and the answer refutes
+  the FP-workspace theory that used to sit here.
+
+  The CHUD world-to-screen projection is retail `haloreach.dll+0x002E1430`
+  (bounds `0x2E1430-0x2E1A69`), homolog of HREK `0x0092D980`. It reads
+  `observer[user].camera` - TLS block `+0x688`, `observerGlobals + 0x154 +
+  user*0x410` - and this is a genuine READ, not an ordering inference: the
+  camera it builds is consumed by the screen math itself at `0x2E1567`,
+  `0x2E1574`, `0x2E1595` (world point minus camera position) before
+  `0x288C10`. A full operand scan of the function finds 21 rip-relative
+  operands over 14 distinct globals and **zero** references to
+  `kReachActiveView`, either camera-stack global, the FP camera workspace, the
+  default workspace, the player-view array, the FP view, or the render-camera
+  owner. The old "it inherits whatever first-person work left current" theory
+  is DEAD - do not rebuild on it.
+
+  **Stock Reach has exactly ONE parent.** `0x00287DFC`
+  (`render_camera_from_observer_camera`) feeds BOTH the world render camera
+  (called `0x0026C2D9`) and the CHUD projection camera (called `0x002E1520`)
+  from the same `observer[user].camera`.
+
+  **We are what splits it.** `Game_ComputeAimStick` drives Reach's sim/observer
+  camera onto the right-controller ray, while `ReachBuildHeadCullCamera`
+  applies head-look to a PRIVATE copy installed render-side only ("Read-only:
+  `stockCompact` is never modified"). World renders from the head; markers
+  project from the hand. Halo 3 and ODST do not have this bug because both
+  apply head-look INSIDE their camera-copy hook and never restore the source -
+  see the load-bearing comment at `game.cpp:5067-5073`, "Do not scope this
+  write again." Reach has no camera-copy hook at all; its heartbeat is
+  synthesised in the present path.
+
+  **Why no fix has shipped yet: scope.** HREK's `chud_anchor_type_enum`
+  (`0x01870CC0`) puts `<campaign fireteam member>` and the objective anchors in
+  the same world-object anchor group as `backpack weapon`, `grenade`, `weapon
+  target`, `ghost reticule`, `hologram target`, `airstrike target` and
+  `lasing target object`. One fix moves every object-anchored widget, not just
+  tags and objectives, which conflicts with the user's exclusive requirement.
+  (`motion sensor` is a screen anchor and is genuinely unaffected.) A
+  `REACHPROJ` log-only probe is the next step; the decisive question it answers
+  is whether any class-2 crosshair widget reaches `0x2E1430`, because the
+  headset-accepted crosshair depends on it.
 - **BOTH muzzle flash elements must follow the HAND.** There are two. One
   already tracks the controller-held gun correctly and must not be disturbed;
   the second is stuck at the player's face. The requirement is to move the
