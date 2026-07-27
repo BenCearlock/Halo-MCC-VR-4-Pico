@@ -4106,6 +4106,21 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
         if (g_reticleContainsAuthored && authoredCaptureRecent)
             return true;
 
+        // Once the swapchain holds real authored art, LEAVE IT ALONE. For a
+        // title that captures its crosshair, repainting can only ever destroy
+        // that art - it paints the procedural reticle, which for these titles
+        // is fully transparent, so the crosshair simply vanishes until the next
+        // upload restores it. That is the flashing, and the repaint is also
+        // pure per-frame cost for something that does not change.
+        //
+        // Reach legitimately stops drawing its crosshair during reloads, melee
+        // and similar, which made the old grace window expire and wipe the art
+        // mid-fight. Holding the last art is both correct and free; a genuine
+        // change (weapon swap, zoom, colour) re-uploads through the key path.
+        const bool titleCapturesAuthoredArt = !Game_IsCameraOnlyBringup();
+        if (g_reticleContainsAuthored && titleCapturesAuthoredArt)
+            return true;
+
         // Halo can stop drawing its authored widget during death and other
         // non-gameplay states. Keep the old procedural fallback fully
         // transparent so it cannot appear close to the viewer; authored
@@ -6331,9 +6346,14 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
                         // content; the frame gap keeps the cost bounded. A
                         // steady low-rate refresh also keeps state changes
                         // (enemy/friendly colour, zoom) live.
-                        (void)reachKeyUnchanged;
+                        // Steady state does no upload at all: the art only
+                        // changes on a weapon swap, zoom or reticle-state
+                        // change, and the key changes with it. The frame gap
+                        // remains only as a floor so a churning key can never
+                        // reintroduce a per-frame blocking swapchain wait.
                         const bool reachArtAlreadyPublished =
-                            reachUploadTooSoon || reachCaptureEmpty;
+                            reachCaptureEmpty || reachKeyUnchanged ||
+                            reachUploadTooSoon;
                         const bool shouldUploadAuthoredReticle =
                             authoredReticleThisFrame && reticleUploadAdmitted &&
                             !reachArtAlreadyPublished;
