@@ -10564,6 +10564,12 @@ namespace
         BoneMatrix moved{};
     };
     ReachWeaponAnchor g_reachWeaponAnchor;
+    // Set when this palette call produced a controller-aligned weapon, so the
+    // post-compose write knows there is something valid to publish into the
+    // engine's live skeleton.
+    thread_local bool g_reachWeaponAnchorPending = false;
+    thread_local BoneMatrix g_reachWeaponAnchorMoved{};
+    std::atomic<uint32_t> g_reachLiveGraphWeaponWrites{0};
 
     void ReachPublishWeaponAnchor(
         const BoneMatrix& stock, const BoneMatrix& moved, uint32_t generation)
@@ -13302,6 +13308,11 @@ namespace
                         context.targets.centerRoot, alignedRight,
                         g_reachCamera.generation);
                 }
+                if (ReachBoneMatrixFinite(alignedRight))
+                {
+                    g_reachWeaponAnchorMoved = alignedRight;
+                    g_reachWeaponAnchorPending = true;
+                }
                 const bool reconstructed=ReconstructVisiblePaletteSource(
                     tag,fp,*root,source,replacement,&targets,
                     context.untouchedLive);
@@ -13378,6 +13389,39 @@ namespace
         }
         if (original)
             original(tag,root,destination,unused,selectedSource,boneMap);
+
+        // Put the moved weapon into the ENGINE'S OWN skeleton, after the
+        // visible gun has already been composed from g_fpPaletteScratch.
+        //
+        // This is the piece that was missing. Everything above writes the
+        // controller-aligned weapon into a scratch buffer and hands only that
+        // to the renderer, so the gun the player sees is correct while the
+        // engine's live bones still hold the weapon at the player's body.
+        // Anything that samples the real skeleton afterwards - the muzzle
+        // flash particle among them - therefore spawns at the head.
+        //
+        // Proven, not assumed: the effect LOCATION matrix was re-parented 11,913
+        // times at a measured 17 mm from the player's head and the flash did not
+        // move (candidate 4d837d1). So the particle does not read that matrix;
+        // it reads the skeleton. Writing the moved wrist back into the live
+        // graph is what makes the skeleton agree with what is on screen.
+        //
+        // Safe to write after the compose call: the visible palette has already
+        // been produced, and the engine rebuilds this graph from animation every
+        // frame, so nothing accumulates.
+        if (g_reachWeaponAnchorPending &&
+            context.layout.rightWristSource >= 0 &&
+            context.layout.rightWristSource < context.liveSourceCount &&
+            context.source)
+        {
+            SafeWriteBytes(
+                const_cast<BoneMatrix*>(context.source) +
+                    context.layout.rightWristSource,
+                &g_reachWeaponAnchorMoved, sizeof(BoneMatrix));
+            g_reachLiveGraphWeaponWrites.fetch_add(
+                1, std::memory_order_relaxed);
+        }
+        g_reachWeaponAnchorPending = false;
     }
     __declspec(noinline) void __fastcall ReachFpPalette(
         uint16_t tag, const BoneMatrix* root, BoneMatrix* destination,
@@ -15024,6 +15068,7 @@ namespace
         g_reachMuzzleRedirects.store(0, std::memory_order_relaxed);
         g_reachMuzzleRepaired.store(0, std::memory_order_relaxed);
         g_reachMuzzleReparented.store(0, std::memory_order_relaxed);
+        g_reachLiveGraphWeaponWrites.store(0, std::memory_order_relaxed);
         g_reachMuzzleOutOfRange.store(0, std::memory_order_relaxed);
         g_reachMuzzleNearestMilli.store(0xFFFFFFFFu, std::memory_order_relaxed);
         g_reachMuzzleIdentityNoSibling.store(0, std::memory_order_relaxed);
@@ -15333,11 +15378,13 @@ namespace
             return;
         lastReportMs = now;
         lastTotal = total;
-        LOG("REACHFX: muzzle re-parented onto the gun %u, out of range %u, "
+        LOG("REACHFX: live-graph weapon writes %u; muzzle re-parented %u, "
+            "out of range %u, "
             "nearest approach %u mm; lined up %u (no sibling yet %u); "
             "effect locations - redirected %u, world/no-fp-user %u, "
             "world/fp-output-none %u, already-first-person %u, unreadable %u "
             "(effect+0x50 low nibbles seen 0x%04X, high nibbles 0x%04X)",
+            g_reachLiveGraphWeaponWrites.load(std::memory_order_relaxed),
             g_reachMuzzleReparented.load(std::memory_order_relaxed),
             g_reachMuzzleOutOfRange.load(std::memory_order_relaxed),
             g_reachMuzzleNearestMilli.load(std::memory_order_relaxed),
