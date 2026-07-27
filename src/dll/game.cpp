@@ -10274,6 +10274,7 @@ namespace
     std::atomic<uint32_t> g_reachChudClass2Draws{0};
     std::atomic<uint32_t> g_reachChudUnreadable{0};
     std::atomic<uint32_t> g_reachChudRejects{0};
+    std::atomic<uint32_t> g_reachChudRedirectUnavailable{0};
     std::atomic<uint8_t> g_reachChudLastUnreadablePath{0};
 
     void RejectReachChudParityForCurrentEye() noexcept
@@ -10285,6 +10286,28 @@ namespace
         g_reachCamera.armed.store(false, std::memory_order_release);
         g_reachCamera.teardownRequested.store(
             true, std::memory_order_release);
+    }
+
+    // A momentarily unavailable render-target redirect is NOT a fatal
+    // transaction failure. It used to call the reject path above, which
+    // disarms the core and tears down all six hooks - so a transient
+    // resource state, or simply turning the crosshair off, killed VR for the
+    // whole session. Both defects were observed in headset testing on
+    // 2026-07-27, and it is the same shape as the two silent teardown paths
+    // removed on 2026-07-26 (AGENTS.md: a feature failing must never take
+    // down a working VR path).
+    //
+    // Consequence of the redirect being unavailable: this widget draws to the
+    // eye instead of the offscreen target. With kill_reticle=1 its alpha is
+    // already cleared, so nothing appears. The eye is marked so a partially
+    // captured pair is never published - the compositor skips that frame and
+    // retries, exactly like the accepted projection-view skip - and the lazy
+    // capture entry creates whatever was missing on the next draw.
+    void ReportReachRedirectUnavailable() noexcept
+    {
+        g_reachChudRedirectUnavailable.fetch_add(
+            1, std::memory_order_relaxed);
+        g_reachFpCameraEyeScope.chudParityFailed = true;
     }
 
     // Official HREK exposes the scripting-class byte directly to Reach's
@@ -10430,19 +10453,19 @@ namespace
             }
             if (hideFromEye)
             {
-                // Prepared entry, matching the End below: Reach's resources
-                // are cold-prepared by the worker, so the hot hook never
-                // allocates. This was calling the lazy entry, which both
-                // broke that rule and refused whenever crosshair=0 - and the
-                // refusal below tore the whole transaction down.
-                if (VR_BeginPreparedAuthoredReticleCapture())
+                // REVERTED 2026-07-27: this briefly called the PREPARED entry
+                // "for symmetry" with the End below. That entry refuses
+                // unless every prepared resource already exists, and a
+                // refusal here disarmed the core - Reach armed, then lost
+                // stereo 45 ms later and tore down (log 01:29:20.548 armed ->
+                // 01:29:20.602 stereo OFF). The lazy entry creates what is
+                // missing and heals itself, which is why this worked before.
+                // Do not "fix" this asymmetry again without first removing
+                // the teardown consequence below.
+                if (VR_BeginAuthoredReticleCapture())
                     captureStarted = true;
                 else
-                    // The redirect IS the mechanism. If it is unavailable
-                    // there is no second way to do this - reject the
-                    // transaction and let verified teardown run, exactly as
-                    // this path already did before. No alternate draw mode.
-                    RejectReachChudParityForCurrentEye();
+                    ReportReachRedirectUnavailable();
             }
             original(userIndex, descriptor, widgetIndex,
                      useAlternatePath, drawState);
@@ -10459,7 +10482,10 @@ namespace
                         std::memory_order_release);
                 }
                 else
-                    RejectReachChudParityForCurrentEye();
+                    // Same rule as the Begin side: restoring the render state
+                    // failed for this widget, so this eye's art is incomplete
+                    // and must not publish - but the camera core keeps running.
+                    ReportReachRedirectUnavailable();
             }
             g_reachCamera.activeCallbacks.fetch_sub(
                 1, std::memory_order_acq_rel);
@@ -14307,6 +14333,7 @@ namespace
         static bool class2Present = true;
         static uint32_t reportedUnreadable = 0;
         static uint32_t reportedRejects = 0;
+        static uint32_t reportedRedirect = 0;
         static uint64_t lastKeyLogMs = 0;
         static uint64_t loggedKey = 0;
 
@@ -14316,9 +14343,11 @@ namespace
         // the published art is deliberately held across those gaps. Two
         // seconds without a single class-2 draw is a different thing: the
         // engine stopped emitting the widget entirely, which is what the
-        // player sees as "the crosshair disappeared".
-        const bool present = lastClass2 != 0 && now >= lastClass2 &&
-            now - lastClass2 < 2000;
+        // player sees as "the crosshair disappeared". Wait for the first
+        // sighting before claiming a drought - otherwise this reports one
+        // 50 ms after arming, before Reach has drawn anything (observed).
+        const bool present = lastClass2 == 0 ||
+            (now >= lastClass2 && now - lastClass2 < 2000);
         if (present != class2Present)
         {
             class2Present = present;
@@ -14352,6 +14381,15 @@ namespace
             reportedRejects = rejects;
             LOG("REACHHUD: %u eye transactions rejected by the CHUD path",
                 rejects);
+        }
+        const uint32_t redirect =
+            g_reachChudRedirectUnavailable.load(std::memory_order_relaxed);
+        if (redirect != reportedRedirect)
+        {
+            reportedRedirect = redirect;
+            LOG("REACHHUD: crosshair redirect unavailable %u times - those "
+                "eyes skipped publishing art; the camera core stayed armed",
+                redirect);
         }
         const uint64_t key =
             g_reachAuthoredCrosshairKey.load(std::memory_order_relaxed);
