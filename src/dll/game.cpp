@@ -10539,6 +10539,175 @@ namespace
 
     std::atomic<uint32_t> g_reachMuzzleBodyCopiesHidden{0};
 
+    // ---- the weapon anchor the muzzle flash needs --------------------------
+    // Why the flash sits on the player's face: our palette work never moves the
+    // game's skeleton. ReconstructVisiblePaletteSource builds the
+    // controller-aligned weapon into g_fpPaletteScratch and hands THAT to the
+    // renderer, and ReachRestoreFpLiveGraph puts the live graph back. So the
+    // gun you see is composed from a scratch copy while the engine's real
+    // weapon stays where it always was - at the player's body. Anything that
+    // samples the real skeleton afterwards, like the effect system asking for
+    // the muzzle marker, resolves against the un-moved weapon.
+    //
+    // That is also why four candidates aimed at effect LOCATIONS did nothing:
+    // the location was resolving correctly the whole time, against a weapon we
+    // had already put back.
+    //
+    // The palette already computes both transforms. Publishing them lets the
+    // effect hook re-parent a marker from the stock weapon onto the controller
+    // one exactly - full rigid transform, so there is no offset.
+    struct ReachWeaponAnchor
+    {
+        std::atomic<uint32_t> seq{0};   // even = stable (single writer)
+        std::atomic<uint32_t> generation{0};
+        BoneMatrix stock{};
+        BoneMatrix moved{};
+    };
+    ReachWeaponAnchor g_reachWeaponAnchor;
+
+    void ReachPublishWeaponAnchor(
+        const BoneMatrix& stock, const BoneMatrix& moved, uint32_t generation)
+    {
+        const uint32_t start =
+            g_reachWeaponAnchor.seq.load(std::memory_order_relaxed);
+        g_reachWeaponAnchor.seq.store(start + 1, std::memory_order_release);
+        g_reachWeaponAnchor.stock = stock;
+        g_reachWeaponAnchor.moved = moved;
+        g_reachWeaponAnchor.generation.store(
+            generation, std::memory_order_relaxed);
+        g_reachWeaponAnchor.seq.store(start + 2, std::memory_order_release);
+    }
+
+    bool ReachReadWeaponAnchor(BoneMatrix& stock, BoneMatrix& moved)
+    {
+        for (int attempt = 0; attempt < 2; ++attempt)
+        {
+            const uint32_t before =
+                g_reachWeaponAnchor.seq.load(std::memory_order_acquire);
+            if (before == 0 || (before & 1u))
+                continue;
+            if (g_reachWeaponAnchor.generation.load(
+                    std::memory_order_relaxed) != g_reachCamera.generation)
+            {
+                return false;
+            }
+            stock = g_reachWeaponAnchor.stock;
+            moved = g_reachWeaponAnchor.moved;
+            if (g_reachWeaponAnchor.seq.load(std::memory_order_acquire) ==
+                before)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // How near the stock weapon a marker must sit to count as belonging to it.
+    // The AR's own muzzle_flash marker is 0.23 world units from the weapon
+    // origin, and world units are ~3 m, so 0.5 covers any weapon's markers
+    // while staying far inside the distance to another character.
+    constexpr float kReachWeaponMarkerRadius = 0.5f;
+    std::atomic<uint32_t> g_reachMuzzleReparented{0};
+    std::atomic<uint32_t> g_reachMuzzleOutOfRange{0};
+    std::atomic<uint32_t> g_reachMuzzleNearestMilli{0xFFFFFFFFu};
+
+    // R * v and R^T * v for the row-major 3x3 in a BoneMatrix.
+    inline void ReachRotate(const float* r, const float* v, float* out)
+    {
+        out[0] = r[0] * v[0] + r[1] * v[1] + r[2] * v[2];
+        out[1] = r[3] * v[0] + r[4] * v[1] + r[5] * v[2];
+        out[2] = r[6] * v[0] + r[7] * v[1] + r[8] * v[2];
+    }
+    inline void ReachRotateTranspose(const float* r, const float* v, float* out)
+    {
+        out[0] = r[0] * v[0] + r[3] * v[1] + r[6] * v[2];
+        out[1] = r[1] * v[0] + r[4] * v[1] + r[7] * v[2];
+        out[2] = r[2] * v[0] + r[5] * v[1] + r[8] * v[2];
+    }
+
+    // Rebuild an effect matrix that sits on the stock weapon so it sits on the
+    // controller-aligned weapon instead, preserving its exact local offset and
+    // orientation. Guarded; leaves the matrix untouched on any fault or if it
+    // is not on the stock weapon.
+    __declspec(noinline) bool ReachReparentEffectMatrix(
+        float* matrix, const BoneMatrix& stock, const BoneMatrix& moved)
+    {
+        __try
+        {
+            float* position = matrix + (kReachEffectMatrixPositionOffset / 4);
+            float* rotation = matrix + 1;   // BoneMatrix: scale, rotation[9]
+            const float delta[3] = {
+                position[0] - stock.translation[0],
+                position[1] - stock.translation[1],
+                position[2] - stock.translation[2]};
+            const float distanceSquared = delta[0] * delta[0] +
+                delta[1] * delta[1] + delta[2] * delta[2];
+            if (!isfinite(distanceSquared))
+                return false;
+            // Cheapest possible visibility into what the hook actually sees:
+            // the closest any effect matrix came to the stock weapon. If the
+            // repair never fires, this number says whether it was a near miss
+            // or whether nothing is resolving near the weapon at all.
+            const uint32_t milli = static_cast<uint32_t>(
+                sqrtf(distanceSquared) * 1000.0f);
+            uint32_t nearest = g_reachMuzzleNearestMilli.load(
+                std::memory_order_relaxed);
+            while (milli < nearest &&
+                   !g_reachMuzzleNearestMilli.compare_exchange_weak(
+                       nearest, milli, std::memory_order_relaxed))
+            {
+            }
+            if (distanceSquared >
+                kReachWeaponMarkerRadius * kReachWeaponMarkerRadius)
+            {
+                g_reachMuzzleOutOfRange.fetch_add(
+                    1, std::memory_order_relaxed);
+                return false;
+            }
+            // local = R_stock^T * (position - stock.translation)
+            float local[3];
+            ReachRotateTranspose(stock.rotation, delta, local);
+            // position' = moved.translation + R_moved * local
+            float world[3];
+            ReachRotate(moved.rotation, local, world);
+            const float newPosition[3] = {
+                moved.translation[0] + world[0],
+                moved.translation[1] + world[1],
+                moved.translation[2] + world[2]};
+            // R' = R_moved * R_stock^T * R_marker
+            float rebuilt[9];
+            for (int row = 0; row < 3; ++row)
+            {
+                float column[3] = {rotation[row], rotation[row + 3],
+                                   rotation[row + 6]};
+                float localAxis[3];
+                ReachRotateTranspose(stock.rotation, column, localAxis);
+                float worldAxis[3];
+                ReachRotate(moved.rotation, localAxis, worldAxis);
+                rebuilt[row] = worldAxis[0];
+                rebuilt[row + 3] = worldAxis[1];
+                rebuilt[row + 6] = worldAxis[2];
+            }
+            for (int i = 0; i < 9; ++i)
+                if (!isfinite(rebuilt[i]))
+                    return false;
+            for (int i = 0; i < 3; ++i)
+                if (!isfinite(newPosition[i]))
+                    return false;
+            for (int i = 0; i < 9; ++i)
+                rotation[i] = rebuilt[i];
+            position[0] = newPosition[0];
+            position[1] = newPosition[1];
+            position[2] = newPosition[2];
+            g_reachMuzzleReparented.fetch_add(1, std::memory_order_relaxed);
+            return true;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            return false;
+        }
+    }
+
     // Push a resolved effect location far below the world so nothing it spawns
     // is visible. Guarded; leaves the matrix untouched on any read/write fault.
     __declspec(noinline) bool ReachDisplaceEffectLocation(void* matrix)
@@ -10639,6 +10808,33 @@ namespace
             // through this resolver, which is now the THIRD independent
             // measurement saying so (zero first-person designators, zero
             // identity fallbacks, and now this). Nothing unproven stays active.
+            // ---- re-parent the face-stuck muzzle flash onto the gun --------
+            // The resolver hands back a marker matrix built against the
+            // engine's weapon, which our palette work never moved. If that
+            // matrix sits on the stock weapon, rebuild it against the
+            // controller-aligned weapon: express the marker in the stock
+            // weapon's local frame, then re-apply that exact local offset and
+            // orientation on the moved weapon. Rigid and exact - the marker
+            // keeps its real position on the barrel, so there is no offset.
+            //
+            // Keyed on POSITION, not on any effect flag. Three previous
+            // candidates guessed at flags and all three fired without moving
+            // anything the player could see. Only a matrix already sitting on
+            // the stock weapon is touched, so other characters' weapons,
+            // impacts and explosions are out of range by construction.
+            {
+                BoneMatrix stockWeapon{};
+                BoneMatrix movedWeapon{};
+                float* resolved = static_cast<float*>(outMatrix);
+                if (g_reachCamera.armed.load(std::memory_order_acquire) &&
+                    g_enabled.load(std::memory_order_acquire) &&
+                    ReachReadWeaponAnchor(stockWeapon, movedWeapon))
+                {
+                    ReachReparentEffectMatrix(resolved, stockWeapon,
+                                              movedWeapon);
+                }
+            }
+
             constexpr bool kReachHideBodyWeaponEffects = false;
             if (kReachHideBodyWeaponEffects &&
                 (fpUserByte & 0x0Fu) != 0u &&
@@ -13096,6 +13292,14 @@ namespace
                     return;
                 }
                 targets.rightWrist=alignedRight;
+                // Publish the pair the effect system needs. `stock` is where
+                // the engine still believes the weapon is - the player's body -
+                // and `alignedRight` is where the player actually sees it. The
+                // muzzle flash resolves against the former; re-parenting it
+                // between the two puts it on the gun with no offset.
+                ReachPublishWeaponAnchor(
+                    context.untouchedLive[context.layout.rightWristSource],
+                    alignedRight, g_reachCamera.generation);
                 const bool reconstructed=ReconstructVisiblePaletteSource(
                     tag,fp,*root,source,replacement,&targets,
                     context.untouchedLive);
@@ -14817,6 +15021,9 @@ namespace
         g_reachRainSkipped.store(0, std::memory_order_relaxed);
         g_reachMuzzleRedirects.store(0, std::memory_order_relaxed);
         g_reachMuzzleRepaired.store(0, std::memory_order_relaxed);
+        g_reachMuzzleReparented.store(0, std::memory_order_relaxed);
+        g_reachMuzzleOutOfRange.store(0, std::memory_order_relaxed);
+        g_reachMuzzleNearestMilli.store(0xFFFFFFFFu, std::memory_order_relaxed);
         g_reachMuzzleIdentityNoSibling.store(0, std::memory_order_relaxed);
         g_reachMuzzleReadFailures.store(0, std::memory_order_relaxed);
         g_reachMuzzleWorldNoFpUser.store(0, std::memory_order_relaxed);
@@ -15114,7 +15321,9 @@ namespace
         const uint32_t failures =
             g_reachMuzzleReadFailures.load(std::memory_order_relaxed);
         const uint32_t total =
-            redirects + noFpUser + fpNone + alreadyFp + failures;
+            redirects + noFpUser + fpNone + alreadyFp + failures +
+            g_reachMuzzleReparented.load(std::memory_order_relaxed) +
+            g_reachMuzzleOutOfRange.load(std::memory_order_relaxed);
         if (!total || total == lastTotal)
             return;
         const uint64_t now = GetTickCount64();
@@ -15122,10 +15331,14 @@ namespace
             return;
         lastReportMs = now;
         lastTotal = total;
-        LOG("REACHFX: muzzle particles lined up %u (no sibling yet %u); "
+        LOG("REACHFX: muzzle re-parented onto the gun %u, out of range %u, "
+            "nearest approach %u mm; lined up %u (no sibling yet %u); "
             "effect locations - redirected %u, world/no-fp-user %u, "
             "world/fp-output-none %u, already-first-person %u, unreadable %u "
             "(effect+0x50 low nibbles seen 0x%04X, high nibbles 0x%04X)",
+            g_reachMuzzleReparented.load(std::memory_order_relaxed),
+            g_reachMuzzleOutOfRange.load(std::memory_order_relaxed),
+            g_reachMuzzleNearestMilli.load(std::memory_order_relaxed),
             g_reachMuzzleRepaired.load(std::memory_order_relaxed),
             g_reachMuzzleIdentityNoSibling.load(std::memory_order_relaxed),
             redirects, noFpUser, fpNone, alreadyFp, failures,
