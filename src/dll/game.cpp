@@ -1347,6 +1347,11 @@ namespace
     std::atomic<uint64_t> g_hudLayoutLastVerifyMs{0};
     std::atomic<uint64_t> g_hudLayoutLastReacquireMs{0};
     std::atomic<uint64_t> g_hudLayoutLastAttemptMs{0};
+    // When the current title took HUD-layout ownership. A level's tag data is
+    // not always resident the first time a scan is eligible, so the first
+    // attempts have to retry quickly; the long cooldown only makes sense once
+    // the title has been settled for a while.
+    std::atomic<uint64_t> g_hudLayoutOwnerSinceMs{0};
 
     static void ClearHudLayoutSlots()
     {
@@ -1408,6 +1413,8 @@ namespace
         g_hudLayoutLastVerifyMs.store(0, std::memory_order_relaxed);
         g_hudLayoutLastReacquireMs.store(0, std::memory_order_relaxed);
         g_hudLayoutLastAttemptMs.store(0, std::memory_order_relaxed);
+        g_hudLayoutOwnerSinceMs.store(
+            GetTickCount64(), std::memory_order_relaxed);
         ReleaseSRWLockExclusive(&g_hudLayoutWriteLock);
         LOG("SAFEFRAME: layout owner is %s (generation %u); active "
             "publication and timers reset", adapter->name, generation);
@@ -1470,13 +1477,10 @@ namespace
                 memcpy(&prefixes[a], view.anchor, sizeof(prefixes[a]));
                 spans[a] = static_cast<size_t>(HudLayoutScanSpan(view));
             }
-            for (size_t i = 0; i < len && found < maxOut; ++i)
+            for (size_t i = 0; i + 8 <= len && found < maxOut; ++i)
             {
                 const uint64_t here =
-                    (i + 8 <= len)
-                        ? *reinterpret_cast<const uint64_t*>(p + i) : 0;
-                if (i + 8 > len)
-                    break;
+                    *reinterpret_cast<const uint64_t*>(p + i);
                 for (int a = 0; a < anchorCount; ++a)
                 {
                     if (here != prefixes[a] || i + spans[a] > len)
@@ -2256,10 +2260,21 @@ namespace
                 return;
         }
 
+        // A level's tag data is often not resident yet the first time a scan
+        // is eligible, so an early attempt finds nothing. A flat 15s cooldown
+        // then meant waiting 15s plus a full scan before the HUD moved. Retry
+        // quickly while the title is still settling, and only fall back to the
+        // long cooldown once it has been owned long enough that a miss means
+        // the record genuinely is not there.
+        const uint64_t ownerSince =
+            g_hudLayoutOwnerSinceMs.load(std::memory_order_relaxed);
+        const bool settling =
+            ownerSince && now >= ownerSince && now - ownerSince < 30000;
+        const uint64_t attemptCooldownMs = settling ? 2000 : 15000;
         const uint64_t lastAttempt =
             g_hudLayoutLastAttemptMs.load(
                 std::memory_order_relaxed);
-        if (now - lastAttempt < 15000)
+        if (now - lastAttempt < attemptCooldownMs)
             return;
         g_hudLayoutLastAttemptMs.store(
             now, std::memory_order_relaxed);
