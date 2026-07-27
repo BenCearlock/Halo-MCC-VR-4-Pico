@@ -13369,8 +13369,11 @@ namespace
             LOG("Reach camera install: could not retain the exact title module");
             return false;
         }
-        // The unproven Reach CHUD detour is not part of core VR ownership.
-        void* hudDrawWidget = nullptr;
+        // Optional, not part of core VR ownership: see kReachHudDrawWidgetRva
+        // for how this address was found and verified. A failed create/enable
+        // here must never affect the five mandatory hooks below.
+        void* hudDrawWidget =
+            reinterpret_cast<void*>(base + kReachHudDrawWidgetRva);
 
         void* inner = reinterpret_cast<void*>(base + kReachPlayerViewRenderRva);
         void* outer = reinterpret_cast<void*>(base + kReachMainRenderViewRva);
@@ -13396,7 +13399,17 @@ namespace
                 fpCamera,
                 reinterpret_cast<void*>(&ReachFpCameraRebuildDetour),
                 reinterpret_cast<void**>(&g_reachOrigFpCameraRebuild)) == MH_OK;
-        const bool hudDrawWidgetCreated = false;
+        // Attempted only after the mandatory chain succeeds, and its result
+        // never feeds the mandatory-failure check below: a bad address or a
+        // failed create here must leave Reach's stereo/hands/HUD exactly as
+        // working as they are today, with only the crosshair staying stock.
+        const bool hudDrawWidgetCreated = fpCameraCreated && MH_CreateHook(
+                hudDrawWidget,
+                reinterpret_cast<void*>(&ReachHudDrawWidgetDetour),
+                reinterpret_cast<void**>(&g_reachOrigHudDrawWidget)) == MH_OK;
+        if (fpCameraCreated && !hudDrawWidgetCreated)
+            LOG("Reach crosshair: chud_draw_widget hook create failed; "
+                "native crosshair stays visible, nothing else affected");
         if (!innerCreated || !outerCreated ||
             !fpInterpolateCreated || !fpPaletteCreated || !fpCameraCreated)
         {
@@ -13477,7 +13490,8 @@ namespace
         g_reachCamera.fpInterpolateTarget = fpInterpolate;
         g_reachCamera.fpPaletteTarget = fpPalette;
         g_reachCamera.fpCameraTarget = fpCamera;
-        g_reachCamera.hudDrawWidgetTarget = nullptr;
+        g_reachCamera.hudDrawWidgetTarget =
+            hudDrawWidgetCreated ? hudDrawWidget : nullptr;
         g_reachFpCameraUpload = reinterpret_cast<ReachFpCameraUploadFn>(
             base + kReachFpCameraUploadRva);
         g_reachCamera.installedAtMs = GetTickCount64();
@@ -13540,6 +13554,25 @@ namespace
             "interpolation/palette + per-eye world-projection camera "
             "transactions hooked; waiting one-second fresh-camera interval "
             "before arming");
+        // Optional and fail-open, same as the mandatory five are not: a failed
+        // enable here removes only this one hook and continues, exactly like a
+        // failed create above. Never RemoveReachCameraCore() for this hook.
+        if (hudDrawWidgetCreated &&
+            MH_EnableHook(hudDrawWidget) != MH_OK)
+        {
+            LOG("Reach crosshair: chud_draw_widget hook enable failed; "
+                "native crosshair stays visible, nothing else affected");
+            MH_RemoveHook(hudDrawWidget);
+            g_reachCamera.hudDrawWidgetTarget = nullptr;
+            g_reachOrigHudDrawWidget = nullptr;
+        }
+        else if (hudDrawWidgetCreated)
+        {
+            LOG("Reach crosshair: chud_draw_widget hook active at "
+                "haloreach.dll+0x%llX; authored-widget capture pending "
+                "per-eye execution",
+                static_cast<unsigned long long>(kReachHudDrawWidgetRva));
+        }
         // Optional and fail-open: kill_reticle only. If this cannot be resolved
         // exactly, Reach keeps its stock crosshair and nothing else changes.
         if (!ResolveReachChudCrosshairFields(base, size))

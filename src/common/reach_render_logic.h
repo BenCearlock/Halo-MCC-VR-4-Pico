@@ -76,6 +76,26 @@ inline constexpr uintptr_t kReachFpCameraRebuildRva = 0x00286C6C;
 inline constexpr size_t kReachFpCameraRebuildBodySize = 0x0250;
 inline constexpr char kReachFpCameraRebuildBodySha256[] =
     "125656AF65F61F02BA482830D307EBFDD00BBE2DF7264F155613B3FF8FAEFE58";
+// Retail chud_draw_widget. HREK's own byte-compiled signatures (both official
+// optimized builds, reach_tag_play and sapien_play) do not survive into MCC's
+// differently-compiled retail haloreach.dll - verified, zero matches for even
+// a cross-build-agreeing anchor. This address was instead found by tracing the
+// real call graph forward from kReachPlayerViewRenderRva (proven correct every
+// session Reach arms) rather than matching HREK's compiled bytes, and
+// independently confirmed three ways against the documented HREK ABI:
+//   1. Called from the real, verified player_view_render (0x26CEC9 -> a
+//      per-player CHUD dispatcher at 0x2C29F8 -> this function at 0x2C2BF1).
+//   2. Argument setup at the call site matches the documented five-argument
+//      ABI exactly: RCX=player index, RDX=widget-record pointer (computed as
+//      table_base + widget_index*32), R8D=that same widget index, R9D=a
+//      computed flag, and a stack arg carrying a conditional draw-state
+//      pointer - (user, descriptor, widget index, alternate path, draw state).
+//   3. The function itself reads a SIGNED byte at [retained-descriptor + 4]
+//      (movsx, at both 0x2DA6E7 and 0x2DA777) - exactly the documented
+//      "signed_class_byte_offset = 0x04".
+// Headset-pending: this is a newly-verified address, not yet proven in the
+// installed game.
+inline constexpr uintptr_t kReachHudDrawWidgetRva = 0x002DA364;
 inline constexpr uintptr_t kReachFpCameraUploadRva = 0x00282D60;
 inline constexpr size_t kReachFpCameraUploadBodySize = 0x0179;
 inline constexpr char kReachFpCameraUploadBodySha256[] =
