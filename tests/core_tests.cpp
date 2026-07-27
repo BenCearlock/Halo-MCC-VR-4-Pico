@@ -3953,41 +3953,44 @@ int main()
             "The first-person output user index is decoded from the high nibble");
     }
 
-    // Reach muzzle retarget: only the single odd-one-out first-person system
-    // may be moved, and only onto its siblings' shared location. The AR is the
-    // only weapon in the game matching this shape (game-wide HREK dump).
+    // Reach muzzle retarget: every first-person system off the majority
+    // marker is moved onto it; ties break toward the lower location index
+    // (primary_trigger is index 0 in all six affected weapons).
     {
-        // AR 1st_person: round@0, smoke@0, long_brake@2, glow@0, all mode 1.
-        const unsigned short arModes[] = {1, 1, 1, 1};
-        const unsigned short arLocs[] = {0, 0, 2, 0};
-        const ReachMuzzleRetargetDecision ar =
-            ReachDecideMuzzleRetarget(arModes, arLocs, 4);
-        Check(ar.elementIndex == 2 && ar.newLocation == 0,
-            "The AR's odd first-person system is retargeted onto its "
-            "siblings' marker");
-        // AR 3rd_person: five mode-2... as mode-1 shape with one location.
-        const unsigned short thirdModes[] = {1, 1, 1, 1, 1};
-        const unsigned short thirdLocs[] = {2, 2, 2, 2, 2};
-        Check(ReachDecideMuzzleRetarget(thirdModes, thirdLocs, 5)
-                  .elementIndex < 0,
+        // AR: round@0, smoke@0, long_brake@2, glow@0, all mode 1 -> one move.
+        const unsigned short arM[] = {1, 1, 1, 1};
+        const unsigned short arL[] = {0, 0, 2, 0};
+        const ReachMuzzleRetargetPlan ar = ReachDecideMuzzleRetarget(arM, arL, 4);
+        Check(ar.count == 1 && ar.elements[0] == 2 && ar.newLocation == 0,
+            "The AR's odd first-person system is retargeted onto its siblings'");
+        // DMR: two odd systems at location 2 -> both move.
+        const unsigned short dmrM[] = {1, 1, 1, 1, 1};
+        const unsigned short dmrL[] = {2, 2, 0, 0, 0};
+        const ReachMuzzleRetargetPlan dmr =
+            ReachDecideMuzzleRetarget(dmrM, dmrL, 5);
+        Check(dmr.count == 2 && dmr.newLocation == 0 &&
+              dmr.elements[0] == 0 && dmr.elements[1] == 1,
+            "Both DMR odd systems are retargeted");
+        // Sniper: 4 at 0 vs 4 at 1 - tie breaks to the lower index.
+        const unsigned short snM[] = {1, 1, 1, 1, 1, 1, 1, 1};
+        const unsigned short snL[] = {0, 0, 1, 0, 1, 0, 1, 1};
+        const ReachMuzzleRetargetPlan sn = ReachDecideMuzzleRetarget(snM, snL, 8);
+        Check(sn.count == 4 && sn.newLocation == 0,
+            "A tie between locations resolves to the lower index");
+        // Uniform event: nothing to do.
+        const unsigned short uniM[] = {1, 1, 1, 1, 1};
+        const unsigned short uniL[] = {2, 2, 2, 2, 2};
+        Check(ReachDecideMuzzleRetarget(uniM, uniL, 5).count == 0,
             "An event whose systems share one location is never touched");
-        // Typical other weapon: mixed modes, all mode-1 at one marker.
-        const unsigned short otherModes[] = {0, 0, 1, 1, 1};
-        const unsigned short otherLocs[] = {1, 0, 0, 0, 0};
-        Check(ReachDecideMuzzleRetarget(otherModes, otherLocs, 5)
-                  .elementIndex < 0,
+        // Mode-0 systems at other markers never make a weapon eligible.
+        const unsigned short othM[] = {0, 0, 1, 1, 1};
+        const unsigned short othL[] = {1, 5, 0, 0, 0};
+        Check(ReachDecideMuzzleRetarget(othM, othL, 5).count == 0,
             "Mode-0 systems at other markers never make a weapon eligible");
-        // Two odd systems -> ambiguous -> untouched.
-        const unsigned short ambModes[] = {1, 1, 1, 1};
-        const unsigned short ambLocs[] = {0, 0, 2, 3};
-        Check(ReachDecideMuzzleRetarget(ambModes, ambLocs, 4)
-                  .elementIndex < 0,
-            "Two odd first-person systems are ambiguous and never touched");
-        // Fewer than two siblings -> no majority -> untouched.
-        const unsigned short thinModes[] = {1, 1, 0};
-        const unsigned short thinLocs[] = {0, 2, 0};
-        Check(ReachDecideMuzzleRetarget(thinModes, thinLocs, 3)
-                  .elementIndex < 0,
+        // No agreeing pair -> ambiguous -> untouched.
+        const unsigned short thinM[] = {1, 1, 0};
+        const unsigned short thinL[] = {0, 2, 0};
+        Check(ReachDecideMuzzleRetarget(thinM, thinL, 3).count == 0,
             "A single sibling is not a majority; nothing is moved");
     }
 

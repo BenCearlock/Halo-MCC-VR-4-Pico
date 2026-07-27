@@ -14556,12 +14556,14 @@ namespace
     // siblings provably track the controller-held gun.
     const char* kReachEffectDecodeSig =
         "4C 8B 2D ?? ?? ?? ?? 4C 8D 0D ?? ?? ?? ?? 41 BC 48 00 00 00";
-    uint32_t g_reachMuzzleAttemptedDefIndex = 0xFFFFFFFFu;
     uintptr_t g_reachMuzzleHandleTable = 0;   // decoded from the signature
     uintptr_t g_reachMuzzlePoolTable = 0;
     bool g_reachMuzzleDecodeResolved = false;
-    uintptr_t g_reachMuzzlePatchAddress = 0;  // the location u16 we rewrote
-    uint16_t g_reachMuzzlePatchOriginal = 0;
+    struct ReachMuzzlePatch { uintptr_t address; uint16_t original; };
+    ReachMuzzlePatch g_reachMuzzlePatches[32]{};
+    size_t g_reachMuzzlePatchCount = 0;
+    uint32_t g_reachMuzzleAttemptedDefs[16]{};
+    size_t g_reachMuzzleAttemptedCount = 0;
     std::atomic<uint32_t> g_reachMuzzleRetargetDone{0};
 
     bool ReachReadU32(uintptr_t address, uint32_t* out)
@@ -14627,25 +14629,23 @@ namespace
         static uint32_t attemptedGeneration = 0;
         if (!soleReachTitle || !base || !generation)
         {
-            g_reachMuzzlePatchAddress = 0;
+            g_reachMuzzlePatchCount = 0;
+            g_reachMuzzleAttemptedCount = 0;
             g_reachMuzzleDecodeResolved = false;
             g_reachMuzzleRetargetDone.store(0, std::memory_order_relaxed);
             g_reachMuzzleCapturedDefIndex.store(
                 0xFFFFFFFFu, std::memory_order_relaxed);
-            g_reachMuzzleAttemptedDefIndex = 0xFFFFFFFFu;
             attemptedGeneration = 0;
             return;
         }
         if (attemptedGeneration != generation)
         {
             attemptedGeneration = generation;
-            g_reachMuzzlePatchAddress = 0;
+            g_reachMuzzlePatchCount = 0;
+            g_reachMuzzleAttemptedCount = 0;
             g_reachMuzzleDecodeResolved = false;
             g_reachMuzzleRetargetDone.store(0, std::memory_order_relaxed);
-            g_reachMuzzleAttemptedDefIndex = 0xFFFFFFFFu;
         }
-        if (g_reachMuzzlePatchAddress)
-            return;   // already retargeted this generation
         if (!g_reachMuzzleDecodeResolved)
         {
             const uintptr_t hit =
@@ -14682,12 +14682,19 @@ namespace
         }
         const uint32_t defIndex = g_reachMuzzleCapturedDefIndex.load(
             std::memory_order_relaxed);
-        if (defIndex == 0xFFFFFFFFu ||
-            defIndex == g_reachMuzzleAttemptedDefIndex)
+        if (defIndex == 0xFFFFFFFFu)
+            return;
+        // One attempt per definition; the player swaps weapons, so several
+        // definitions accumulate over a session (six weapons qualify).
+        for (size_t i = 0; i < g_reachMuzzleAttemptedCount; ++i)
+            if (g_reachMuzzleAttemptedDefs[i] == defIndex)
+                return;
+        if (g_reachMuzzleAttemptedCount >=
+            _countof(g_reachMuzzleAttemptedDefs))
         {
             return;
         }
-        g_reachMuzzleAttemptedDefIndex = defIndex;
+        g_reachMuzzleAttemptedDefs[g_reachMuzzleAttemptedCount++] = defIndex;
 
         uint32_t handle = 0;
         if (!ReachReadU32(g_reachMuzzleHandleTable +
@@ -14748,38 +14755,50 @@ namespace
                 modes[count] = mode;
                 locations[count] = location;
             }
-            const ReachMuzzleRetargetDecision decision =
+            const ReachMuzzleRetargetPlan plan =
                 ReachDecideMuzzleRetarget(modes, locations, count);
-            if (decision.elementIndex < 0)
+            if (!plan.count)
                 continue;
-            const uintptr_t target = psysBase +
-                static_cast<size_t>(decision.elementIndex) *
-                    kReachEffectPsysStride +
-                kReachEffectPsysLocationOffset;
-            const uint16_t original =
-                locations[decision.elementIndex];
-            if (!ReachWriteU16(target, decision.newLocation))
-                return;
-            g_reachMuzzlePatchAddress = target;
-            g_reachMuzzlePatchOriginal = original;
-            g_reachMuzzleRetargetDone.store(1, std::memory_order_relaxed);
-            LOG("Reach muzzle: RETARGETED - definition %u event %zu particle "
-                "system %d moved from location %u to location %u (the marker "
-                "its siblings track the gun with)",
-                defIndex & 0xFFFFu, eventIndex, decision.elementIndex,
-                original, decision.newLocation);
-            return;
+            unsigned applied = 0;
+            for (int e = 0; e < plan.count; ++e)
+            {
+                if (g_reachMuzzlePatchCount >=
+                    _countof(g_reachMuzzlePatches))
+                {
+                    break;
+                }
+                const int element = plan.elements[e];
+                const uintptr_t target = psysBase +
+                    static_cast<size_t>(element) * kReachEffectPsysStride +
+                    kReachEffectPsysLocationOffset;
+                const uint16_t original = locations[element];
+                if (!ReachWriteU16(target, plan.newLocation))
+                    continue;
+                g_reachMuzzlePatches[g_reachMuzzlePatchCount++] =
+                    {target, original};
+                ++applied;
+            }
+            if (applied)
+            {
+                g_reachMuzzleRetargetDone.fetch_add(
+                    applied, std::memory_order_relaxed);
+                LOG("Reach muzzle: RETARGETED %u first-person particle "
+                    "system(s) of definition %u event %zu onto location %u "
+                    "(the marker their siblings track the gun with)",
+                    applied, defIndex & 0xFFFFu, eventIndex,
+                    plan.newLocation);
+            }
+            // keep scanning further events of this definition
         }
     }
 
     void ReachMuzzleRetargetRestore()
     {
-        if (g_reachMuzzlePatchAddress)
-        {
-            ReachWriteU16(g_reachMuzzlePatchAddress,
-                          g_reachMuzzlePatchOriginal);
-            g_reachMuzzlePatchAddress = 0;
-        }
+        for (size_t i = 0; i < g_reachMuzzlePatchCount; ++i)
+            ReachWriteU16(g_reachMuzzlePatches[i].address,
+                          g_reachMuzzlePatches[i].original);
+        g_reachMuzzlePatchCount = 0;
+        g_reachMuzzleAttemptedCount = 0;
         g_reachMuzzleRetargetDone.store(0, std::memory_order_relaxed);
         g_reachMuzzleCapturedDefIndex.store(
             0xFFFFFFFFu, std::memory_order_relaxed);

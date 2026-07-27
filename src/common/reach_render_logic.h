@@ -141,26 +141,32 @@ inline constexpr uintptr_t kReachEffectPsysCameraModeOffset = 0x1E;
 inline constexpr unsigned kReachEffectCameraModeFirstPerson = 1;
 inline constexpr size_t kReachEffectMaxWalk = 16;
 
-// Pure and unit-testable: given the (cameraMode, location) pairs of one
-// event's particle systems, find the single odd-one-out mode-1 system whose
-// location differs from >=2 mode-1 siblings sharing one location. Returns the
-// element index to retarget and the location to write, or -1.
-struct ReachMuzzleRetargetDecision
+// Pure and unit-testable. Given the (cameraMode, location) pairs of one
+// event's particle systems: find the majority location among mode-1 systems
+// (ties broken toward the LOWER location index - primary_trigger is index 0 in
+// every affected weapon: assault_rifle, dmr, needler, sniper_rifle,
+// spartan_laser, spike_rifle per the game-wide HREK dump), then list every
+// mode-1 system at any other location for retargeting onto the majority.
+//
+// The majority must have at least two members, so a weapon whose mode-1
+// systems all share one marker (13 of the 19 weapons) is never touched, and a
+// weapon with no agreeing pair is ambiguous and never touched.
+struct ReachMuzzleRetargetPlan
 {
-    int elementIndex = -1;
+    int count = 0;
     unsigned short newLocation = 0;
+    int elements[kReachEffectMaxWalk] = {};
 };
 
-inline constexpr ReachMuzzleRetargetDecision ReachDecideMuzzleRetarget(
+inline constexpr ReachMuzzleRetargetPlan ReachDecideMuzzleRetarget(
     const unsigned short* cameraModes, const unsigned short* locations,
     size_t count)
 {
-    ReachMuzzleRetargetDecision decision{};
+    ReachMuzzleRetargetPlan plan{};
     if (count < 3 || count > kReachEffectMaxWalk)
-        return decision;
-    // Majority location among mode-1 systems.
+        return plan;
     int bestCount = 0;
-    unsigned short bestLocation = 0;
+    unsigned short bestLocation = 0xFFFF;
     for (size_t i = 0; i < count; ++i)
     {
         if (cameraModes[i] != kReachEffectCameraModeFirstPerson)
@@ -170,30 +176,25 @@ inline constexpr ReachMuzzleRetargetDecision ReachDecideMuzzleRetarget(
             if (cameraModes[j] == kReachEffectCameraModeFirstPerson &&
                 locations[j] == locations[i])
                 ++same;
-        if (same > bestCount)
+        if (same > bestCount ||
+            (same == bestCount && locations[i] < bestLocation))
         {
             bestCount = same;
             bestLocation = locations[i];
         }
     }
     if (bestCount < 2)
-        return decision;
-    int odd = -1;
-    int oddCount = 0;
+        return plan;
     for (size_t i = 0; i < count; ++i)
     {
         if (cameraModes[i] == kReachEffectCameraModeFirstPerson &&
             locations[i] != bestLocation)
         {
-            odd = static_cast<int>(i);
-            ++oddCount;
+            plan.elements[plan.count++] = static_cast<int>(i);
         }
     }
-    if (oddCount != 1)
-        return decision;
-    decision.elementIndex = odd;
-    decision.newLocation = bestLocation;
-    return decision;
+    plan.newLocation = bestLocation;
+    return plan;
 }
 
 // The muzzle flash welded to the player's view, and the engine's own switch
