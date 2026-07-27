@@ -159,11 +159,6 @@ bool VR_GetLeftControllerPose(float outQuat[4], float outPos[3]);
 // weapon reticle is redirected into the controller-ray quad texture instead
 // of being drawn at the center of either VR eye.
 bool VR_BeginAuthoredReticleCapture();
-// Cheap hide: sets an empty scissor rect so the GPU discards the draw. Used
-// when a widget only has to be invisible and its pixels are not wanted, which
-// avoids the render-target readback and rebind the capture path performs.
-bool VR_BeginNullScissor();
-void VR_EndNullScissor();
 void VR_EndAuthoredReticleCapture();
 // Reach prepares every allocation and swapchain/RTV object on its cold title
 // worker before installing the mandatory HREK hook. The prepared begin/end
