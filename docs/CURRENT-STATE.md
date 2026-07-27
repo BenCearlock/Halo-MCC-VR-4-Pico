@@ -667,19 +667,72 @@ Cut realign: `ReachBuildHeadCullCamera` detects the +0x28/+0x26 edges from
 the same-thread sample; `ReachApplyHeadLook` realigns yaw (only) to the new
 authored facing, Halo 3/ODST semantics; one worker log line per realign.
 
+**Headset result (2026-07-27):** both fixes CONFIRMED by log and player. The
+crosshair published 0.7s after arming (key `789BF424` at 01:13:06.473) instead
+of 3.5 minutes in, and both authored cuts realigned
+(`Reach cutscene facing: realigned to the authored camera (cut 1/cut 2)`).
+Two further defects were then reported; see the next candidate.
+
+### UNTESTED: Reach crosshair=0 teardown fix + REACHHUD diagnostic - 2026-07-27
+
+| Identity | Value |
+| --- | --- |
+| Candidate source | `fafebc62b41a128f0282bb266da11b422081c35e` |
+| Candidate package | `out/candidates/fafebc6-reach-fp-parity-20260727-062510426Z` |
+| `halo3xr.dll` SHA-256 | `A5270CA29940F59492F38D8B97D1C0D6812DFC0B2A7B563C68178C603519EAAD` |
+| Preserved previous install | `out/deploy-backups/d0dac5a-before-fafebc6-20260727-062511131Z` |
+| Headset result | **PENDING** |
+
+**`crosshair=0` tore down VR (fixed).** With the crosshair disabled,
+`ReachDecideChudCrosshairAction` returns `Suppress`, which still requires the
+render-target redirect - that redirect is Reach's ONLY way to keep a widget
+off the eye, since it has no visibility predicate to NOP the way Halo 3 and
+ODST do. `BeginAuthoredReticleCaptureInternal` refused whenever
+`g_config.crosshair` was 0, and the Reach hook treats a refused redirect as
+capture-target loss: reject, disarm, six-hook teardown. The prepared (Reach)
+entry no longer applies that check; display remains gated by
+`g_config.crosshair` in the compositor, so `crosshair=0` now means no
+crosshair anywhere with VR untouched. The lazy entry keeps the check, so
+Halo 3/ODST are unchanged. Fixed a latent hot-path violation beside it: the
+Reach hook began with the lazy (allocating) entry while ending with the
+prepared one; both sides now use the prepared entry.
+
+**Crosshair vanished mid-level (diagnosed next run, deliberately not
+guessed).** The user tied it to on-screen OBJECTIVE text (initially reported
+as subtitles, then corrected). Three mechanisms could produce it and the
+current log cannot separate them: the engine stops emitting class-2 widgets,
+the collection descriptor stops being readable, or the art key churns and
+republishes different art. `REACHHUD` counters now report exactly which -
+hot hook bumps atomics only, the 50 ms worker logs a 2s class-2 drought,
+unreadable-descriptor counts with the alternate-path flag, rejected eye
+transactions, and every published art-key change. Silent while healthy.
+
 **Still open from the same session (need their own evidence pass):**
-- Character/navpoint tags (Jorge etc.) project with the aim camera while the
-  world renders with the head camera - correct when aiming at the character,
-  warps as the hand moves away ("two parents"). Same family as the OPEN
-  navpoint-transform investigation (HREK `chud_navpoints.cpp`, retail worker
-  `+0x6C2E68` via TLS slot `+0x30`). The fix direction is feeding the
-  navpoint projection the head camera; needs the worker's camera-source RE.
-- One muzzle flash is drawn at the old screen-centre crosshair position (a
-  second, correct one tracks the gun). Long suspected the same transform
-  family as the navpoints.
-- Subtitles double-vision: likely drawn per-eye with eye-divergent
-  projection (or at infinity) instead of converged HUD depth. New lead: the
-  probe's dialog-line state gives id/duration/remaining for the active line.
+The user's exact requirements for the remaining HUD work, stated 2026-07-27:
+
+- **Character tags must follow the HEAD ONLY.** Today they follow head AND
+  hand ("two parents"): correct while aiming at the character, warping as the
+  hand moves away. This is the shape of a projection consuming the
+  first-person/weapon camera while the world renders from the head camera.
+  Related open evidence: HREK `chud_navpoints.cpp` (20 entries, stride
+  `0x88`, `position_worldspace` at `+0x3C`), retail `ai_add_navpoint` ->
+  `+0x1A1A7C` -> worker `+0x6C2E68` reached via TLS slot `+0x30`; the FP
+  nested camera workspace is `haloreach+0x00CFAC20` (compact `+0`, derived
+  `+0x1E4`). The needed fact is which camera/workspace the CHUD 3D
+  projection actually reads - determine it, do not assume it.
+- **The stray muzzle flash must follow the HAND.** One flash already tracks
+  the controller-held gun correctly; a second is drawn at the old
+  screen-centre crosshair position. Reach bullets and muzzle markers are
+  still wholly stock (the projectile lineage was removed), so the centre
+  flash is most likely the stock first-person weapon's own flash at the
+  frozen sim aim - but that must be confirmed, not assumed.
+- **Objective text and subtitles must sit on a readable plane.** Subtitles
+  currently give double vision (drawn per-eye with divergent projection or
+  effectively at infinity rather than at a converged HUD depth). The user
+  states the other HUD elements do not have this problem, which is itself a
+  strong clue: compare how those two text elements are composited against a
+  known-good HUD element. Lead: the REACHCINE non-deterministic member is
+  the live dialog line (id/duration/remaining).
 
 ### ACCEPTED: Reach native HUD layout (size + aspect) - 2026-07-27
 
