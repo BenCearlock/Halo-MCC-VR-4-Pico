@@ -537,10 +537,13 @@ that both flashes are camera-mode-1 systems (a4a2ed4), the eliminations
 (effect-location resolver, CHUD widgets, mode-2 systems, lights), and the
 disabled experiments behind constexpr-false flags.
 
-Outstanding after this baseline: Halo 3 + ODST regression (many new Reach
-hooks since last check); bullets/crosshair-vs-gun-mesh verification pass
-(user-requested, no IK translation); rain (deferred known bug); spartan laser
-side-vent steam now at the muzzle (cosmetic, exempt on request).
+**Halo 3 + ODST regression: PASSED 2026-07-27** - user tested both titles on
+this baseline: "no discernible regression at least on my end." The cumulative
+build's cross-title contract holds with all the new Reach hooks in place.
+
+Outstanding after this baseline: bullets/crosshair-vs-gun-mesh verification
+pass (user-requested, no IK translation); rain (deferred known bug); spartan
+laser side-vent steam now at the muzzle (cosmetic, exempt on request).
 
 ### ACCEPTED: Reach character tags and objective markers off the hand - 2026-07-27
 
