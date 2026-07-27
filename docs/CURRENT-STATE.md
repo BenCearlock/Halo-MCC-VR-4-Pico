@@ -1,8 +1,22 @@
 # Current state
 
-Authoritative as of 2026-07-26. This file is the only active accepted-build
+Authoritative as of 2026-07-27. This file is the only active accepted-build
 pointer. Detailed pre-cleanup experiments remain available in Git history; they
 are evidence, not instructions.
+
+> **Start here: "BASELINE: authored crosshairs on all three titles - 2026-07-27"
+> below is the current working state.** Everything dated earlier is history.
+> Several older sections describe Reach features as impossible, mandatory, or
+> not yet built that have since been built and headset-confirmed - in
+> particular the authored crosshair, which older text calls unimplementable in
+> Reach. Trust the baseline section and `docs/RE-notes.md` over any older
+> narrative here.
+>
+> **A comment is not evidence.** Two separate stale claims - "Reach has no
+> authored capture" and "the ODST camera core installs no authored capture yet"
+> - were false when read, and each cost hours because they were believed
+> instead of checked. If a comment or doc says a title cannot do something,
+> verify it against the code before building on it.
 
 ## Newest headset-accepted private cumulative source
 
@@ -436,6 +450,120 @@ clean commit/DLL hash to show no flat center reticle, authored VR reticle art,
 friendly-green and hostile-red changes, shared crosshair configuration parity,
 safe title transitions/teardown, and a Halo 3 regression for the touched shared
 authored-reticle composition path.
+
+## BASELINE: authored crosshairs on all three titles - 2026-07-27
+
+**This is the current working baseline.** Halo 3, ODST and Halo: Reach all
+display their own authored CHUD crosshair art on the VR aim ray, the flat
+native crosshair is gone from the HUD, and the per-frame cost of doing it has
+been removed. ODST additionally arms promptly and recovers from its own menu.
+
+| Identity | Value |
+| --- | --- |
+| Source | `675cc15c36c2a873f2a38a128b73f41548bb79a5` |
+| `halo3xr.dll` SHA-256 | `DCFFA1C025CEF5BFB41D8FC6F26F8C96330D539800141D93989094FA78828D26` |
+| `halo3xr_launcher.exe` SHA-256 | `B32C0001F297465C0924E18A85126D0C01F5084FEDF3F9389CA49160BFBA66BF` |
+| Branch | `reach/frame-skip` |
+
+Headset-confirmed by the user during this session: Reach HUD sliders, Reach
+authored crosshair on the aim ray with the flat one gone, restored frame rate,
+Halo 3 unaffected/working, ODST authored crosshair, and ODST arming. The final
+candidate above (ODST menu recovery) was installed and declared the baseline;
+its menu open/close cycle is the one item still worth an explicit re-check.
+
+### Reach HUD scale and aspect
+
+Reach authors one curvature record **per screen shape**, five per skin. Only
+the widescreen record was ever written, but the VR per-eye target is
+`3752x3828` - aspect 0.98, not widescreen - so the engine reads the
+`fullscreen standard` record (920x690) that nothing touched. `HudLayoutAdapter`
+now carries alternate resolution-class anchors and matches any of them.
+`hud_size` and `hud_aspect` work. `hud_curvature` and `hud_vertical_offset`
+still do NOT work for Reach and are documented as such in `halomccvr.cfg`.
+
+### The authored crosshair, and why it took so long
+
+Four separate defects were stacked on top of each other. Each is worth knowing
+because each produced a convincing but wrong symptom:
+
+1. **Wrong address, then right address.** HREK's compiled `chud_draw_widget`
+   does not byte-match MCC's retail build - verified, zero matches, even for a
+   signature that two independent official HREK builds agree on. The working
+   address `haloreach.dll+0x2DA364` was found by tracing the real call graph
+   forward from the already-proven `kReachPlayerViewRenderRva`.
+2. **Truncated argument widths crashed the game** four times, always
+   `0xC0000005` at `haloreach.dll+0x2ED80C`. The detour declared arguments 3
+   and 4 as `unsigned short`/`unsigned char`; Reach uses both as full 32-bit
+   values (`0x2DA39D`, `0x2DA41D`, `0x2DA39A`). The truncated widget index sent
+   back into the engine selected the wrong branch and decoded an invalid Blam
+   pool handle.
+3. **The class filter could never have worked.** `descriptor+4` is a WIDGET
+   INDEX, not a scripting class - `0x2ED80C` is a three-tier index accessor
+   (strides `0x27`/`0x21`/`0x20`). The class lives on the owning COLLECTION,
+   reached via `descriptor+3`. This matters because 1092 of 1143 drawn widgets
+   in the official CHUD exports author their class as "undefined/use parent";
+   only 51 carry an explicit class. Per-widget filtering hid whichever widget
+   sat at index 2 - one arc of the crosshair - and nothing else.
+4. **Reach was allowed to capture art it was never allowed to display**, and
+   then painted over it. `shouldUploadAuthoredReticle` carried `!reachTitle`,
+   and Reach was still listed as a title with no authored capture, so it
+   painted the procedural reticle FULLY OPAQUE into the same swapchain the
+   captured art lives in.
+
+### Performance: it was never a 40% slowdown
+
+Frame rate is a deadline problem, not a throughput one. Measured `renderWindow`
+p95 from preserved logs:
+
+| build | renderWindow p95 |
+| --- | --- |
+| no crosshair hook | 6.6 - 7.9 ms |
+| crosshair hidden, art not published | 6.0 - 8.6 ms |
+| art published, per-frame upload | 11.6 - 12.5 ms |
+
+At 90Hz the budget is 11.1ms and everything fit; at 120Hz it is 8.33ms, every
+frame missed, and the compositor halved to exactly 60. Publishing the art cost
+~4-5ms because it performed a blocking OpenXR swapchain
+acquire/wait/copy/release every frame for art that changes only on a weapon
+swap, zoom or reticle-state change.
+
+The fix, now shared by all three titles:
+- The captured art's identity is folded into a key. The upload happens only
+  when that key changes; a frame-gap floor bounds it if the key ever churns.
+- A capture containing no crosshair widgets (key 0) is never published, so a
+  blank image can never overwrite good art.
+- Once the swapchain holds authored art it is **held**. Repainting the
+  procedural reticle over it was both the flashing and a per-frame cost.
+- Whether a title captures authored art is now a **live fact** -
+  `Game_TitleCapturesAuthoredCrosshair()` reports whether the capture hooks are
+  actually installed - instead of a hardcoded title list that went stale twice.
+  If capture is not installed, the procedural reticle stays visible, so a
+  failed signature scan degrades to a visible crosshair rather than none.
+
+### ODST arming and menu recovery
+
+- **Arming.** `OdstFreshCameraDebounce` restarted its one-second stability
+  interval on any not-fresh poll, but ODST's readiness tail toggles ~10x/second
+  during ordinary play (only the final tail boolean moves). The interval could
+  essentially never complete, so ODST armed by luck - slow, and a fast
+  pause/unpause frequently never re-armed. Gaps up to 350ms no longer restart
+  the interval; longer gaps still do.
+- **Menus.** An unsupported/menu camera mode called `BlockUntilTitleExit`, so
+  opening ODST's menu once permanently killed VR for the session: presentation
+  returned to stereo with no camera core behind it. It now uses the same
+  `BlockUntilReload` gate level transitions use, which requires the camera to
+  be seen not-ready then ready again - only true once the menu is gone. Scoped
+  entirely inside `#if HALOMCCVR_EXPERIMENTAL_ODST_BRINGUP`; no other title is
+  affected.
+
+### Known-incomplete in this baseline
+
+- `hud_curvature` and `hud_vertical_offset` do not work for Reach.
+- The D-pad-gesture left-stick-click -> Back binding (`0ef9820`) is present and
+  documented in `halomccvr.cfg` but **did not work** in the headset. Either
+  find ODST's real map button or remove the binding; do not treat it as
+  working.
+- Reach bullets/muzzle markers remain stock.
 
 ### ACCEPTED: Reach native HUD layout (size + aspect) - 2026-07-27
 

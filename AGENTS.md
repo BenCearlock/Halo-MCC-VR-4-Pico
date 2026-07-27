@@ -52,6 +52,30 @@ whose absence caused the 2026-07-26 Reach regressions.
 - Any code path that disarms a title core must log why, naming itself. A silent
   teardown is a bug: it cost a full day of unattributable failures.
 
+## Verify, do not trust the narrative
+
+A comment, a doc paragraph, or a previous session's confident claim is a lead,
+not a fact. On 2026-07-27 two stale claims each cost hours: "Reach has no
+authored capture" and "the ODST camera core installs no authored capture yet"
+were both false when read, and both caused a title to paint an opaque
+procedural crosshair over art it had already captured. A third - treating an
+existing capture pipeline as working code that merely needed an address - hid
+four identical crashes.
+
+- Before building on "title X cannot do Y", check whether the code still says
+  that. Prefer a live check (`Game_TitleCapturesAuthoredCrosshair()` reports
+  what is actually installed) over a hardcoded title list, which goes stale
+  silently.
+- When a write is verified correct but has no visible effect, ask whether the
+  consumer selects among several copies of that data by a runtime condition
+  (resolution class, skin, collection) before concluding the field is dead.
+  Reach's HUD sliders were "inert" for hours because the engine reads a
+  different curvature record than the one being written.
+- Measure before optimising. Three reasoned performance fixes in a row missed,
+  two made it worse; the answer came from `renderWindow p95` in preserved logs
+  and from the user's own "90Hz is solid, 120Hz halves" observation. Frame rate
+  problems here are usually deadline problems, not throughput problems.
+
 ## Evidence
 
 - Locate engine code with unique signatures verified against the pinned module.

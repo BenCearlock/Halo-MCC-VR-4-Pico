@@ -181,3 +181,60 @@ The user confirmed that this frees the shotgun left arm. The removed synthetic p
   record after writing points; that is a separate candidate.
 - Reach's HUD height has no implementation: `hud_vertical_offset` uses the
   `chud_compute_anchor_basis` hook and Reach's homolog is still unlocated.
+
+## Reach authored CHUD crosshair (2026-07-27) - all verified against retail
+
+- **`chud_draw_widget` in retail is `haloreach.dll+0x2DA364`.** HREK's compiled
+  version does NOT byte-match MCC's build: a signature that `reach_tag_play.exe`
+  and `sapien_play.exe` agree on byte-for-byte across 49 instructions matches
+  retail **zero** times. Do not try to port HREK bytes for this function. The
+  address was found by tracing the call graph forward from the already-proven
+  `kReachPlayerViewRenderRva` (`0x0026C6DC`): `player_view_render` calls a
+  per-player CHUD dispatcher at `0x2C29F8`, which calls the widget draw at
+  `0x2C2BF1`.
+- **ABI: arguments 3 and 4 are full 32-bit values**, not short/byte. Proven by
+  `0x2DA39D mov r12d, r8d`, `0x2DA41D cmp r12d, dword ptr [rdi+4]`, and
+  `0x2DA39A mov eax, r9d`. Declaring them narrower truncates the widget index
+  on the way back into the engine and crashes at `0x2ED80C`
+  (`mov eax,[rcx+0x98]`) on an invalid Blam pool handle. This was four
+  identical headset crashes.
+- **`descriptor+4` is a WIDGET INDEX, not the scripting class.** `0x2ED80C` is
+  a three-tier index accessor: counts at `+0x98`/`+0xA4`/`+0xB4`, strides
+  `0x27`/`0x21`/`0x20`, returning a widget record.
+- **The scripting class lives on the owning COLLECTION**, reached through
+  `descriptor+3`. Reach's own sequence at `0x2DA68A`-`0x2DA6EC`:
+  ```
+  globalPtr  = *(module + 0xC1A600)
+  handle     = *(globalPtr + (arg4 & 0xFFFF)*8 + 4)
+  chudDef    = pool[handle>>28] + handle*4
+  collHandle = *(chudDef + 4)
+  collection = pool[collHandle>>28] + (collHandle + descriptor[3]*0x37)*4
+  class      = *(collection + 4)
+  ```
+  `pool[i]` is `*(module + 0x04E39F20 + i*8)`. The class offset is confirmed
+  independently by the official tag definition: a collection begins with a
+  4-byte `artist name` string id, then the `scripting class` char enum.
+- **Why per-widget class filtering can never work:** across all 64 official CHUD
+  tag exports, 1092 of 1143 drawn bitmap widgets author their class as
+  `undefined/use parent` and inherit it from the collection. Only 51 carry an
+  explicit class. Filtering per widget catches those 51 and nothing else.
+- Halo 3 and ODST hide their crosshair by hooking a boolean visibility
+  predicate and returning false. Reach has no such predicate, which is why it
+  redirects the render target instead.
+
+## Authored crosshair publishing (all titles, 2026-07-27)
+
+- The aim quad renders `g_reticleChain`; `UploadAuthoredReticle` is the only
+  writer of captured art into it.
+- That upload is a blocking OpenXR swapchain acquire/wait/copy/release. Doing
+  it every frame costs ~4-5ms of `renderWindow` - measured, and the entire
+  difference between fitting a 120Hz budget (8.33ms) and missing it and halving
+  to 60. It is now gated on the captured art's identity changing.
+- The procedural reticle and the authored art share one swapchain. For a title
+  that captures, the procedural reticle is fully transparent, so repainting it
+  ERASES the captured widget. Once the swapchain holds authored art it must be
+  held, not refreshed.
+- `Game_TitleCapturesAuthoredCrosshair()` reports whether the capture hooks are
+  actually installed. Use it rather than a title list: the previous hardcoded
+  lists went stale for both Reach and ODST and each time produced an opaque
+  procedural crosshair painted over art the title had already captured.
