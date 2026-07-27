@@ -745,6 +745,33 @@ transactions, and every published art-key change. Silent while healthy.
 | Preserved previous install | `out/deploy-backups/57a3c77-before-578b82d-20260727-065952978Z` |
 | Headset result | **PENDING** |
 
+> **HEADSET RESULT: FAILED. The theory below is DISPROVEN - do not build on
+> it.** With the alpha write disabled, Winter Contingency (cutscene ->
+> gameplay -> objective) still lost the VR crosshair at the objective, and
+> the same drought line still appears:
+> `[02:04:00.892] no class-2 crosshair widget drawn for 2s ... (unreadable
+> descriptors 0, rejects 0)`. The alpha/fade write was therefore NOT the
+> cause. It stays disabled (it is genuinely redundant and no flat crosshair
+> was reported), but it fixes nothing.
+>
+> **The diagnostic has a blind spot that must be closed before the next
+> attempt.** The counters classify each draw as class-2 or unreadable. A
+> widget that is READABLE but resolves to a class other than 2 is counted by
+> neither - so "0 unreadable, 0 rejects, no class-2" is equally consistent
+> with two very different things: Reach genuinely stopped drawing the
+> crosshair, OR it is still drawing it and our collection-class resolution
+> stopped returning 2 for it. That second case is plausible precisely because
+> the class is reached through the owning COLLECTION via `descriptor+3`, and
+> adding objective widgets can shift collection indices. Add a
+> readable-but-not-class-2 counter (and the observed class values) and one
+> run decides it. Do not guess between them again.
+>
+> Session shape for reference: armed `02:01:14`, droughts at `02:01:58`
+> (cutscene), recovery `02:02:55`, drought `02:02:57`, recovery `02:03:04`,
+> drought `02:03:47`, recovery `02:03:49`, final drought `02:04:00` at the
+> objective. The log ends `02:04:02`, so permanence is the player's report,
+> not a log fact.
+
 **Root cause: the mod was deleting its own art source.** REACHHUD named it in
 the reproduction session:
 `[01:56:51.484] no class-2 crosshair widget drawn for 2s - the engine stopped

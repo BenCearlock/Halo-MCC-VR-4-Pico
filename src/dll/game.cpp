@@ -10276,6 +10276,13 @@ namespace
     std::atomic<uint32_t> g_reachChudRejects{0};
     std::atomic<uint32_t> g_reachChudRedirectUnavailable{0};
     std::atomic<uint8_t> g_reachChudLastUnreadablePath{0};
+    // Readable draws whose collection class was not 2, plus a histogram of
+    // the classes actually seen. Closes the blind spot that made the
+    // 2026-07-27 objective drought ambiguous.
+    constexpr size_t kReachChudClassBuckets = 10;
+    std::atomic<uint32_t> g_reachChudOtherDraws{0};
+    std::array<std::atomic<uint32_t>, kReachChudClassBuckets>
+        g_reachChudClassCounts{};
 
     void RejectReachChudParityForCurrentEye() noexcept
     {
@@ -10389,6 +10396,28 @@ namespace
                     g_reachChudLastUnreadablePath.store(
                         static_cast<uint8_t>(useAlternatePath & 0xFFu),
                         std::memory_order_relaxed);
+                }
+                else
+                {
+                    // Readable, but its owning collection did not resolve to
+                    // class 2. Previously counted by nothing, which left
+                    // "0 unreadable, 0 rejects, no class-2" ambiguous between
+                    // "Reach stopped drawing the crosshair" and "Reach is
+                    // still drawing it and our class resolution stopped
+                    // returning 2". The class comes from the owning
+                    // COLLECTION via descriptor+3, and objective widgets can
+                    // shift collection indices, so that second case is real.
+                    // Record a class histogram (classes are the 9-value CHUD
+                    // scripting enum; anything else buckets at the end).
+                    g_reachChudOtherDraws.fetch_add(
+                        1, std::memory_order_relaxed);
+                    const size_t bucket = (resolvedClass >= 0 &&
+                        resolvedClass < static_cast<int8_t>(
+                            kReachChudClassBuckets - 1))
+                        ? static_cast<size_t>(resolvedClass)
+                        : kReachChudClassBuckets - 1;
+                    g_reachChudClassCounts[bucket].fetch_add(
+                        1, std::memory_order_relaxed);
                 }
             }
 
@@ -14385,11 +14414,30 @@ namespace
                     "(%u class-2 draws total)",
                     g_reachChudClass2Draws.load(std::memory_order_relaxed));
             else
-                LOG("REACHHUD: no class-2 crosshair widget drawn for 2s - the "
-                    "engine stopped emitting it; published art is being held "
-                    "(unreadable descriptors %u, rejects %u)",
+            {
+                // The decisive line: if otherDraws keeps climbing across the
+                // drought, Reach IS still drawing widgets and our class
+                // resolution is what changed; if it is flat too, the engine
+                // really stopped. The histogram says which class the
+                // crosshair's collection now reports.
+                LOG("REACHHUD: no class-2 crosshair widget drawn for 2s "
+                    "(unreadable %u, rejects %u, readable-non-class-2 %u)",
                     g_reachChudUnreadable.load(std::memory_order_relaxed),
-                    g_reachChudRejects.load(std::memory_order_relaxed));
+                    g_reachChudRejects.load(std::memory_order_relaxed),
+                    g_reachChudOtherDraws.load(std::memory_order_relaxed));
+                LOG("REACHHUD: class histogram 0:%u 1:%u 2:%u 3:%u 4:%u 5:%u "
+                    "6:%u 7:%u 8:%u other:%u",
+                    g_reachChudClassCounts[0].load(std::memory_order_relaxed),
+                    g_reachChudClassCounts[1].load(std::memory_order_relaxed),
+                    g_reachChudClassCounts[2].load(std::memory_order_relaxed),
+                    g_reachChudClassCounts[3].load(std::memory_order_relaxed),
+                    g_reachChudClassCounts[4].load(std::memory_order_relaxed),
+                    g_reachChudClassCounts[5].load(std::memory_order_relaxed),
+                    g_reachChudClassCounts[6].load(std::memory_order_relaxed),
+                    g_reachChudClassCounts[7].load(std::memory_order_relaxed),
+                    g_reachChudClassCounts[8].load(std::memory_order_relaxed),
+                    g_reachChudClassCounts[9].load(std::memory_order_relaxed));
+            }
         }
 
         const uint32_t unreadable =
