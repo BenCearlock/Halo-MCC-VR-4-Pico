@@ -85,6 +85,10 @@ namespace
     bool g_sessionRunning = false;
     XrSessionState g_sessionState = XR_SESSION_STATE_UNKNOWN;
     std::atomic<float> g_requestedHaptics{0.0f};
+    // Peak-hold companion to g_requestedHaptics: the maximum amplitude requested
+    // since the last applied VR frame, so a short gunfire pulse that arrives and
+    // clears between two frame samples is not aliased to zero. See SampleHapticPeak.
+    std::atomic<float> g_peakHaptics{0.0f};
     void StopControllerHaptics();
     void LogHeadsetPanelRate();
     bool StartFrameWaitThread();
@@ -4283,6 +4287,7 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
             phase = Phase::FadeOut;
             phaseStartMs = now;
             g_requestedHaptics = 0.0f;
+            g_peakHaptics = 0.0f;
             LOG("pause transition: fade out -> %s",
                 targetPaused ? "head-locked 2D" : "stereo 3D");
         }
@@ -4953,15 +4958,25 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
         {
             // Stop is not enough: the requested amplitude is persistent. Drop
             // it while ownership/arming is absent so it cannot be replayed
-            // after a title transition without a fresh XInput request.
+            // after a title transition without a fresh XInput request. The
+            // accumulated peak is dropped for the same reason.
             g_requestedHaptics.store(0.0f, std::memory_order_release);
+            g_peakHaptics.store(0.0f, std::memory_order_release);
         }
-        float amplitude = capabilityAllows
+        const float intensity =
+            std::clamp(g_config.haptic_intensity, 0.0f, 1.0f);
+        // Peak-hold: peek (without consuming) the max amplitude requested since
+        // the last applied frame so a short gunfire pulse (SetState(high) then
+        // SetState(0) between two frame samples) cannot be aliased to zero.
+        const float latest = capabilityAllows
             ? std::clamp(
                 g_requestedHaptics.load(std::memory_order_acquire),
                 0.0f, 1.0f)
             : 0.0f;
-        amplitude *= std::clamp(g_config.haptic_intensity, 0.0f, 1.0f);
+        const float peekPeak = capabilityAllows
+            ? g_peakHaptics.load(std::memory_order_acquire)
+            : 0.0f;
+        float amplitude = SampleHapticPeak(peekPeak, latest).apply * intensity;
         const bool mustStop = amplitude <= 0.0f || !trackingValid || !modeAllows ||
             !capabilityAllows ||
             Menu_IsOpen() || g_sessionState != XR_SESSION_STATE_FOCUSED;
@@ -4977,7 +4992,13 @@ float4 ps_scope_linearize(VSOut i):SV_Target { return paint(i.uv,true); }
 
         const uint64_t now = GetTickCount64();
         if (active && now - lastApplyMs < 40)
-            return;
+            return; // keep accumulating the peak; apply on the next unthrottled frame
+        // Applying now: consume the peak and carry the latest sustained value
+        // forward, so a one-shot pulse fires exactly once and a held rumble
+        // persists across the 40 ms re-apply throttle.
+        const float appliedPeak =
+            g_peakHaptics.exchange(latest, std::memory_order_acq_rel);
+        amplitude = SampleHapticPeak(appliedPeak, latest).apply * intensity;
         XrHapticVibration vibration{XR_TYPE_HAPTIC_VIBRATION};
         vibration.amplitude = amplitude;
         vibration.duration = 50000000;
@@ -7899,8 +7920,16 @@ void VR_RequestScopeToggle()
 
 void VR_SetGameHaptics(float amplitude)
 {
-    g_requestedHaptics.store(std::clamp(amplitude, 0.0f, 1.0f),
-        std::memory_order_release);
+    const float v = std::clamp(amplitude, 0.0f, 1.0f);
+    g_requestedHaptics.store(v, std::memory_order_release);
+    // Peak-hold: raise the running peak so a pulse that arrives and clears
+    // between two VR-frame samples still registers. Lock-free CAS max keeps
+    // this XInput SetState hook thread hot-path-safe (no lock/alloc/logging).
+    float cur = g_peakHaptics.load(std::memory_order_relaxed);
+    while (v > cur && !g_peakHaptics.compare_exchange_weak(cur, v,
+        std::memory_order_release, std::memory_order_relaxed))
+    {
+    }
 }
 
 bool VR_GetRightControllerPose(float outQuat[4], float outPos[3])

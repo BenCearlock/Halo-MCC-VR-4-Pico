@@ -3842,6 +3842,21 @@ int main()
               ERROR_DEVICE_NOT_CONNECTED, 1, true) ==
               ERROR_DEVICE_NOT_CONNECTED,
         "Foreign XInput slots preserve the underlying SetState result");
+
+    // Peak-hold haptics: a gunfire pulse that rose and fell between two VR
+    // frame samples must still fire once, a sustained rumble must persist,
+    // and out-of-range inputs must clamp.
+    const HapticPeakSample onePulse = SampleHapticPeak(0.8f, 0.0f);
+    Check(onePulse.apply == 0.8f,
+        "A rumble pulse that already returned to zero still applies its peak");
+    Check(onePulse.carry == 0.0f,
+        "A one-shot rumble pulse does not persist after it is applied");
+    const HapticPeakSample sustained = SampleHapticPeak(0.3f, 0.6f);
+    Check(sustained.apply == 0.6f && sustained.carry == 0.6f,
+        "A sustained rumble above the stale peak applies and carries forward");
+    const HapticPeakSample clamped = SampleHapticPeak(1.5f, -0.5f);
+    Check(clamped.apply == 1.0f && clamped.carry == 0.0f,
+        "Peak-hold haptic samples clamp to the [0,1] amplitude range");
     Check(NormalizeVirtualXInputSetStateResult(
               ERROR_DEVICE_NOT_CONNECTED, 0, false) ==
               ERROR_DEVICE_NOT_CONNECTED,
