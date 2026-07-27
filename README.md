@@ -1,12 +1,18 @@
-HALO 4 WILL BEGIN SOON, DO NOT ACCEPT FIXES OF THIS MOD FROM OUTSIDE SOURCES WE DON'T KNOW WHATS IN IT
-
-Try updating to Steam VR Beta, A user has reported that it fixes the double vision!
-
-If experiencing stutter install this with steam vr as default runtime 
-https://github.com/mbucchia/Quad-Views-Foveated
-EVEN IF YOU DONT HAVE EYE TRACKING JUST MAKE SURE YOUR HEADSET IS COMPATIBLE 
-
-Please list your specs if you're having issues. It's a guessing game over here 
+> ### HALO 4 WILL BEGIN SOON
+>
+> **DO NOT ACCEPT FIXES FOR THIS MOD FROM OUTSIDE SOURCES. WE DON'T KNOW WHAT'S
+> IN THEM.**
+>
+> **Double vision?** Try updating to the SteamVR Beta — a user reported that it
+> fixes this.
+>
+> **Stutter?** Install
+> [Quad-Views-Foveated](https://github.com/mbucchia/Quad-Views-Foveated) with
+> SteamVR as your default OpenXR runtime. **You do not need eye tracking** —
+> just make sure your headset is compatible.
+>
+> **Reporting a problem? Please list your specs.** It's a guessing game over
+> here.
 
 # Halo MCC VR
 

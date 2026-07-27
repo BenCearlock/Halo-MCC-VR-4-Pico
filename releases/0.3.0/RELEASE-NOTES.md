@@ -4,7 +4,8 @@
 
 Reach gets the same treatment as the other two titles: per-eye stereo and 6DOF
 head tracking, motion-controller aim, hands and weapon, HUD, cutscenes and
-vibration. It is the newest of the three, so expect it to be the roughest.
+vibration. It is the newest addition, so expect it to be the roughest of the
+three.
 
 One control difference to know about:
 
@@ -25,8 +26,9 @@ One control difference to know about:
 - The desktop window now fits your monitor while the headset keeps rendering at
   full resolution, and the fitted menus stay clickable.
 - Your controller is retained when you switch between Halo games in one session.
-- The resolution slider now reaches 8K-class, with rescaled F1 tiers.
-- Image quality: mod-owned resolve, sharpening, and SMAA 1x / FXAA.
+- The resolution slider now reaches 8K-class resolutions, with rescaled F1 tiers.
+- Better image quality: mod-owned resolve, sharpening, and SMAA 1x / FXAA
+  anti-aliasing.
 
 ## Install
 
