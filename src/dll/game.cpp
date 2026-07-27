@@ -1497,7 +1497,7 @@ namespace
         return 1;
     }
 
-    static int SafeFrameWriteLayout(
+    static int SafeFrameStoreLayout(
         uintptr_t slot, const HudLayoutAdapter& adapter, float destinationZ,
         float horizontal, float vertical)
     {
@@ -1511,6 +1511,41 @@ namespace
         }
         __except (EXCEPTION_EXECUTE_HANDLER) { return 0; }
         return 1;
+    }
+
+    // A record the engine only reads can live on a read-only page. Make it
+    // writable for exactly this store and put the protection back. Mapped
+    // views become copy-on-write, so the page privatises to this process and
+    // the game's files on disk are never modified.
+    static int SafeFrameWriteLayout(
+        uintptr_t slot, const HudLayoutAdapter& adapter, float destinationZ,
+        float horizontal, float vertical)
+    {
+        if (SafeFrameStoreLayout(
+                slot, adapter, destinationZ, horizontal, vertical))
+            return 1;
+        if (!adapter.scanMappedRegions)
+            return 0;
+
+        const uintptr_t low = HudLayoutHasDepthField(adapter)
+            ? slot + adapter.depthFromSlot : slot;
+        const size_t span = (slot + 8) - low;
+        MEMORY_BASIC_INFORMATION mbi{};
+        if (VirtualQuery(reinterpret_cast<void*>(low), &mbi, sizeof(mbi)) !=
+            sizeof(mbi))
+            return 0;
+        const DWORD want = mbi.Type == MEM_MAPPED
+            ? PAGE_WRITECOPY : PAGE_READWRITE;
+        DWORD previous = 0;
+        if (!VirtualProtect(
+                reinterpret_cast<void*>(low), span, want, &previous))
+            return 0;
+        const int wrote = SafeFrameStoreLayout(
+            slot, adapter, destinationZ, horizontal, vertical);
+        DWORD restored = 0;
+        VirtualProtect(
+            reinterpret_cast<void*>(low), span, previous, &restored);
+        return wrote;
     }
 
     static int SafeFrameVerifySlot(
@@ -1663,12 +1698,22 @@ namespace
             // record the engine actually reads cannot be missed just because it
             // was not allocated the way Halo 3's was. Writing a copy-on-write
             // page privatises it in this process only; no file is modified.
-            const bool writableProtect =
+            // Halo 3's tag data is private read-write and that exact filter is
+            // headset-proven for Halo 3 and ODST. Reach's is not: the curvature
+            // record is const to the engine, so the copy it actually renders
+            // from can be a read-only mapping. Reach therefore accepts any
+            // committed readable private or mapped region, and the writer makes
+            // the page writable copy-on-write for the store, which privatises
+            // it in this process only and never modifies a file on disk.
+            const bool readableProtect =
                 mbi.Protect == PAGE_READWRITE ||
                 (adapter->scanMappedRegions &&
-                 (mbi.Protect == PAGE_WRITECOPY ||
+                 (mbi.Protect == PAGE_READONLY ||
+                  mbi.Protect == PAGE_WRITECOPY ||
+                  mbi.Protect == PAGE_EXECUTE_READ ||
                   mbi.Protect == PAGE_EXECUTE_READWRITE ||
                   mbi.Protect == PAGE_EXECUTE_WRITECOPY));
+            const bool writableProtect = readableProtect;
             const bool allowedType =
                 mbi.Type == MEM_PRIVATE ||
                 (adapter->scanMappedRegions && mbi.Type == MEM_MAPPED);
@@ -1730,10 +1775,13 @@ namespace
                 accepted);
             accepted = 0;
         }
-        LOG("SAFEFRAME [%s]: scan done in %llu ms (private-RW only) - "
+        LOG("SAFEFRAME [%s]: scan done in %llu ms (%s) - "
             "%d raw anchor hit(s), %d plausible pair(s), %d accepted",
             adapter->name,
             static_cast<unsigned long long>(GetTickCount64() - t0),
+            adapter->scanMappedRegions
+                ? "private + mapped, any readable protection"
+                : "private-RW only",
             rawHits, observedAccepted, accepted);
 
         if (HudLayoutContextMatches(profile, generation))
