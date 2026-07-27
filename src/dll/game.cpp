@@ -10089,12 +10089,67 @@ namespace
     // reach_render_logic.h for the derivation. Returns false if any link in
     // the chain cannot be read; the caller must treat that as a real failure,
     // never as "not a crosshair".
+    // This runs for every CHUD widget draw - roughly ten thousand times a
+    // second - so the five-level pointer walk below is cached. The class of a
+    // given (definition, collection) pair is fixed tag data; it can only change
+    // when the loaded tags change, which the camera generation tracks. Direct
+    // mapped, fixed size, no allocation, thread_local so no synchronisation.
+    struct ReachChudClassCacheEntry
+    {
+        uint32_t key = 0xFFFFFFFFu;
+        uint32_t generation = 0;
+        int8_t scriptingClass = -1;
+        bool resolved = false;
+    };
+    constexpr size_t kReachChudClassCacheSize = 64;
+    thread_local ReachChudClassCacheEntry
+        g_reachChudClassCache[kReachChudClassCacheSize];
+
+    static bool ResolveReachChudCollectionClassUncached(
+        uintptr_t base, const void* descriptor, unsigned int definitionIndex,
+        uint8_t collectionIndex, int8_t& scriptingClass);
+
     static bool ResolveReachChudCollectionClass(
         uintptr_t base, const void* descriptor, unsigned int definitionIndex,
         int8_t& scriptingClass)
     {
         if (!base || !descriptor)
             return false;
+        uint8_t collectionIndex = 0;
+        if (!SafeReadByte(
+                reinterpret_cast<const uint8_t*>(descriptor) +
+                    kReachChudDescriptorCollectionByte,
+                &collectionIndex))
+            return false;
+
+        const uint32_t generation =
+            g_reachCamera.generation.load(std::memory_order_relaxed);
+        const uint32_t key =
+            ((definitionIndex & 0xFFFFu) << 8) | collectionIndex;
+        ReachChudClassCacheEntry& entry =
+            g_reachChudClassCache[key % kReachChudClassCacheSize];
+        if (entry.key == key && entry.generation == generation)
+        {
+            scriptingClass = entry.scriptingClass;
+            return entry.resolved;
+        }
+
+        int8_t resolvedClass = -1;
+        const bool ok = ResolveReachChudCollectionClassUncached(
+            base, descriptor, definitionIndex, collectionIndex, resolvedClass);
+        entry.key = key;
+        entry.generation = generation;
+        entry.scriptingClass = resolvedClass;
+        entry.resolved = ok;
+        scriptingClass = resolvedClass;
+        return ok;
+    }
+
+    static bool ResolveReachChudCollectionClassUncached(
+        uintptr_t base, const void* descriptor, unsigned int definitionIndex,
+        uint8_t collectionIndex, int8_t& scriptingClass)
+    {
+        (void)descriptor;
         const auto pool = [base](uint32_t handle, uintptr_t& out) -> bool {
             const uintptr_t slot = base + kReachChudPoolTableRva +
                 static_cast<uintptr_t>(handle >> 28) * 8;
@@ -10127,13 +10182,6 @@ namespace
         if (!SafeReadU32(
                 reinterpret_cast<const void*>(chudDefinition + 4),
                 &collectionHandle))
-            return false;
-
-        uint8_t collectionIndex = 0;
-        if (!SafeReadByte(
-                reinterpret_cast<const uint8_t*>(descriptor) +
-                    kReachChudDescriptorCollectionByte,
-                &collectionIndex))
             return false;
 
         uintptr_t collectionPool = 0;
@@ -10220,7 +10268,7 @@ namespace
             {
                 // The magnified world-only scope picture must not receive a
                 // native CHUD widget, but the call still has to happen.
-                if (VR_BeginAuthoredReticleCapture())
+                if (VR_BeginPreparedAuthoredReticleCapture())
                     captureStarted = true;
                 original(userIndex, descriptor, widgetIndex,
                          useAlternatePath, drawState);
@@ -10243,74 +10291,6 @@ namespace
             if (ownsStereo && isCrosshairClass)
                 g_reachFpCameraEyeScope.chudClass2Seen = true;
 
-            // Enumerate what Reach actually emits instead of inferring it.
-            // HREK names the scripting classes (1 weapon stats, 2 crosshair,
-            // 3 shield, 4 grenades, 5 messages, 6 motion sensor, 7 chapter
-            // title, 8 cinematics), but nothing so far has confirmed which
-            // ones reach this hook during an owned VR eye pass, which is the
-            // difference between "the crosshair is not class 2 here" and "we
-            // never own the draw". Time-throttled to once every two seconds
-            // via CAS so it cannot flood the log the way an earlier
-            // change-triggered probe did.
-            {
-                static std::atomic<unsigned> s_total{0};
-                static std::atomic<unsigned> s_owned{0};
-                static std::atomic<unsigned> s_classMask{0};
-                static std::atomic<uint64_t> s_class2Groups{0};
-                static std::atomic<uint64_t> s_class0Groups{0};
-                static std::atomic<uint64_t> s_lastLogMs{0};
-                s_total.fetch_add(1, std::memory_order_relaxed);
-                if (ownsStereo)
-                    s_owned.fetch_add(1, std::memory_order_relaxed);
-                if (descriptorReadable)
-                {
-                    const int8_t signedClass = static_cast<int8_t>(rawClass);
-                    if (signedClass >= 0 && signedClass < 31)
-                        s_classMask.fetch_or(
-                            1u << signedClass, std::memory_order_relaxed);
-                    // Byte +2 of the widget record is the index Reach scales by
-                    // 0x310 in its dispatcher loop. If widgets of one crosshair
-                    // share it, it identifies the owning group and can resolve
-                    // "use parent" without guessing. Record it for class-2
-                    // widgets and for class-0 widgets separately so the two
-                    // sets can be compared directly.
-                    uint8_t groupByte = 0;
-                    if (SafeReadByte(
-                            reinterpret_cast<const uint8_t*>(descriptor) + 2,
-                            &groupByte))
-                    {
-                        if (signedClass == kReachChudCrosshairScriptingClass)
-                            s_class2Groups.fetch_or(
-                                1ull << (groupByte & 63),
-                                std::memory_order_relaxed);
-                        else if (signedClass == 0)
-                            s_class0Groups.fetch_or(
-                                1ull << (groupByte & 63),
-                                std::memory_order_relaxed);
-                    }
-                }
-                const uint64_t nowMs = GetTickCount64();
-                uint64_t lastMs = s_lastLogMs.load(std::memory_order_relaxed);
-                if (nowMs - lastMs >= 2000 &&
-                    s_lastLogMs.compare_exchange_strong(
-                        lastMs, nowMs, std::memory_order_relaxed))
-                {
-                    LOG("Reach CHUD widgets: %u draws, %u during owned VR "
-                        "eyes, classes seen = 0x%X (bit N = class N; crosshair "
-                        "is class %d). group bytes: class2 = 0x%llX, "
-                        "class0 = 0x%llX",
-                        s_total.exchange(0, std::memory_order_relaxed),
-                        s_owned.exchange(0, std::memory_order_relaxed),
-                        s_classMask.exchange(0, std::memory_order_relaxed),
-                        static_cast<int>(kReachChudCrosshairScriptingClass),
-                        static_cast<unsigned long long>(
-                            s_class2Groups.exchange(
-                                0, std::memory_order_relaxed)),
-                        static_cast<unsigned long long>(
-                            s_class0Groups.exchange(
-                                0, std::memory_order_relaxed)));
-                }
-            }
             const int stereoEye =
                 g_stereoEye.load(std::memory_order_relaxed);
             if (matchingEyeScope &&
@@ -10318,7 +10298,7 @@ namespace
                 isCrosshairClass)
             {
                 // Already-failed eye: hide the widget, but never skip the call.
-                if (VR_BeginAuthoredReticleCapture())
+                if (VR_BeginPreparedAuthoredReticleCapture())
                     captureStarted = true;
                 original(userIndex, descriptor, widgetIndex,
                          useAlternatePath, drawState);
@@ -10357,7 +10337,7 @@ namespace
                 RejectReachChudParityForCurrentEye();
             if (hideFromEye)
             {
-                if (VR_BeginAuthoredReticleCapture())
+                if (VR_BeginPreparedAuthoredReticleCapture())
                     captureStarted = true;
                 else
                     // The redirect IS the mechanism. If it is unavailable
